@@ -140,7 +140,7 @@ Ao reinicializar a simulação, os processos CDN iniciados pela instância atual
 
 - **ChatGPT/Codex (OpenAI):** apoiou a leitura das especificações, a auditoria do repositório, a redação de C4/ADRs/checklists e a criação do setup Docker Compose, Nginx e CI.
 - **Contexto fornecido:** PDF do professor, código-fonte existente e instrução para conferir cada exigência da Entrega 2, dockerizar e validar com terminais.
-- **Revisão humana:** a equipe deve conferir os diagramas, substituir os rótulos dos integrantes pelos nomes reais, revisar trade-offs e ensaiar a apresentação. Os testes e builds executados no ambiente são a fonte de verdade; sugestões automáticas que não se aplicavam ao código foram descartadas.
+- **Revisão humana:** todos os processos são revisados e passam por avaliação de nós estudantes, verificando a estrutura formada e a aplicação da ideia, assim não só construindo mas também aprendendo tudo que está sendo feito.
 
 O relato completo está em [`docs/ai-tools.md`](./docs/ai-tools.md).
 
