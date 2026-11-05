@@ -2,6 +2,14 @@
 
 Backend em Python/Flask para simular uma CDN de vídeo distribuída, watermarking forense HMAC e monitoramento de pirataria. O console React fica separado em [frontend/](./frontend/).
 
+## Equipe e proposta
+
+Esta implementação é a evolução da [proposta original](./docs/project-proposal.md) registrada no repositório `LuisReis09/CDN-Sentinel`:
+
+- Josué Guedes Ferreira
+- Lael Gustavo Batista Ribeiro de Lima
+- Luis Gustavo Lacerda Reis
+
 ## Arquitetura
 
 - `app.py`: controlador HTTP na porta `5000`, documentação Swagger em `/docs`.

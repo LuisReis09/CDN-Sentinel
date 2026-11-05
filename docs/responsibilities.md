@@ -2,6 +2,8 @@
 
 Para a Entrega 2, o trabalho está dividido em cinco frentes. Os rótulos `Integrante 1–5` devem ser substituídos pelos nomes reais do grupo antes do envio; a divisão técnica já está definida para orientar commits e a apresentação.
 
+Os três nomes registrados na proposta original estão preservados em [`project-proposal.md`](./project-proposal.md). Se a equipe final tiver cinco integrantes, completar os dois nomes restantes antes da entrega e associá-los às frentes abaixo.
+
 | Responsável | Frente | Entregáveis e evidências |
 |---|---|---|
 | Integrante 1 | Arquitetura e documentação | C4 níveis 1/2, ADRs, trade-offs, alinhamento dos padrões e README. |
