@@ -23,6 +23,7 @@ class SimulationController:
         self._http_client = http_client
         self._topology = TopologyService()
         self._processes: Dict[str, subprocess.Popen] = {}
+        self._client_processes: Dict[str, subprocess.Popen] = {}
         self._secret_key = "local-development-secret"
         self._city_lookup = CityLookupService()
 
@@ -49,8 +50,11 @@ class SimulationController:
 
         for server in servers.values():
             self._start_node(server, config)
+        for client in clients.values():
+            self._start_client(client)
         self._configure_peers(state)
         self.refresh_servers()
+        self.refresh_clients()
         malicious_count = sum(1 for client in clients.values() if client.malicious)
         return {
             "initialized": True,
@@ -64,7 +68,7 @@ class SimulationController:
         state = self._repository.snapshot()
         if not state.initialized:
             raise RuntimeError("A simulação ainda não foi inicializada")
-        structural = {key for key in ("num_servers", "num_clients", "base_node_port") if key in payload}
+        structural = {key for key in ("num_servers", "num_clients", "base_node_port", "base_client_port") if key in payload}
         merged = {**state.config, **payload, "secret_key": self._secret_key}
         config = SimulationConfig.from_payload(merged)
         if structural and any(int(payload[key]) != int(state.config[key]) for key in structural):
@@ -95,6 +99,7 @@ class SimulationController:
 
     def status(self) -> dict:
         state = self._repository.snapshot()
+        self.refresh_clients()
         healthy_servers = sum(1 for server in state.servers.values() if server.status == "healthy")
         online_clients = sum(1 for client in state.clients.values() if client.active and client.online)
         capacity_per_server = 8
@@ -112,12 +117,27 @@ class SimulationController:
         else:
             profile = "equilibrada"
             message = "Capacidade compatível com a demanda observada"
+        latencies = [float(item.get("latency_ms", 0)) for item in state.traffic if item.get("latency_ms") is not None]
+        ordered_latencies = sorted(latencies)
+        p95_index = min(len(ordered_latencies) - 1, max(0, int(len(ordered_latencies) * 0.95) - 1)) if ordered_latencies else 0
+        average_latency = round(sum(latencies) / len(latencies), 1) if latencies else 0
+        p95_latency = round(ordered_latencies[p95_index], 1) if ordered_latencies else 0
+        monthly_server_cost = healthy_servers * float(state.config.get("monthly_server_cost_usd", state.config.get("monthly_server_cost_unit", 100.0)))
+        monthly_fixed_cost = float(state.config.get("monthly_fixed_cost_usd", state.config.get("monthly_fixed_cost_unit", 150.0)))
+        monthly_variable_cost = online_clients * 2.0
+        monthly_cost = monthly_server_cost + monthly_fixed_cost + monthly_variable_cost
+        paying_clients = max(1, len(state.clients)) if state.clients else 0
+        configured_price = float(state.config.get("monthly_client_price_usd", state.config.get("monthly_client_price_unit", 25.0)))
+        break_even_price = monthly_cost / paying_clients if paying_clients else 0
+        minimum_price = break_even_price * 1.2 if paying_clients else 0
+        revenue = len(state.clients) * configured_price
         return {
             "initialized": state.initialized,
             "paused": state.paused,
             "started_at": state.started_at,
             "updated_at": state.updated_at,
             "configuration": state.config,
+            "tick_interval_seconds": round(float(state.config.get("tick_interval_seconds", 2.5)), 2),
             "servers_total": len(state.servers),
             "clients_total": len(state.clients),
             "malicious_clients": sum(1 for client in state.clients.values() if client.malicious),
@@ -130,8 +150,22 @@ class SimulationController:
                 "utilization": round(utilization, 3),
                 "profile": profile,
                 "message": message,
-                "estimated_cost_units": healthy_servers * 100,
+                "estimated_monthly_cost_usd": round(monthly_cost, 2),
                 "estimated_queue_latency_ms": round(12 + max(0, utilization - 0.75) * 100, 1),
+                "average_latency_ms": average_latency,
+                "p95_latency_ms": p95_latency,
+                "cost_model": {
+                    "currency": "USD/mês",
+                    "server_cost_usd": round(monthly_server_cost, 2),
+                    "fixed_cost_usd": round(monthly_fixed_cost, 2),
+                    "variable_cost_usd": round(monthly_variable_cost, 2),
+                    "total_monthly_cost_usd": round(monthly_cost, 2),
+                    "configured_client_price_usd": round(configured_price, 2),
+                    "break_even_price_per_client_usd": round(break_even_price, 2),
+                    "minimum_price_with_margin_per_client_usd": round(minimum_price, 2),
+                    "projected_revenue_usd": round(revenue, 2),
+                    "projected_margin_usd": round(revenue - monthly_cost, 2),
+                },
             },
         }
 
@@ -157,6 +191,7 @@ class SimulationController:
             malicious=bool(payload.get("malicious", False)),
         )
         self._repository.add_client(client)
+        self._start_client(client)
         self._repository.update_config({"num_clients": len(state.clients)})
         self._repository.append_event({"type": "client_added", "at": time.time(), "client_id": client_id, "latitude": latitude, "longitude": longitude})
         return client.to_dict()
@@ -240,6 +275,33 @@ class SimulationController:
                 time.sleep(0.1)
         server.status = "offline"
 
+    def _start_client(self, client: Client) -> None:
+        root = Path(__file__).resolve().parents[1]
+        process = subprocess.Popen(
+            [sys.executable, str(root / "client_app.py"), "--client-id", client.client_id, "--city", client.city],
+            cwd=str(root),
+            env=os.environ.copy(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        client.process_id = process.pid
+        client.process_status = "online" if process.poll() is None else "offline"
+        self._client_processes[client.client_id] = process
+
+    def refresh_clients(self) -> list[dict]:
+        state = self._repository.snapshot()
+        result = []
+        for client in state.clients.values():
+            process = self._client_processes.get(client.client_id)
+            if process is None:
+                client.process_status = "offline"
+            else:
+                client.process_status = "online" if process.poll() is None else "offline"
+                if client.process_status == "offline":
+                    client.online = False
+            result.append(client.to_dict())
+        return result
+
     def _configure_peers(self, state: SimulationState) -> None:
         peers = [
             {
@@ -268,6 +330,7 @@ class SimulationController:
                 server.status = status.get("status", "healthy")
                 server.load = int(status.get("load", 0))
                 server.blacklist_size = int(status.get("blacklist_size", 0))
+                server.messages_received = int(status.get("messages_received", 0))
                 server.last_error = None
             except Exception as exc:
                 server.status = "offline"
@@ -284,4 +347,12 @@ class SimulationController:
                 except subprocess.TimeoutExpired:
                     process.kill()
         self._processes.clear()
+        for process in list(self._client_processes.values()):
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+        self._client_processes.clear()
 

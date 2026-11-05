@@ -36,6 +36,10 @@ class SimulationRepository:
                 raise ValueError(f"Cliente {client.client_id} já existe")
             self._state.clients[client.client_id] = client
 
+    def update_client(self, client: Client) -> None:
+        with self._lock:
+            self._state.clients[client.client_id] = client
+
     def add_server(self, server: CDNServer) -> None:
         with self._lock:
             if server.server_id in self._state.servers:
@@ -87,6 +91,7 @@ class NodeRepository:
     def __init__(self) -> None:
         self._blacklist: Dict[str, dict] = {}
         self._load = 0
+        self._messages: List[dict] = []
         self._lock = RLock()
 
     def is_blacklisted(self, client_id: str) -> bool:
@@ -114,4 +119,13 @@ class NodeRepository:
     def load(self) -> int:
         with self._lock:
             return self._load
+
+    def record_message(self, message: dict) -> None:
+        with self._lock:
+            self._messages.append(message)
+            self._messages = self._messages[-200:]
+
+    def message_count(self) -> int:
+        with self._lock:
+            return len(self._messages)
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import threading
+import time
 from typing import Any
 
 import requests
@@ -51,6 +52,7 @@ class CDNNode:
             "status": "healthy",
             "load": self.repository.load(),
             "blacklist_size": len(self.repository.blacklist()),
+            "messages_received": self.repository.message_count(),
             "peers": [peer["server_id"] for peer in self.peers],
         }
 
@@ -75,29 +77,41 @@ class CDNNode:
         result["load"] = self.repository.load()
         return result
 
-    def accept_blacklist(self, entry: dict, visited: list[str] | None = None) -> dict:
+    def accept_blacklist(self, entry: dict, visited: list[str] | None = None, message: dict | None = None) -> dict:
         visited = list(dict.fromkeys((visited or []) + [self.server_id]))
+        message = message or {}
+        self.repository.record_message({"received_at": time.time(), "message_type": message.get("message_type", "BLACKLIST_ALERT"), "message_id": message.get("message_id"), "from_server": message.get("from_server"), "client_id": entry.get("client_id")})
         is_new = self.repository.add_blacklist(entry)
         propagated_to = [self.server_id]
+        message_trace: list[dict] = []
         if not is_new:
-            return {"accepted": True, "already_present": True, "propagated_to": propagated_to}
+            return {"accepted": True, "already_present": True, "propagated_to": propagated_to, "message_trace": message_trace}
         for peer in list(self.peers):
             peer_id = peer["server_id"]
             if peer_id in visited:
                 continue
             try:
+                message_id = f"msg-{int(time.time() * 1000)}-{self.server_id}-{peer_id}"
                 distance = haversine_km(self.latitude, self.longitude, peer["latitude"], peer["longitude"])
                 sleep_for_distance(distance, self.latency_factor)
                 response = requests.post(
                     f"{peer['url']}/internal/blacklist",
-                    json={"entry": entry, "visited": visited},
+                    json={"entry": entry, "visited": visited, "message": {"message_id": message_id, "message_type": "BLACKLIST_ALERT", "from_server": self.server_id, "to_server": peer_id}},
                     timeout=8.0,
                 )
                 response.raise_for_status()
-                propagated_to.extend(response.json().get("propagated_to", []))
+                response_body = response.json()
+                propagated_to.extend(response_body.get("propagated_to", []))
+                message_trace.append({"message_id": message_id, "message_type": "BLACKLIST_ALERT", "from_server": self.server_id, "to_server": peer_id, "client_id": entry.get("client_id"), "status": "delivered", "payload_summary": "client_id + HMAC proof + issue time"})
+                message_trace.extend(response_body.get("message_trace", []))
             except requests.RequestException:
+                message_trace.append({"message_id": message_id if "message_id" in locals() else "unknown", "message_type": "BLACKLIST_ALERT", "from_server": self.server_id, "to_server": peer_id, "client_id": entry.get("client_id"), "status": "failed", "payload_summary": "client_id + HMAC proof + issue time"})
                 continue
-        return {"accepted": True, "already_present": False, "propagated_to": list(dict.fromkeys(propagated_to))}
+        return {"accepted": True, "already_present": False, "propagated_to": list(dict.fromkeys(propagated_to)), "message_trace": message_trace}
+
+    def accept_content_telemetry(self, message: dict) -> dict:
+        self.repository.record_message({"received_at": time.time(), **message})
+        return {"accepted": True, "server_id": self.server_id, "message_id": message.get("message_id")}
 
 
 def create_node_app(node: CDNNode) -> Flask:
@@ -154,7 +168,15 @@ def create_node_app(node: CDNNode) -> Flask:
         entry = body.get("entry", body)
         if not isinstance(entry, dict) or not entry.get("client_id"):
             return jsonify({"error": "entry de blacklist inválida"}), 400
-        return jsonify(node.accept_blacklist(entry, body.get("visited", [])))
+        return jsonify(node.accept_blacklist(entry, body.get("visited", []), body.get("message", {})))
+
+    @app.post("/internal/content-telemetry")
+    def internal_content_telemetry() -> Any:
+        """Receive cross-region playback/content telemetry from another CDN node."""
+        body = request.get_json(silent=True) or {}
+        if not body.get("message_id") or not body.get("content_id"):
+            return jsonify({"error": "telemetria de conteúdo inválida"}), 400
+        return jsonify(node.accept_content_telemetry(body))
 
     return app
 

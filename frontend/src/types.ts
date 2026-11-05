@@ -11,6 +11,9 @@ export interface ServerNode {
   load: number;
   blacklist_size: number;
   url: string;
+  process_id: number | null;
+  last_error: string | null;
+  messages_received: number;
 }
 
 export interface Client {
@@ -23,6 +26,8 @@ export interface Client {
   online: boolean;
   videos_consumed: number;
   last_activity_at: number | null;
+  process_id: number | null;
+  process_status: string;
 }
 
 export interface Traffic {
@@ -52,6 +57,23 @@ export interface SimulationEvent {
   proof_algorithm?: string;
   source?: string;
   chunk_id?: string;
+  tick?: number;
+  tick_interval_seconds?: number;
+  probability?: number;
+  reason?: string;
+  monitor_server_id?: string;
+  content_id?: string;
+  content_title?: string;
+  message_id?: string;
+  message_type?: string;
+  communication_kind?: "blacklist" | "new_content" | "update" | "client_content" | string;
+  emission_probability?: number;
+  from_server?: string;
+  to_server?: string;
+  status?: string;
+  payload_summary?: string;
+  ack_server_id?: string;
+  error?: string;
 }
 
 export interface BlacklistEntry {
@@ -60,6 +82,7 @@ export interface BlacklistEntry {
   detected_at: number;
   watermark_issued_at: number;
   server_id: string;
+  watermark_server_id: string | null;
   proof_signature: string;
   propagated_to: string[];
 }
@@ -69,6 +92,7 @@ export interface SimulationStatus {
   paused: boolean;
   started_at: number | null;
   updated_at: number | null;
+  tick_interval_seconds: number;
   configuration: {
     num_servers: number;
     num_clients: number;
@@ -76,6 +100,11 @@ export interface SimulationStatus {
     latency_factor: number;
     base_node_port: number;
     video_id: string;
+    tick_interval_seconds: number;
+    base_client_port: number;
+    monthly_client_price_usd: number;
+    monthly_server_cost_usd: number;
+    monthly_fixed_cost_usd: number;
   };
   servers_total: number;
   clients_total: number;
@@ -89,9 +118,45 @@ export interface SimulationStatus {
     utilization: number;
     profile: string;
     message: string;
-    estimated_cost_units: number;
+    estimated_monthly_cost_usd: number;
     estimated_queue_latency_ms: number;
+    average_latency_ms: number;
+    p95_latency_ms: number;
+    cost_model: {
+      currency: string;
+      server_cost_usd: number;
+      fixed_cost_usd: number;
+      variable_cost_usd: number;
+      total_monthly_cost_usd: number;
+      configured_client_price_usd: number;
+      break_even_price_per_client_usd: number;
+      minimum_price_with_margin_per_client_usd: number;
+      projected_revenue_usd: number;
+      projected_margin_usd: number;
+    };
   };
+}
+
+export interface MonitorStatus {
+  automatic: boolean;
+  interval_seconds: number;
+  last_scan_at: number | null;
+  last_scanned: number;
+  last_detected: number;
+  last_rejected: number;
+  pending_leaks: number;
+  per_server: Record<string, ServerMonitorStatus>;
+}
+
+export interface ServerMonitorStatus {
+  server_id: string;
+  automatic: boolean;
+  interval_seconds: number;
+  last_scan_at: number | null;
+  last_scanned: number;
+  last_detected: number;
+  last_rejected: number;
+  pending_leaks: number;
 }
 
 export interface Overview {
@@ -99,8 +164,26 @@ export interface Overview {
   servers: ServerNode[];
   clients: Client[];
   blacklist: BlacklistEntry[];
+  leaks: LeakRecord[];
   recent_events: SimulationEvent[];
   recent_traffic: Traffic[];
+  monitor: MonitorStatus;
+}
+
+export interface LeakRecord {
+  leak_id: string;
+  client_id: string;
+  server_id: string;
+  origin_server_id?: string;
+  platform: string;
+  platform_id?: string;
+  platform_kind?: string;
+  external_url?: string;
+  created_at: number;
+  processed: boolean;
+  detected_at?: number;
+  detected_by_server_id?: string;
+  error?: string;
 }
 
 export interface VideoChunk {
@@ -136,11 +219,29 @@ export interface WatermarkDemo {
     transport_encoding: string;
     verification: string;
     reversible_encryption: boolean;
+    robust_channel: string;
+    robustness_limit: string;
   };
   extracted_token: string;
   claim: Record<string, unknown>;
   round_trip_verified: boolean;
   payload_sha256: string;
   generated_at: number;
+  key_fingerprint: string;
+  claim_before_encoding: Record<string, unknown>;
+  encoded_claim: string;
+  signature: string;
+  payload_prefix: string;
+  robustness_checks: Array<{
+    filter: string;
+    filter_id: string;
+    marker: string;
+    recovered_marker: string;
+    confidence: number;
+    bits_correct?: number;
+    bits_total?: number;
+    confidence_method?: string;
+    survives: boolean;
+  }>;
 }
 

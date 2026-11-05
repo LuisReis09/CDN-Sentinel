@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import threading
 
 from models.entities import BlacklistEntry, SimulationState
 from repositories.in_memory import SimulationRepository
@@ -13,35 +14,56 @@ class BlacklistService:
         self._repository = repository
         self._http_client = http_client
         self._watermark_service = watermark_service
+        self._lock = threading.Lock()
 
-    def report(self, token: str, reason: str = "vazamento detectado pelo monitor") -> BlacklistEntry:
+    def report(self, token: str, reason: str = "vazamento detectado pelo monitor", detected_by_server_id: str | None = None) -> BlacklistEntry:
         claim = self._watermark_service.verify(token)
         state = self._repository.snapshot()
         client = state.clients.get(claim.client_id)
-        server = state.servers.get(claim.server_id)
-        if client is None or server is None:
+        watermark_server = state.servers.get(claim.server_id)
+        detecting_server = state.servers.get(detected_by_server_id or claim.server_id)
+        if client is None or watermark_server is None or detecting_server is None:
             raise ValueError("A prova aponta para um cliente ou servidor inexistente")
-        existing = state.blacklist.get(claim.client_id)
-        if existing:
-            return existing
-        entry = BlacklistEntry(
-            client_id=claim.client_id,
-            reason=reason,
-            detected_at=time.time(),
-            watermark_issued_at=claim.issued_at,
-            server_id=claim.server_id,
-            proof_signature=claim.signature,
-        )
-        self._repository.add_blacklist(entry)
-        client.active = False
-        result = self._http_client.submit_blacklist(server, entry.to_dict())
+        with self._lock:
+            existing = state.blacklist.get(claim.client_id)
+            if existing:
+                return existing
+            entry = BlacklistEntry(
+                client_id=claim.client_id,
+                reason=reason,
+                detected_at=time.time(),
+                watermark_issued_at=claim.issued_at,
+                server_id=detecting_server.server_id,
+                proof_signature=claim.signature,
+                watermark_server_id=claim.server_id,
+            )
+            self._repository.add_blacklist(entry)
+            client.active = False
+        result = self._http_client.submit_blacklist(detecting_server, entry.to_dict())
         entry.propagated_to = list(result.get("propagated_to", []))
         state.blacklist[entry.client_id] = entry
+        for message in result.get("message_trace", []):
+            self._repository.append_event({
+                "type": "server_message",
+                "at": time.time(),
+                "message_id": message.get("message_id"),
+                "message_type": message.get("message_type", "BLACKLIST_ALERT"),
+                "communication_kind": "blacklist",
+                "from_server": message.get("from_server"),
+                "to_server": message.get("to_server"),
+                "server_id": message.get("to_server"),
+                "client_id": entry.client_id,
+                "status": message.get("status", "delivered"),
+                "payload_summary": message.get("payload_summary", "client_id + HMAC proof + issue time"),
+                "protocol": "HTTP/1.1 gossip",
+            })
         self._repository.append_event({
             "type": "blacklist_propagated",
             "at": entry.detected_at,
             "client_id": entry.client_id,
             "server_id": entry.server_id,
+            "watermark_server_id": entry.watermark_server_id,
+            "monitor_server_id": entry.server_id,
             "propagated_to": entry.propagated_to,
             "protocol": "HTTP gossip",
             "proof_algorithm": "HMAC-SHA256",

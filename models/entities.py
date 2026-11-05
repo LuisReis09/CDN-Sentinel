@@ -15,6 +15,8 @@ class Client:
     online: bool = True
     videos_consumed: int = 0
     last_activity_at: float | None = None
+    process_id: int | None = None
+    process_status: str = "starting"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -31,6 +33,7 @@ class CDNServer:
     status: str = "starting"
     load: int = 0
     blacklist_size: int = 0
+    messages_received: int = 0
     process_id: int | None = None
     last_error: str | None = None
 
@@ -50,6 +53,7 @@ class BlacklistEntry:
     watermark_issued_at: float
     server_id: str
     proof_signature: str
+    watermark_server_id: str | None = None
     propagated_to: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:

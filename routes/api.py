@@ -27,6 +27,11 @@ def register_api_routes(api, controller: ApiController) -> None:
             "base_node_port": fields.Integer(description="Primeira porta dedicada aos nós", default=5101, min=1024, max=64000),
             "secret_key": fields.String(description="Chave HMAC da CDN", required=False),
             "video_id": fields.String(description="Identificador do conteúdo", default="bigbuckbunny"),
+            "tick_interval_seconds": fields.Float(description="Intervalo real entre ticks do sistema, em segundos", default=2.5, min=0.25, max=30),
+            "base_client_port": fields.Integer(description="Base opcional para processos de cliente", default=6101, min=1024, max=64000),
+            "monthly_client_price_usd": fields.Float(description="Preço didático por cliente/mês em USD", default=25.0, min=0),
+            "monthly_server_cost_usd": fields.Float(description="Custo didático por servidor/mês em USD", default=100.0, min=0),
+            "monthly_fixed_cost_usd": fields.Float(description="Custo fixo didático/mês em USD", default=150.0, min=0),
         },
     )
     update_model = api.model(
@@ -37,7 +42,12 @@ def register_api_routes(api, controller: ApiController) -> None:
             "malicious_probability": fields.Float(description="Nova probabilidade de clientes maliciosos", min=0, max=1),
             "latency_factor": fields.Float(description="Novo multiplicador de latência", min=0, max=20),
             "base_node_port": fields.Integer(description="Nova porta inicial", min=1024, max=64000),
+            "base_client_port": fields.Integer(description="Nova base dos processos de cliente", min=1024, max=64000),
             "video_id": fields.String(description="Novo conteúdo simulado"),
+            "tick_interval_seconds": fields.Float(description="Intervalo real entre ticks do sistema, em segundos", min=0.25, max=30),
+            "monthly_client_price_usd": fields.Float(description="Preço didático por cliente/mês em USD", min=0),
+            "monthly_server_cost_usd": fields.Float(description="Custo didático por servidor/mês em USD", min=0),
+            "monthly_fixed_cost_usd": fields.Float(description="Custo fixo didático/mês em USD", min=0),
         },
     )
     stream_model = api.model(
@@ -238,9 +248,15 @@ def register_api_routes(api, controller: ApiController) -> None:
         def post(self):
             """Scan simulated external platforms and process valid evidence."""
             try:
-                return controller.scan()
+                return controller.scan(request.args.get("server_id"))
             except RuntimeError as exc:
                 return {"error": str(exc)}, 503
+
+    @monitor.route("/status")
+    class MonitorStatusResource(Resource):
+        @monitor.doc(description="Estado do monitor automático e da última varredura.")
+        def get(self):
+            return controller.monitor_status()
 
     @monitor.route("/leaks")
     class LeaksResource(Resource):

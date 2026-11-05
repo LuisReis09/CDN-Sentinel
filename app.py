@@ -24,6 +24,12 @@ from services.client_activity_service import ClientActivityService
 def create_app() -> Flask:
     app = Flask(__name__)
     CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+    @app.get("/")
+    def index():
+        """Return a small service descriptor with the documentation URL."""
+        return jsonify({"service": "cdn-security-simulator", "docs": "/docs", "health": "/health"})
+
     api = Api(
         app,
         version="1.0",
@@ -44,11 +50,6 @@ def create_app() -> Flask:
     controller = ApiController(repository, simulation_controller, stream_service, monitor_service, leak_service, watermark_service, watermark_demo_service, client_activity_service)
     register_api_routes(api, controller)
 
-    @app.get("/")
-    def index():
-        """Return a small service descriptor with the documentation URL."""
-        return jsonify({"service": "cdn-security-simulator", "docs": "/docs", "health": "/health"})
-
     @app.get("/health")
     def health():
         """Return controller liveness and initialization state."""
@@ -57,6 +58,7 @@ def create_app() -> Flask:
     app.extensions["cdn_controller"] = controller
     atexit.register(leak_service.stop)
     atexit.register(client_activity_service.stop)
+    atexit.register(monitor_service.stop)
     atexit.register(simulation_controller.shutdown_nodes)
     return app
 

@@ -14,6 +14,10 @@ class WatermarkService:
     def configure(self, secret_key: str) -> None:
         self._secret_key = secret_key
 
+    @property
+    def secret_key(self) -> str:
+        return self._secret_key
+
     def issue(self, client_id: str, server_id: str, chunk_number: int) -> tuple[str, WatermarkClaim]:
         issued_at = time.time()
         chunk_id = f"chunk-{chunk_number:06d}-{uuid.uuid4().hex[:8]}"

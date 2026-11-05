@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import time
+import uuid
 
 from models.entities import Client, SimulationState, VideoChunk
 from services.cdn_http_client import CDNHttpClient
-from utils.geo import choose_server
+from utils.geo import choose_server, haversine_km
+from utils.latency import sleep_for_distance
 
 
 class SimulationPausedError(RuntimeError):
@@ -57,7 +59,31 @@ class StreamService:
                 "routing": "Haversine / nearest healthy CDN",
                 "watermark_algorithm": "HMAC-SHA256",
                 "chunk_id": result["chunk_id"],
+                "content_id": state.config.get("video_id", "bigbuckbunny"),
+                "content_title": state.config.get("video_id", "bigbuckbunny"),
             })
+            peers = [peer for peer in state.servers.values() if peer.server_id != server.server_id and peer.status == "healthy"]
+            if peers and client.videos_consumed % 3 == 0:
+                peer = peers[client.videos_consumed % len(peers)]
+                message = {
+                    "message_id": f"content-{uuid.uuid4().hex[:10]}",
+                    "message_type": "CONTENT_PLAYBACK_TELEMETRY",
+                    "communication_kind": "update",
+                    "content_id": state.config.get("video_id", "bigbuckbunny"),
+                    "content_title": state.config.get("video_id", "bigbuckbunny"),
+                    "chunk_id": result["chunk_id"],
+                    "region": server.city,
+                    "viewer_count_delta": 1,
+                    "from_server": server.server_id,
+                    "to_server": peer.server_id,
+                    "session_event": "playback_chunk",
+                    "sent_at": time.time(),
+                }
+                try:
+                    ack = self._http_client.publish_content_telemetry(peer, message)
+                    self._repository.append_event({"type": "server_message", "at": time.time(), **message, "status": "acknowledged", "payload_summary": "content_id + chunk + região + viewer_count_delta", "ack_server_id": ack.get("server_id")})
+                except Exception as exc:
+                    self._repository.append_event({"type": "server_message", "at": time.time(), **message, "status": "failed", "payload_summary": "content_id + chunk + região + viewer_count_delta", "error": str(exc)})
         return VideoChunk(
             chunk_id=result["chunk_id"],
             content_type=result["content_type"],
@@ -68,4 +94,10 @@ class StreamService:
             issued_at=float(result["issued_at"]),
             latency_ms=float(result["network_latency_ms"]),
         )
+
+    def publish_server_message(self, source_server, target_server, message: dict, latency_factor: float) -> dict:
+        """Send a cross-region control/content message over the node HTTP API."""
+        distance = haversine_km(source_server.latitude, source_server.longitude, target_server.latitude, target_server.longitude)
+        sleep_for_distance(distance, latency_factor)
+        return self._http_client.publish_content_telemetry(target_server, message)
 

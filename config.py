@@ -13,6 +13,11 @@ class SimulationConfig:
     secret_key: str
     base_node_port: int = 5101
     video_id: str = "bigbuckbunny"
+    tick_interval_seconds: float = 2.5
+    base_client_port: int = 6101
+    monthly_client_price_usd: float = 25.0
+    monthly_server_cost_usd: float = 100.0
+    monthly_fixed_cost_usd: float = 150.0
 
     @classmethod
     def from_payload(cls, payload: dict) -> "SimulationConfig":
@@ -22,6 +27,16 @@ class SimulationConfig:
             malicious_probability = float(payload.get("malicious_probability", 0.25))
             latency_factor = float(payload.get("latency_factor", 1.0))
             base_node_port = int(payload.get("base_node_port", 5101))
+            raw_tick_interval = payload.get("tick_interval_seconds")
+            if raw_tick_interval is None:
+                legacy_speed = float(payload.get("simulation_speed", 1.0))
+                tick_interval_seconds = 2.5 / legacy_speed
+            else:
+                tick_interval_seconds = float(raw_tick_interval)
+            base_client_port = int(payload.get("base_client_port", 6101))
+            monthly_client_price_usd = float(payload.get("monthly_client_price_usd", payload.get("monthly_client_price_unit", 25.0)))
+            monthly_server_cost_usd = float(payload.get("monthly_server_cost_usd", payload.get("monthly_server_cost_unit", 100.0)))
+            monthly_fixed_cost_usd = float(payload.get("monthly_fixed_cost_usd", payload.get("monthly_fixed_cost_unit", 150.0)))
         except (TypeError, ValueError) as exc:
             raise ValueError("Parâmetros numéricos inválidos") from exc
         if not 1 <= num_servers <= 20:
@@ -34,6 +49,12 @@ class SimulationConfig:
             raise ValueError("latency_factor deve estar entre 0 e 20")
         if not 1024 <= base_node_port <= 64000:
             raise ValueError("base_node_port deve estar entre 1024 e 64000")
+        if not 0.25 <= tick_interval_seconds <= 30:
+            raise ValueError("tick_interval_seconds deve estar entre 0.25 e 30 segundos")
+        if not 1024 <= base_client_port <= 64000:
+            raise ValueError("base_client_port deve estar entre 1024 e 64000")
+        if monthly_client_price_usd < 0 or monthly_server_cost_usd < 0 or monthly_fixed_cost_usd < 0:
+            raise ValueError("custos e preço mensal em USD não podem ser negativos")
         return cls(
             num_servers=num_servers,
             num_clients=num_clients,
@@ -42,6 +63,11 @@ class SimulationConfig:
             secret_key=str(payload.get("secret_key") or os.getenv("CDN_SECRET_KEY", "local-development-secret")),
             base_node_port=base_node_port,
             video_id=str(payload.get("video_id", "bigbuckbunny")),
+            tick_interval_seconds=tick_interval_seconds,
+            base_client_port=base_client_port,
+            monthly_client_price_usd=monthly_client_price_usd,
+            monthly_server_cost_usd=monthly_server_cost_usd,
+            monthly_fixed_cost_usd=monthly_fixed_cost_usd,
         )
 
     def to_dict(self) -> dict:
@@ -52,5 +78,15 @@ class SimulationConfig:
             "latency_factor": self.latency_factor,
             "base_node_port": self.base_node_port,
             "video_id": self.video_id,
+            "tick_interval_seconds": self.tick_interval_seconds,
+            "base_client_port": self.base_client_port,
+            "monthly_client_price_usd": self.monthly_client_price_usd,
+            "monthly_server_cost_usd": self.monthly_server_cost_usd,
+            "monthly_fixed_cost_usd": self.monthly_fixed_cost_usd,
         }
+
+    @property
+    def simulation_speed(self) -> float:
+        """Legacy derived value kept for callers that still use the old name."""
+        return 2.5 / self.tick_interval_seconds
 

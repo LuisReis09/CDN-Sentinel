@@ -27,6 +27,8 @@ def _dataset_root() -> Path:
 
 def list_video_examples() -> list[dict[str, str]]:
     """Return real video examples available in the backend dataset."""
+    if os.getenv("USE_BIGBUCKBUNNY_DATASET", "1") != "1":
+        return []
     try:
         root = _dataset_root()
     except (ImportError, OSError, TypeError):

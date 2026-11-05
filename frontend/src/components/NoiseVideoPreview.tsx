@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface NoiseVideoPreviewProps {
   videoUrl: string;
@@ -12,6 +12,9 @@ interface NoiseVideoPreviewProps {
 /** Plays the real backend asset and overlays a deterministic forensic-noise inspection layer. */
 export function NoiseVideoPreview({ videoUrl, noiseHex, strength, label, amplified, showNoise = true }: NoiseVideoPreviewProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [videoUnavailable, setVideoUnavailable] = useState(false);
+
+  useEffect(() => setVideoUnavailable(false), [videoUrl]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -41,7 +44,7 @@ export function NoiseVideoPreview({ videoUrl, noiseHex, strength, label, amplifi
   return (
     <div className={`noise-video noise-video--real ${amplified ? "noise-video--amplified" : ""}`}>
       <div className="noise-video__frame">
-        <video className="noise-video__source" src={videoUrl} muted loop autoPlay playsInline controls aria-label={label} />
+        {videoUnavailable ? <div className="noise-video__fallback"><strong>Vídeo real opcional indisponível</strong><small>A demonstração criptográfica continua funcional com o chunk sintético determinístico.</small></div> : <video className="noise-video__source" src={videoUrl} onError={() => setVideoUnavailable(true)} muted loop autoPlay playsInline controls aria-label={label} />}
         <canvas ref={canvasRef} className="noise-video__noise" aria-hidden="true" />
         <span className="noise-video__source-badge">Big Buck Bunny · backend</span>
       </div>

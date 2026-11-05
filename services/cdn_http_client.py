@@ -42,7 +42,24 @@ class CDNHttpClient:
         return result
 
     def submit_blacklist(self, server: CDNServer, entry: dict) -> Dict[str, Any]:
-        response = requests.post(f"{server.url}/internal/blacklist", json=entry, timeout=self._timeout)
+        response = requests.post(
+            f"{server.url}/internal/blacklist",
+            json={
+                "entry": entry,
+                "message": {
+                    "message_id": f"blacklist-{entry.get('client_id')}-{int(entry.get('detected_at', 0) * 1000)}",
+                    "message_type": "BLACKLIST_ALERT",
+                    "from_server": "monitor",
+                    "to_server": server.server_id,
+                },
+            },
+            timeout=self._timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def publish_content_telemetry(self, server: CDNServer, message: dict) -> Dict[str, Any]:
+        response = requests.post(f"{server.url}/internal/content-telemetry", json=message, timeout=min(self._timeout, 4.0))
         response.raise_for_status()
         return response.json()
 
