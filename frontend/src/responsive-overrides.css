@@ -1,0 +1,13 @@
+.map-shell { height: 490px; }
+
+@media (max-width: 1080px) {
+  .history-cards { grid-template-columns: repeat(3, 1fr); }
+  .history-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .map-shell { height: 410px; }
+  .map-panel { min-height: 495px; }
+  .history-cards { grid-template-columns: repeat(2, 1fr); }
+  .history-toolbar select { min-width: 100%; }
+}
