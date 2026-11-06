@@ -1,0 +1,30 @@
+@startuml c4-containers
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title CDN Security Simulator — C4 nível 2: containers
+
+LAYOUT_WITH_LEGEND()
+
+Person(operator, "Operador / equipe", "Usa o console e a documentação da API.")
+
+System_Boundary(system, "CDN Security Simulator") {
+  Container(frontend, "Control Room", "React + Vite + Leaflet", "Dashboard de topologia, segurança e laboratório de watermark.")
+  Container(api, "Control Plane / API Gateway", "Python + Flask-RESTX", "Expõe REST/Swagger, valida requisições e compõe snapshots para o frontend.")
+  Container(orchestrator, "Simulation Orchestrator + Forensic Services", "Python services/controllers", "Cria a topologia, inicia processos, escolhe o nó mais próximo, monitora leaks e coordena a blacklist.")
+  Container(node, "CDN Edge Node (N processos)", "Python + Flask + HTTP", "Entrega chunks, mantém estado local e propaga alertas de blacklist entre pares.")
+  Container(client, "Simulated Client Runtime (N processos)", "Python", "Representa o player/cliente independente usado pelos ticks da simulação.")
+  ContainerDb(repository, "Simulation Repository", "Memória do processo controlador", "Estado da topologia, clientes, eventos, tráfego, leaks e blacklist.")
+  ContainerDb(asset, "City catalog / video samples", "JSON + dataset opcional", "Cidades globais e amostras de conteúdo usadas pela simulação.")
+}
+
+Rel(operator, frontend, "Opera", "HTTP")
+Rel(frontend, api, "Invoca API e recebe overview", "JSON/REST")
+Rel(api, orchestrator, "Encaminha casos de uso", "Chamadas internas")
+Rel(orchestrator, repository, "Lê e atualiza estado", "Objetos em memória")
+Rel(orchestrator, node, "Inicializa, configura, consulta saúde, monitora leaks e solicita stream", "HTTP/1.1")
+Rel(orchestrator, client, "Inicia e encerra processos", "Processos locais")
+Rel(node, node, "Propaga BLACKLIST_ALERT e telemetria", "HTTP gossip")
+Rel(orchestrator, asset, "Carrega cidades e amostras", "Filesystem")
+
+SHOW_LEGEND()
+@enduml
