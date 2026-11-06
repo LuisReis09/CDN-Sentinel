@@ -1,4 +1,12 @@
-export type ServerStatus = "healthy" | "degraded" | "starting" | "stopping" | "stopped" | "offline" | "error" | "unknown";
+export type ServerStatus =
+  | "healthy"
+  | "degraded"
+  | "starting"
+  | "stopping"
+  | "stopped"
+  | "offline"
+  | "error"
+  | "unknown";
 
 export interface ServerNode {
   server_id: string;
@@ -80,7 +88,12 @@ export interface SimulationEvent {
   content_title?: string;
   message_id?: string;
   message_type?: string;
-  communication_kind?: "blacklist" | "new_content" | "update" | "client_content" | string;
+  communication_kind?:
+    | "blacklist"
+    | "new_content"
+    | "update"
+    | "client_content"
+    | string;
   emission_probability?: number;
   from_server?: string;
   to_server?: string;
@@ -297,4 +310,3 @@ export interface WatermarkDemo {
     survives: boolean;
   }>;
 }
-

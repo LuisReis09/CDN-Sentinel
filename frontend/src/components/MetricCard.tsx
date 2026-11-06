@@ -8,10 +8,18 @@ interface MetricCardProps {
   tone?: "cyan" | "orange" | "green" | "red";
 }
 
-export function MetricCard({ label, value, caption, icon: Icon, tone = "cyan" }: MetricCardProps) {
+export function MetricCard({
+  label,
+  value,
+  caption,
+  icon: Icon,
+  tone = "cyan",
+}: MetricCardProps) {
   return (
     <article className={`metric-card tone-${tone}`}>
-      <div className="metric-card__icon"><Icon size={17} /></div>
+      <div className="metric-card__icon">
+        <Icon size={17} />
+      </div>
       <div>
         <p className="eyebrow">{label}</p>
         <strong>{value}</strong>
@@ -20,4 +28,3 @@ export function MetricCard({ label, value, caption, icon: Icon, tone = "cyan" }:
     </article>
   );
 }
-

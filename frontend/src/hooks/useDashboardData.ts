@@ -85,12 +85,17 @@ function normalizeOverview(raw: Partial<Overview>): Overview {
     video_id: status.configuration?.video_id ?? "bigbuckbunny",
     tick_interval_seconds: status.configuration?.tick_interval_seconds ?? 2.5,
     base_client_port: status.configuration?.base_client_port ?? 6101,
-    monthly_client_price_usd: status.configuration?.monthly_client_price_usd ?? 25,
-    monthly_server_cost_usd: status.configuration?.monthly_server_cost_usd ?? 100,
+    monthly_client_price_usd:
+      status.configuration?.monthly_client_price_usd ?? 25,
+    monthly_server_cost_usd:
+      status.configuration?.monthly_server_cost_usd ?? 100,
     monthly_fixed_cost_usd: status.configuration?.monthly_fixed_cost_usd ?? 150,
   };
   const scalability = status.scalability ?? demoOverview.status.scalability;
-  const costModel = { ...demoOverview.status.scalability.cost_model, ...(scalability.cost_model ?? {}) };
+  const costModel = {
+    ...demoOverview.status.scalability.cost_model,
+    ...(scalability.cost_model ?? {}),
+  };
   return {
     ...demoOverview,
     ...raw,
@@ -112,8 +117,18 @@ function normalizeOverview(raw: Partial<Overview>): Overview {
         cost_model: costModel,
       },
     },
-    servers: (raw.servers ?? []).map((server) => ({ ...server, process_id: server.process_id ?? null, last_error: server.last_error ?? null, messages_received: server.messages_received ?? 0 })),
-    clients: (raw.clients ?? []).map((client) => ({ ...client, process_id: client.process_id ?? null, process_status: client.process_status ?? "unknown", last_activity_at: client.last_activity_at ?? null })),
+    servers: (raw.servers ?? []).map((server) => ({
+      ...server,
+      process_id: server.process_id ?? null,
+      last_error: server.last_error ?? null,
+      messages_received: server.messages_received ?? 0,
+    })),
+    clients: (raw.clients ?? []).map((client) => ({
+      ...client,
+      process_id: client.process_id ?? null,
+      process_status: client.process_status ?? "unknown",
+      last_activity_at: client.last_activity_at ?? null,
+    })),
     blacklist: raw.blacklist ?? [],
     leaks: raw.leaks ?? [],
     recent_events: raw.recent_events ?? [],
@@ -143,21 +158,27 @@ export function useDashboardData() {
   const refresh = useCallback(async () => {
     if (inFlight.current) return inFlight.current;
     const work = (async () => {
-    try {
-      const data = await api.overview();
-      setOverview(normalizeOverview(data));
-      setConnected(true);
-      setLastSuccessAt(Date.now());
-      setError(null);
-    } catch (cause) {
-      setConnected(false);
-      setError(cause instanceof Error ? cause.message : "Backend indisponível");
-    } finally {
-      setLoading(false);
-    }
+      try {
+        const data = await api.overview();
+        setOverview(normalizeOverview(data));
+        setConnected(true);
+        setLastSuccessAt(Date.now());
+        setError(null);
+      } catch (cause) {
+        setConnected(false);
+        setError(
+          cause instanceof Error ? cause.message : "Backend indisponível",
+        );
+      } finally {
+        setLoading(false);
+      }
     })();
     inFlight.current = work;
-    try { await work; } finally { inFlight.current = null; }
+    try {
+      await work;
+    } finally {
+      inFlight.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -167,5 +188,14 @@ export function useDashboardData() {
   }, [refresh]);
 
   const freshness = connected ? "LIVE" : lastSuccessAt ? "STALE" : "OFFLINE";
-  return { overview, connected, loading, error, freshness, lastSuccessAt, refresh, setOverview };
+  return {
+    overview,
+    connected,
+    loading,
+    error,
+    freshness,
+    lastSuccessAt,
+    refresh,
+    setOverview,
+  };
 }

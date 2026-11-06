@@ -286,7 +286,7 @@ def register_api_routes(api, controller: ApiController) -> None:
 
     @security.route("/watermark/demo/video")
     class WatermarkDemoVideoResource(Resource):
-        @security.doc(description="Entrega o vÃ­deo real Big Buck Bunny usado pelo laboratÃ³rio independente.")
+        @security.doc(description="Entrega o vídeo real Big Buck Bunny usado pelo laboratório independente.")
         def get(self):
             """Stream the real backend video asset used in the watermark lab."""
             try:

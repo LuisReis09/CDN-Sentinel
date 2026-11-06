@@ -51,13 +51,13 @@ def get_video_asset(video_id: str = "bigbuckbunny") -> tuple[Path, str]:
     """Resolve a named real video asset from the backend environment."""
     examples = {item["video_id"]: item for item in list_video_examples()}
     if not examples:
-        raise FileNotFoundError("dataset de vÃ­deos nÃ£o estÃ¡ disponÃ­vel no backend")
+        raise FileNotFoundError("dataset de vídeos não está disponível no backend")
     selected = examples.get(video_id)
     if selected is None:
-        raise ValueError(f"exemplo de vÃ­deo invÃ¡lido: {video_id}")
+        raise ValueError(f"exemplo de vídeo inválido: {video_id}")
     path = _dataset_root() / selected["filename"]
     if not path.is_file():
-        raise FileNotFoundError(f"dataset nÃ£o contÃ©m o vÃ­deo {video_id}")
+        raise FileNotFoundError(f"dataset não contém o vídeo {video_id}")
     return path, selected["content_type"]
 
 
@@ -89,5 +89,5 @@ def extract_watermark_token(encoded_payload: str) -> str:
     raw = base64.b64decode(encoded_payload.encode("ascii"), validate=True)
     token = raw.split(b"\n", 1)[0].decode("utf-8")
     if not token.startswith("CDNWM1."):
-        raise ValueError("chunk nÃ£o contÃ©m prefixo de watermark")
+        raise ValueError("chunk não contém prefixo de watermark")
     return token

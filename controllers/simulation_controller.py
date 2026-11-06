@@ -127,7 +127,7 @@ class SimulationController:
             message = "Nenhum nó saudável para atender a demanda"
         elif not healthy_servers:
             profile = "degradada"
-            message = "Todos os nos estao degradados, mas ainda podem atender com risco de latencia"
+            message = "Todos os nós estão degradados, mas ainda podem atender com risco de latência"
         elif utilization > 1:
             profile = "gargalo"
             message = "Demanda acima da capacidade: filas e latência tendem a crescer"
