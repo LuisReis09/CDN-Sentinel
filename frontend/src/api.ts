@@ -102,6 +102,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  watermarkVideoUrl: (videoId = "bigbuckbunny") =>
-    `${API_BASE}/security/watermark/demo/video?video_id=${encodeURIComponent(videoId)}`,
+  watermarkVideoUrl: (
+    videoId = "cdn_sentinel_demo",
+    variant: "original" | "watermarked" | "difference" = "original",
+  ) =>
+    `${API_BASE}/security/watermark/demo/video?video_id=${encodeURIComponent(videoId)}&variant=${variant}`,
 };

@@ -43,7 +43,12 @@ export function WatermarkLab({
     }
   }
 
-  const videoUrl = api.watermarkVideoUrl(demo?.video_id);
+  const videoVariants =
+    demo?.video_variants ?? {
+      original: api.watermarkVideoUrl("cdn_sentinel_demo"),
+      watermarked: api.watermarkVideoUrl("cdn_sentinel_demo", "watermarked"),
+      difference: api.watermarkVideoUrl("cdn_sentinel_demo", "difference"),
+    };
   const process = demo?.cryptographic_process;
   const claim = demo?.claim_before_encoding ?? {};
 
@@ -75,24 +80,22 @@ export function WatermarkLab({
       </div>
       <div className="noise-preview-grid noise-preview-grid--triple">
         <NoiseVideoPreview
-          videoUrl={videoUrl}
-          noiseHex={demo?.noise_hex ?? "c0ffee42"}
-          strength={0}
-          showNoise={false}
+          videoUrl={videoVariants.original}
+          variant="original"
           label="1 · Vídeo original"
+          description="MP4 local versionado; mesmo vídeo de referência"
         />
         <NoiseVideoPreview
-          videoUrl={videoUrl}
-          noiseHex={demo?.noise_hex ?? "c0ffee42"}
-          strength={0.8}
+          videoUrl={videoVariants.watermarked}
+          variant="watermarked"
           label="2 · Sinal sutil"
+          description="alteração real de luminância, aplicada aos frames"
         />
         <NoiseVideoPreview
-          videoUrl={videoUrl}
-          noiseHex={demo?.noise_hex ?? "c0ffee42"}
-          strength={2.4}
-          amplified
+          videoUrl={videoVariants.difference}
+          variant="difference"
           label="3 · Sinal destacado"
+          description="diferença real entre original e vídeo transformado"
         />
       </div>
       {demo && (
@@ -118,7 +121,7 @@ export function WatermarkLab({
         >
           <p>
             O claim didático carrega exatamente estes campos. Ele não é segredo:
-            a integridade vem da assinatura.
+            a integridade vem da assinatura. O vídeo acima é uma trilha visual separada.
           </p>
           <CodeBlock
             value={
@@ -225,6 +228,10 @@ export function WatermarkLab({
               <Detail label="Verificação" value={process?.verification} />
               <Detail label="Canal robusto" value={process?.robust_channel} />
               <Detail label="Limitação" value={process?.robustness_limit} />
+              <Detail
+                label="Fonte dos frames"
+                value={`${demo.video_metadata.resolution} · ${demo.video_metadata.size_bytes} bytes`}
+              />
             </div>
           </div>
           <RobustnessTable checks={demo.robustness_checks} />

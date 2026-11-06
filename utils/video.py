@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import os
-import secrets
 from functools import lru_cache
 from pathlib import Path
 from typing import Tuple
 
 
+MEDIA_ROOT = Path(__file__).resolve().parents[1] / "data" / "media"
 VIDEO_CATALOG = (
+    ("cdn_sentinel_demo", "CDN-Sentinel demo · original", "cdn-sentinel-demo-original.mp4"),
+    ("cdn_sentinel_demo_watermarked", "CDN-Sentinel demo · luminância watermark", "cdn-sentinel-demo-watermarked.mp4"),
+    ("cdn_sentinel_demo_difference", "CDN-Sentinel demo · diferença amplificada", "cdn-sentinel-demo-difference.mp4"),
     ("bigbuckbunny", "Big Buck Bunny", "bigbuckbunny.mp4"),
     ("bikes", "Bikes", "bikes.mp4"),
     ("carphone_pristine", "Carphone · original", "carphone_pristine.mp4"),
@@ -26,58 +28,84 @@ def _dataset_root() -> Path:
 
 
 def list_video_examples() -> list[dict[str, str]]:
-    """Return real video examples available in the backend dataset."""
-    try:
-        root = _dataset_root()
-    except (ImportError, OSError, TypeError):
-        return []
-    return [
-        {"video_id": video_id, "label": label, "filename": filename, "content_type": "video/mp4", "source": "scikit-video-local"}
-        for video_id, label, filename in VIDEO_CATALOG
-        if (root / filename).is_file()
-    ]
+    """Return valid local MP4 examples; external dataset entries are opt-in."""
+    examples: list[dict[str, str]] = []
+    for video_id, label, filename in VIDEO_CATALOG[:3]:
+        path = MEDIA_ROOT / filename
+        if path.is_file():
+            examples.append(
+                {
+                    "video_id": video_id,
+                    "label": label,
+                    "filename": filename,
+                    "content_type": "video/mp4",
+                    "source": "versioned-local-demo",
+                    "resolution": "320x180",
+                    "size_bytes": str(path.stat().st_size),
+                }
+            )
+    if os.getenv("USE_BIGBUCKBUNNY_DATASET", "0") == "1":
+        try:
+            root = _dataset_root()
+        except (ImportError, OSError, TypeError):
+            root = None
+        if root:
+            examples.extend(
+                {
+                    "video_id": video_id,
+                    "label": label,
+                    "filename": filename,
+                    "content_type": "video/mp4",
+                    "source": "scikit-video-local",
+                }
+                for video_id, label, filename in VIDEO_CATALOG[3:]
+                if (root / filename).is_file()
+            )
+    return examples
 
 
 def choose_video_example(exclude_video_id: str | None = None) -> dict[str, str]:
-    """Choose another real example when possible, otherwise use Big Buck Bunny."""
+    """Choose a deterministic local example without network or random state."""
     examples = list_video_examples()
     if not examples:
-        return {"video_id": "bigbuckbunny", "label": "Fallback determinístico", "filename": "", "content_type": "application/octet-stream", "source": "deterministic-local-fallback"}
+        raise FileNotFoundError("nenhum vídeo MP4 local está disponível")
     candidates = [item for item in examples if item["video_id"] != exclude_video_id] or examples
-    return secrets.choice(candidates)
+    return candidates[0]
 
 
-def get_video_asset(video_id: str = "bigbuckbunny") -> tuple[Path, str]:
-    """Resolve a named real video asset from the backend environment."""
+def get_video_asset(video_id: str = "cdn_sentinel_demo", variant: str = "original") -> tuple[Path, str]:
+    """Resolve a named valid MP4 asset and MIME type."""
+    aliases = {
+        "bigbuckbunny": "cdn_sentinel_demo",
+        "original": "cdn_sentinel_demo",
+        "watermarked": "cdn_sentinel_demo_watermarked",
+        "difference": "cdn_sentinel_demo_difference",
+    }
+    selected_id = aliases.get(video_id, video_id)
+    if video_id == "cdn_sentinel_demo" and variant in {"watermarked", "difference"}:
+        selected_id = f"cdn_sentinel_demo_{variant}"
     examples = {item["video_id"]: item for item in list_video_examples()}
-    if not examples:
-        raise FileNotFoundError("dataset de vídeos não está disponível no backend")
-    selected = examples.get(video_id)
+    selected = examples.get(selected_id)
     if selected is None:
-        raise ValueError(f"exemplo de vídeo inválido: {video_id}")
-    path = _dataset_root() / selected["filename"]
+        raise ValueError(f"exemplo de vídeo inválido: {selected_id}")
+    path = MEDIA_ROOT / selected["filename"]
+    if selected["source"] == "scikit-video-local":
+        path = _dataset_root() / selected["filename"]
     if not path.is_file():
-        raise FileNotFoundError(f"dataset não contém o vídeo {video_id}")
+        raise FileNotFoundError(f"vídeo não encontrado: {selected_id}")
     return path, selected["content_type"]
 
 
-def get_video_chunk(chunk_number: int = 0, video_id: str = "bigbuckbunny") -> Tuple[bytes, str]:
-    """Return a lightweight chunk from a real dataset video."""
-    # Offline deterministic fallback is the default for Entrega 2. An
-    # operator may opt into locally installed scikit-video assets explicitly.
-    if os.getenv("USE_BIGBUCKBUNNY_DATASET", "0") == "1":
-        try:
-            path, content_type = get_video_asset(video_id)
-            with path.open("rb") as video_file:
-                video_file.seek((chunk_number * 4096) % 65536)
-                payload = video_file.read(1024)
-            if payload:
-                return payload, content_type
-        except (ImportError, OSError, TypeError):
-            if video_id != "bigbuckbunny":
-                raise
-    seed = hashlib.sha256(f"bigbuckbunny-simulated-{chunk_number}".encode()).digest()
-    return (seed * 64)[:1024], "application/octet-stream"
+def get_video_chunk(chunk_number: int = 0, video_id: str = "cdn_sentinel_demo") -> Tuple[bytes, str]:
+    """Return the deterministic local MP4 as a transport sample.
+
+    The stream API prefixes a forensic claim for transport, so that response is
+    not itself advertised as a directly playable MP4. The Watermark Studio
+    uses :func:`get_video_asset` for HTML5 playback.
+    """
+    del chunk_number
+    path, content_type = get_video_asset(video_id)
+    return path.read_bytes(), content_type
 
 
 def encode_payload(payload: bytes) -> str:

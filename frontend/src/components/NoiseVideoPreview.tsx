@@ -1,66 +1,28 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 interface NoiseVideoPreviewProps {
   videoUrl: string;
-  noiseHex: string;
-  strength: number;
   label: string;
-  amplified?: boolean;
-  showNoise?: boolean;
+  variant: "original" | "watermarked" | "difference";
+  description: string;
 }
 
-/** Plays the real backend asset and overlays a deterministic forensic-noise inspection layer. */
+/** Plays the exact MP4 variant returned by the backend media catalog. */
 export function NoiseVideoPreview({
   videoUrl,
-  noiseHex,
-  strength,
   label,
-  amplified,
-  showNoise = true,
+  variant,
+  description,
 }: NoiseVideoPreviewProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [videoUnavailable, setVideoUnavailable] = useState(false);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const context = canvas.getContext("2d");
-    if (!context) return;
-    const width = 640;
-    const height = 360;
-    canvas.width = width;
-    canvas.height = height;
-    context.clearRect(0, 0, width, height);
-
-    if (!showNoise) return;
-    let seed = Number.parseInt(noiseHex.slice(0, 8), 16) || 7;
-    for (let index = 0; index < 850; index += 1) {
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      const x = seed % width;
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      const y = seed % height;
-      const alpha = (0.12 + (((seed >>> 8) % 100) / 100) * 0.2) * strength;
-      const channel =
-        seed % 3 === 0
-          ? "69,217,255"
-          : seed % 3 === 1
-            ? "158,255,108"
-            : "255,184,107";
-      context.fillStyle = `rgba(${channel}, ${alpha})`;
-      context.fillRect(x, y, amplified ? 2 : 1, amplified ? 2 : 1);
-    }
-  }, [noiseHex, strength, amplified, showNoise]);
+  const [unavailable, setUnavailable] = useState(false);
 
   return (
-    <div
-      className={`noise-video noise-video--real ${amplified ? "noise-video--amplified" : ""}`}
-    >
+    <div className={`noise-video noise-video--${variant}`}>
       <div className="noise-video__frame">
-        {videoUnavailable ? (
+        {unavailable ? (
           <div className="noise-video__fallback">
-            <strong>FALLBACK LOCAL</strong>
-            <span>conteúdo demonstrativo</span>
-            <small>nenhum frame real foi watermarkado</small>
+            <strong>MÍDIA INDISPONÍVEL</strong>
+            <span>O backend não entregou um MP4 válido.</span>
           </div>
         ) : (
           <video
@@ -72,25 +34,16 @@ export function NoiseVideoPreview({
             playsInline
             controls
             aria-label={label}
-            onError={() => setVideoUnavailable(true)}
+            onError={() => setUnavailable(true)}
           />
         )}
-        <canvas
-          ref={canvasRef}
-          className="noise-video__noise"
-          aria-hidden="true"
-        />
         <span className="noise-video__source-badge">
-          overlay demonstrativo · fonte local/opt-in
+          MP4 real · {variant === "original" ? "fonte" : "transformação de pixels"}
         </span>
       </div>
       <div className="noise-video__caption">
         <span>{label}</span>
-        <small>
-          {amplified
-            ? "overlay amplificado para inspeção"
-            : "overlay didático; não é frame watermarkado"}
-        </small>
+        <small>{description}</small>
       </div>
     </div>
   );

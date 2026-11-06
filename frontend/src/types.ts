@@ -295,6 +295,18 @@ export interface WatermarkDemo {
   video_label: string;
   video_source: string;
   video_asset_url: string;
+  video_variants: {
+    original: string;
+    watermarked: string;
+    difference: string;
+  };
+  video_metadata: {
+    mime: string;
+    resolution: string;
+    size_bytes: number;
+    source: string;
+    visual_transform: string;
+  };
   chunk_number: number;
   original_payload_base64: string;
   watermarked_payload_base64: string;

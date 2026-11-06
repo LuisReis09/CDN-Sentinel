@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import time
 
 from services.watermark_service import WatermarkService
-from utils.video import choose_video_example, encode_payload, extract_watermark_token, get_video_chunk, list_video_examples
+from utils.video import choose_video_example, encode_payload, extract_watermark_token, get_video_asset, get_video_chunk, list_video_examples
 from utils.robust_watermark import assess_robustness
 
 
@@ -21,13 +20,18 @@ class WatermarkDemoService:
         server_id = str(payload.get("server_id") or "demo-origin")
         chunk_number = int(payload.get("chunk", 0))
         requested_video_id = payload.get("video_id")
-        if os.getenv("USE_BIGBUCKBUNNY_DATASET", "0") != "1":
-            video = {"video_id": "bigbuckbunny", "label": "Fallback determinístico local", "content_type": "application/octet-stream", "source": "deterministic-local-fallback"}
-        elif requested_video_id:
-            video = next((item for item in list_video_examples() if item["video_id"] == str(requested_video_id)), {"video_id": str(requested_video_id), "label": str(requested_video_id), "content_type": "video/mp4", "source": "scikit-video-local"})
+        if requested_video_id:
+            video = next((item for item in list_video_examples() if item["video_id"] == str(requested_video_id) and not item["video_id"].endswith(("_watermarked", "_difference"))), None)
+            if video is None:
+                raise ValueError(f"vídeo local inválido: {requested_video_id}")
         else:
             video = choose_video_example(str(payload.get("exclude_video_id")) if payload.get("exclude_video_id") else None)
+            if video["video_id"].endswith(("_watermarked", "_difference")):
+                video = next(item for item in list_video_examples() if item["video_id"] == "cdn_sentinel_demo")
         original_bytes, content_type = get_video_chunk(chunk_number, video["video_id"])
+        original_asset, _ = get_video_asset(video["video_id"])
+        _, _ = get_video_asset(video["video_id"], "watermarked")
+        _, _ = get_video_asset(video["video_id"], "difference")
         token, claim = self._watermark_service.issue(client_id, server_id, chunk_number)
         watermarked_bytes = token.encode("utf-8") + b"\n" + original_bytes
         extracted_token = extract_watermark_token(encode_payload(watermarked_bytes))
@@ -41,7 +45,19 @@ class WatermarkDemoService:
             "video_id": video["video_id"],
             "video_label": video["label"],
             "video_source": video.get("source", "scikit-video local opt-in"),
-            "video_asset_url": f"/api/security/watermark/demo/video?video_id={video['video_id']}",
+            "video_asset_url": f"/api/security/watermark/demo/video?video_id={video['video_id']}&variant=original",
+            "video_variants": {
+                "original": f"/api/security/watermark/demo/video?video_id={video['video_id']}&variant=original",
+                "watermarked": f"/api/security/watermark/demo/video?video_id={video['video_id']}&variant=watermarked",
+                "difference": f"/api/security/watermark/demo/video?video_id={video['video_id']}&variant=difference",
+            },
+            "video_metadata": {
+                "mime": content_type,
+                "resolution": video.get("resolution", "320x180"),
+                "size_bytes": original_asset.stat().st_size,
+                "source": "asset MP4 versionado; padrão testsrc2 próprio",
+                "visual_transform": "drawbox + ajuste sutil de luminância; diferença = blend original/watermarked",
+            },
             "chunk_number": chunk_number,
             "original_payload_base64": encode_payload(original_bytes),
             "watermarked_payload_base64": encode_payload(watermarked_bytes),
@@ -63,8 +79,8 @@ class WatermarkDemoService:
                 "transport_encoding": "Base64 apenas para transporte da demonstração",
                 "verification": "decodificar, extrair claim, recalcular HMAC e comparar em tempo constante",
                 "reversible_encryption": False,
-                "robust_channel": "spread-spectrum/QIM experimental em luminância; avaliado contra blur, ruído e re-encode",
-                "robustness_limit": "a demonstração usa amostras sintéticas derivadas do chunk; produção precisa decodificar frames Y e calibrar o detector",
+                "robust_channel": "transformação visual real em frames H.264: luminância sutil e arquivo de diferença derivado",
+                "robustness_limit": "esta versão demonstra pixels transformados; não afirma robustez contra re-encode. O detector spread-spectrum experimental permanece separado e não é aplicado ao MP4",
             },
             "extracted_token": extracted_token,
             "claim": verified_claim.to_dict(),

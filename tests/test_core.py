@@ -7,6 +7,7 @@ from utils.geo import haversine_km, load_global_cities
 from utils.latency import propagation_delay_seconds
 from repositories.in_memory import NodeRepository
 from services.capacity_service import capacity_limits, profile_for_tier, service_metrics
+from utils.video import get_video_asset, list_video_examples
 
 
 class SecurityAndNetworkTests(unittest.TestCase):
@@ -65,6 +66,30 @@ class SecurityAndNetworkTests(unittest.TestCase):
         hit = service_metrics(profile, 8, cache_hit_rate=0.8)
         self.assertGreater(hit["capacity_rps"], miss["capacity_rps"])
         self.assertEqual(SimulationConfig.from_payload({"slo_p95_ms": 180, "demand_rps_per_client": 2}).slo_p95_ms, 180)
+
+    def test_local_video_catalog_has_valid_reproducible_mp4_variants(self):
+        examples = list_video_examples()
+        self.assertTrue(any(item["video_id"] == "cdn_sentinel_demo" for item in examples))
+        original, content_type = get_video_asset("cdn_sentinel_demo")
+        watermarked, _ = get_video_asset("cdn_sentinel_demo", "watermarked")
+        difference, _ = get_video_asset("cdn_sentinel_demo", "difference")
+        self.assertEqual(content_type, "video/mp4")
+        self.assertTrue(original.read_bytes().startswith(b"\x00\x00\x00"))
+        self.assertNotEqual(original.read_bytes(), watermarked.read_bytes())
+        self.assertNotEqual(original.read_bytes(), difference.read_bytes())
+
+    def test_video_endpoint_returns_mp4_and_supports_range_requests(self):
+        from app import create_app
+
+        client = create_app().test_client()
+        response = client.get("/api/security/watermark/demo/video?video_id=cdn_sentinel_demo&variant=original")
+        partial = client.get("/api/security/watermark/demo/video?video_id=cdn_sentinel_demo&variant=watermarked", headers={"Range": "bytes=0-31"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "video/mp4")
+        self.assertEqual(partial.status_code, 206)
+        self.assertEqual(partial.mimetype, "video/mp4")
+        response.close()
+        partial.close()
 
 
 if __name__ == "__main__":

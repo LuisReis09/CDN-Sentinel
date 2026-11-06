@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
-
-from flask import Response, request, send_file
+from flask import request, send_file
 from flask_restx import Namespace, Resource, fields
 
 from controllers.api_controller import ApiController
@@ -297,21 +295,19 @@ def register_api_routes(api, controller: ApiController) -> None:
     class WatermarkDemoVideoResource(Resource):
         @security.doc(description="Entrega o vídeo real Big Buck Bunny usado pelo laboratório independente.")
         def get(self):
-            """Stream the real backend video asset used in the watermark lab."""
+            """Stream a valid local MP4 with HTML5 range support."""
             try:
-                if os.getenv("USE_BIGBUCKBUNNY_DATASET", "0") != "1":
-                    from utils.video import get_video_chunk
-                    payload, _ = get_video_chunk(0, request.args.get("video_id", "bigbuckbunny"))
-                    return Response(payload, mimetype="application/octet-stream", headers={"X-CDN-Content-Source": "deterministic-local-fallback", "X-CDN-Content-Note": "fallback ativo; não é um vídeo reproduzível"})
-                path, content_type = get_video_asset(request.args.get("video_id", "bigbuckbunny"))
-                return send_file(path, mimetype=content_type, conditional=True, etag=True, download_name="bigbuckbunny.mp4")
+                video_id = request.args.get("video_id", "cdn_sentinel_demo")
+                variant = request.args.get("variant", "original")
+                if variant not in {"original", "watermarked", "difference"}:
+                    return {"error": "variant deve ser original, watermarked ou difference"}, 400
+                path, content_type = get_video_asset(video_id, variant)
+                response = send_file(path, mimetype=content_type, conditional=True, etag=True, download_name=path.name)
+                response.headers["X-CDN-Content-Source"] = "versioned-local-demo" if video_id.startswith("cdn_sentinel_demo") else "scikit-video-local-opt-in"
+                response.headers["X-CDN-Visual-Transform"] = variant
+                return response
             except (FileNotFoundError, ValueError) as exc:
-                from utils.video import get_video_chunk
-                try:
-                    payload, _ = get_video_chunk(0, request.args.get("video_id", "bigbuckbunny"))
-                except (FileNotFoundError, ValueError, OSError) as fallback_error:
-                    return {"error": str(fallback_error)}, 503
-                return Response(payload, mimetype="application/octet-stream", headers={"X-CDN-Content-Source": "deterministic-local-fallback", "X-CDN-Content-Note": str(exc)})
+                return {"error": str(exc), "hint": "use o MP4 local versionado ou habilite explicitamente um dataset instalado"}, 503
 
     @monitor.route("/scan")
     class MonitorScanResource(Resource):
