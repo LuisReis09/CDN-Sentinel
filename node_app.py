@@ -11,6 +11,7 @@ import requests
 from flask import Flask, jsonify, request
 
 from repositories.in_memory import NodeRepository
+from services.capacity_service import profile_for_tier, service_metrics, queue_wait_ms
 from services.watermark_service import WatermarkService
 from utils.geo import haversine_km
 from utils.latency import sleep_for_distance
@@ -18,10 +19,14 @@ from utils.video import encode_payload, get_video_chunk
 from utils.protocol import signed_headers, verify_headers
 
 
+class CapacityRejected(RuntimeError):
+    """Raised when the bounded node queue cannot admit another request."""
+
+
 class CDNNode:
     """State and HTTP handlers for one independent CDN process."""
 
-    def __init__(self, server_id: str, host: str, port: int, latitude: float, longitude: float, city: str, secret_key: str, latency_factor: float) -> None:
+    def __init__(self, server_id: str, host: str, port: int, latitude: float, longitude: float, city: str, secret_key: str, latency_factor: float, capacity_tier: str = "basic") -> None:
         self.server_id = server_id
         self.host = host
         self.port = port
@@ -29,6 +34,8 @@ class CDNNode:
         self.longitude = longitude
         self.city = city
         self.latency_factor = latency_factor
+        self.capacity_tier = capacity_tier
+        self.capacity_profile = profile_for_tier(capacity_tier)
         self.repository = NodeRepository()
         self.watermark_service = WatermarkService(secret_key)
         self.secret_key = secret_key
@@ -48,6 +55,9 @@ class CDNNode:
         with self._lock:
             if "latency_factor" in values:
                 self.latency_factor = float(values["latency_factor"])
+            if "capacity_tier" in values:
+                self.capacity_tier = str(values["capacity_tier"])
+                self.capacity_profile = profile_for_tier(self.capacity_tier)
             if "fault" in values:
                 fault = values["fault"] or {}
                 if not isinstance(fault, dict):
@@ -57,11 +67,20 @@ class CDNNode:
                 self.fault["drop_rate"] = max(0.0, min(1.0, float(fault.get("drop_rate", self.fault["drop_rate"]))))
                 if not self.fault["offline"] and not self.fault["extra_latency_ms"] and not self.fault["drop_rate"]:
                     self.repository.clear_consecutive_errors()
-        return {"server_id": self.server_id, "latency_factor": self.latency_factor, "fault": dict(self.fault)}
+        return {"server_id": self.server_id, "latency_factor": self.latency_factor, "capacity_tier": self.capacity_tier, "capacity_profile": self.capacity_profile.to_dict(), "fault": dict(self.fault)}
 
     def status(self) -> dict:
         metrics = self.repository.request_metrics()
+        capacity = service_metrics(
+            self.capacity_profile,
+            metrics.get("observed_rps", 0.0),
+            metrics.get("queue_depth", 0),
+            metrics.get("queue_rejected", 0),
+        )
+        pressure = capacity["pressure"]
+        is_overloaded = pressure >= 0.95 and bool(metrics.get("queue_depth") or metrics.get("queue_rejected") or metrics.get("requests_in_flight"))
         is_degraded = bool(self.fault["extra_latency_ms"] or self.fault["drop_rate"] or metrics.get("consecutive_errors"))
+        health_status = "offline" if self.fault["offline"] else ("overloaded" if is_overloaded else ("degraded" if is_degraded else "healthy"))
         return {
             "server_id": self.server_id,
             "host": self.host,
@@ -69,7 +88,12 @@ class CDNNode:
             "city": self.city,
             "latitude": self.latitude,
             "longitude": self.longitude,
-            "status": "offline" if self.fault["offline"] else ("degraded" if is_degraded else "healthy"),
+            "status": health_status,
+            "lifecycle_status": "failed" if self.fault["offline"] else "running",
+            "health_status": health_status,
+            "capacity_tier": self.capacity_tier,
+            "capacity_profile": self.capacity_profile.to_dict(),
+            "capacity": capacity,
             "load": self.repository.load(),
             "blacklist_size": len(self.repository.blacklist()),
             "messages_received": self.repository.message_count(),
@@ -80,7 +104,7 @@ class CDNNode:
         }
 
     def stream(self, client_id: str, chunk_number: int, video_id: str = "bigbuckbunny") -> dict:
-        self.repository.begin_request()
+        reservation = None
         failed = False
         try:
             if self.fault["offline"]:
@@ -89,6 +113,15 @@ class CDNNode:
                 raise RuntimeError(f"mensagem perdida no nó {self.server_id}")
             if self.repository.is_blacklisted(client_id):
                 raise PermissionError(f"Cliente {client_id} bloqueado no nó {self.server_id}")
+            reservation = self.repository.begin_request(
+                self.capacity_profile.max_concurrent_requests,
+                self.capacity_profile.max_queue_depth,
+                queue_wait_ms(self.capacity_profile, self.repository.request_metrics().get("requests_in_flight", 0), self.repository.request_metrics().get("queue_depth", 0)),
+            )
+            if not reservation["accepted"]:
+                raise CapacityRejected(f"Nó {self.server_id} está saturado: fila máxima atingida")
+            if reservation["queue_wait_ms"]:
+                time.sleep(reservation["queue_wait_ms"] / 1000.0)
             if self.fault["extra_latency_ms"]:
                 time.sleep(self.fault["extra_latency_ms"] / 1000.0)
             token, claim = self.watermark_service.issue(client_id, self.server_id, chunk_number)
@@ -106,8 +139,10 @@ class CDNNode:
             failed = True
             raise
         finally:
-            self.repository.finish_request(failed=failed)
+            if reservation and reservation.get("accepted"):
+                self.repository.finish_request(failed=failed, queued=bool(reservation.get("queued")))
         result["load"] = self.repository.load()
+        result["queue_wait_ms"] = reservation.get("queue_wait_ms", 0.0) if reservation else 0.0
         return result
 
     def _validate_entry(self, entry: dict) -> None:
@@ -268,6 +303,8 @@ def create_node_app(node: CDNNode) -> Flask:
             return jsonify(node.stream(client_id, chunk_number, auth_payload["video_id"]))
         except PermissionError as exc:
             return jsonify({"error": str(exc)}), 403
+        except CapacityRejected as exc:
+            return jsonify({"error": str(exc)}), 429
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 503
 
@@ -321,6 +358,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--longitude", type=float, required=True)
     parser.add_argument("--city", required=True)
     parser.add_argument("--latency-factor", type=float, default=1.0)
+    parser.add_argument("--capacity-tier", choices=["basic", "standard", "pro", "enterprise"], default="basic")
     return parser.parse_args()
 
 
@@ -336,6 +374,7 @@ def main() -> None:
         city=args.city,
         secret_key=secret_key,
         latency_factor=args.latency_factor,
+        capacity_tier=args.capacity_tier,
     )
     create_node_app(node).run(host=args.host, port=args.port, threaded=True, use_reloader=False)
 

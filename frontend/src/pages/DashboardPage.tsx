@@ -42,14 +42,21 @@ export function DashboardPage({
     longitude: number;
   } | null>(null);
   const [placementBusy, setPlacementBusy] = useState(false);
-  const avgLatency = overview.recent_traffic.length
+  const observedLatencies = overview.recent_traffic
+    .map((item) => item.end_to_end_ms)
+    .filter((value): value is number => typeof value === "number");
+  const avgLatency = observedLatencies.length
     ? Math.round(
-        overview.recent_traffic.reduce(
-          (sum, item) => sum + item.latency_ms,
-          0,
-        ) / overview.recent_traffic.length,
+        observedLatencies.reduce((sum, value) => sum + value, 0) /
+          observedLatencies.length,
       )
-    : 0;
+    : null;
+  const latencyTone =
+    avgLatency === null
+      ? "warning"
+      : status.scalability.slo_compliant
+        ? "green"
+        : "red";
   const visibleServers = activeNode
     ? overview.servers.filter((server) => server.server_id === activeNode)
     : overview.servers;
@@ -123,10 +130,14 @@ export function DashboardPage({
         />
         <MetricCard
           label="LATÊNCIA MÉDIA"
-          value={`${avgLatency} ms`}
-          caption={`p95 ${status.scalability.p95_latency_ms} ms`}
+          value={avgLatency === null ? "—" : `${avgLatency} ms`}
+          caption={
+            avgLatency === null
+              ? "sem amostras na janela"
+              : `p95 ${status.scalability.p95_latency_ms} ms · limiar ${status.scalability.slo_p95_ms ?? 250} ms`
+          }
           icon={Activity}
-          tone="orange"
+          tone={latencyTone}
         />
         <MetricCard
           label="BLACKLIST"

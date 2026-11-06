@@ -340,6 +340,10 @@ code {
   color: var(--orange);
   background: rgba(255, 184, 107, 0.09);
 }
+.tone-warning .metric-card__icon {
+  color: var(--orange);
+  background: rgba(255, 184, 107, 0.09);
+}
 .tone-red .metric-card__icon {
   color: var(--red);
   background: rgba(255, 97, 119, 0.09);

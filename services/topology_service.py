@@ -29,6 +29,7 @@ class TopologyService:
                 latitude=city.latitude,
                 longitude=city.longitude,
                 city=city.name,
+                capacity_tier=config.node_tier,
             )
 
         clients: Dict[str, Client] = {}

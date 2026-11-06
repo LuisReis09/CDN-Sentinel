@@ -43,9 +43,9 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
         <div>
           <Server size={14} />
           <span>
-            capacidade<strong>{scale.total_capacity}</strong>
+            capacidade<strong>{scale.capacity_rps ?? scale.total_capacity} req/s</strong>
             <small>
-              {scale.healthy_servers} nós × {scale.capacity_per_server} sessões
+              {scale.healthy_servers} nós disponíveis · demanda virtual {scale.demand_rps ?? 0} req/s
             </small>
           </span>
         </div>
@@ -61,7 +61,7 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
         <div>
           <Gauge size={14} />
           <span>
-            fila projetada<strong>{scale.estimated_queue_latency_ms} ms</strong>
+            espera de fila<strong>{scale.estimated_queue_latency_ms} ms</strong>
           </span>
         </div>
       </div>
@@ -80,6 +80,9 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
         </span>
         <span>
           erros: <b>{scale.observed_errors ?? 0}</b>
+        </span>
+        <span>
+          SLO: <b>{scale.slo_compliant === undefined ? "sem dados" : scale.slo_compliant ? "atendido" : "violado"}</b>
         </span>
       </div>
       <div className="economics-grid">
@@ -120,8 +123,8 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
         </div>
       </div>
       <p className="economics-note">
-        <Landmark size={13} /> Capacidade = nós saudáveis × 8 sessões. Latência
-        observada usa a janela indicada; custos permanecem didáticos.
+        <Landmark size={13} /> Capacidade por nó é estimada pelo gargalo de CPU/rede;
+        demanda e custos são didáticos. RTT, fila e E2E vêm dos processos locais.
       </p>
     </section>
   );

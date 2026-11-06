@@ -168,6 +168,11 @@ class NodeRepository:
         self._consecutive_errors = 0
         self._in_flight = 0
         self._last_request_at: float | None = None
+        self._queue_depth = 0
+        self._queue_rejected = 0
+        self._queue_wait_sum_ms = 0.0
+        self._queue_wait_samples = 0
+        self._recent_request_times: List[float] = []
         self._lock = RLock()
 
     def is_blacklisted(self, client_id: str) -> bool:
@@ -205,15 +210,33 @@ class NodeRepository:
         with self._lock:
             self._pending_messages.pop(key, None)
 
-    def begin_request(self) -> None:
+    def begin_request(self, max_concurrent: int = 16, max_queue_depth: int = 32, queue_wait_ms: float = 0.0) -> dict:
         with self._lock:
             self._requests_total += 1
-            self._in_flight += 1
             self._last_request_at = time.time()
+            now = self._last_request_at
+            self._recent_request_times.append(now)
+            self._recent_request_times = [value for value in self._recent_request_times if now - value <= 60]
+            if self._in_flight >= max(1, max_concurrent):
+                if self._queue_depth >= max(0, max_queue_depth):
+                    self._queue_rejected += 1
+                    self._errors_total += 1
+                    self._consecutive_errors += 1
+                    return {"accepted": False, "queue_wait_ms": 0.0, "queued": False}
+                self._queue_depth += 1
+                self._queue_wait_sum_ms += queue_wait_ms
+                self._queue_wait_samples += 1
+                queued = True
+            else:
+                queued = False
+            self._in_flight += 1
+            return {"accepted": True, "queue_wait_ms": queue_wait_ms, "queued": queued}
 
-    def finish_request(self, failed: bool = False) -> None:
+    def finish_request(self, failed: bool = False, queued: bool = False) -> None:
         with self._lock:
             self._in_flight = max(0, self._in_flight - 1)
+            if queued and self._queue_depth:
+                self._queue_depth = max(0, self._queue_depth - 1)
             if failed:
                 self._errors_total += 1
                 self._consecutive_errors += 1
@@ -222,7 +245,19 @@ class NodeRepository:
 
     def request_metrics(self) -> dict:
         with self._lock:
-            return {"requests_total": self._requests_total, "errors_total": self._errors_total, "requests_in_flight": self._in_flight, "last_request_at": self._last_request_at, "consecutive_errors": self._consecutive_errors}
+            now = time.time()
+            self._recent_request_times = [value for value in self._recent_request_times if now - value <= 60]
+            return {
+                "requests_total": self._requests_total,
+                "errors_total": self._errors_total,
+                "requests_in_flight": self._in_flight,
+                "last_request_at": self._last_request_at,
+                "consecutive_errors": self._consecutive_errors,
+                "queue_depth": self._queue_depth,
+                "queue_rejected": self._queue_rejected,
+                "queue_wait_ms": round(self._queue_wait_sum_ms / self._queue_wait_samples, 3) if self._queue_wait_samples else 0.0,
+                "observed_rps": round(len(self._recent_request_times) / 60.0, 3),
+            }
 
     def clear_consecutive_errors(self) -> None:
         with self._lock:

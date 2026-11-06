@@ -19,6 +19,10 @@ class SimulationConfig:
     monthly_client_price_usd: float = 25.0
     monthly_server_cost_usd: float = 100.0
     monthly_fixed_cost_usd: float = 150.0
+    node_tier: str = "basic"
+    demand_rps_per_client: float = 0.25
+    slo_p95_ms: float = 250.0
+    slo_success_rate_pct: float = 99.0
     seed: int = 2026
 
     @classmethod
@@ -39,6 +43,10 @@ class SimulationConfig:
             monthly_client_price_usd = float(payload.get("monthly_client_price_usd", payload.get("monthly_client_price_unit", 25.0)))
             monthly_server_cost_usd = float(payload.get("monthly_server_cost_usd", payload.get("monthly_server_cost_unit", 100.0)))
             monthly_fixed_cost_usd = float(payload.get("monthly_fixed_cost_usd", payload.get("monthly_fixed_cost_unit", 150.0)))
+            node_tier = str(payload.get("node_tier", "basic"))
+            demand_rps_per_client = float(payload.get("demand_rps_per_client", 0.25))
+            slo_p95_ms = float(payload.get("slo_p95_ms", 250.0))
+            slo_success_rate_pct = float(payload.get("slo_success_rate_pct", 99.0))
             seed = int(payload.get("seed", 2026))
         except (TypeError, ValueError) as exc:
             raise ValueError("Parâmetros numéricos inválidos") from exc
@@ -60,10 +68,16 @@ class SimulationConfig:
             raise ValueError("base_client_port deve estar entre 1024 e 64000")
         if base_client_port + num_clients - 1 > 64000:
             raise ValueError("o intervalo de portas dos clientes excede 64000")
-        if not all(math.isfinite(value) for value in (malicious_probability, latency_factor, tick_interval_seconds, monthly_client_price_usd, monthly_server_cost_usd, monthly_fixed_cost_usd)):
+        if not all(math.isfinite(value) for value in (malicious_probability, latency_factor, tick_interval_seconds, monthly_client_price_usd, monthly_server_cost_usd, monthly_fixed_cost_usd, demand_rps_per_client, slo_p95_ms, slo_success_rate_pct)):
             raise ValueError("parâmetros numéricos devem ser finitos")
         if monthly_client_price_usd < 0 or monthly_server_cost_usd < 0 or monthly_fixed_cost_usd < 0:
             raise ValueError("custos e preço mensal em USD não podem ser negativos")
+        if node_tier not in {"basic", "standard", "pro", "enterprise"}:
+            raise ValueError("node_tier deve ser basic, standard, pro ou enterprise")
+        if not 0 <= demand_rps_per_client <= 100:
+            raise ValueError("demand_rps_per_client deve estar entre 0 e 100")
+        if not 1 <= slo_p95_ms <= 60_000 or not 0 <= slo_success_rate_pct <= 100:
+            raise ValueError("limiares de SLO inválidos")
         if not -(2**31) <= seed <= 2**31 - 1:
             raise ValueError("seed deve estar entre -2147483648 e 2147483647")
         return cls(
@@ -79,6 +93,10 @@ class SimulationConfig:
             monthly_client_price_usd=monthly_client_price_usd,
             monthly_server_cost_usd=monthly_server_cost_usd,
             monthly_fixed_cost_usd=monthly_fixed_cost_usd,
+            node_tier=node_tier,
+            demand_rps_per_client=demand_rps_per_client,
+            slo_p95_ms=slo_p95_ms,
+            slo_success_rate_pct=slo_success_rate_pct,
             seed=seed,
         )
 
@@ -95,6 +113,10 @@ class SimulationConfig:
             "monthly_client_price_usd": self.monthly_client_price_usd,
             "monthly_server_cost_usd": self.monthly_server_cost_usd,
             "monthly_fixed_cost_usd": self.monthly_fixed_cost_usd,
+            "node_tier": self.node_tier,
+            "demand_rps_per_client": self.demand_rps_per_client,
+            "slo_p95_ms": self.slo_p95_ms,
+            "slo_success_rate_pct": self.slo_success_rate_pct,
             "seed": self.seed,
         }
 

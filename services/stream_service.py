@@ -63,6 +63,11 @@ class StreamService:
                     candidate_details[index]["selected"] = False
                     candidate_details[index]["reason"] = "blacklist local; tentando o próximo nó durante a propagação"
                     continue
+                if status_code == 429:
+                    failures.append(f"{candidate.server_id}: capacidade saturada")
+                    candidate_details[index]["selected"] = False
+                    candidate_details[index]["reason"] = "fila cheia; failover para o próximo candidato"
+                    continue
                 failures.append(f"{candidate.server_id}: HTTP {status_code or 'erro'}")
                 candidate.status = "offline"
                 candidate.last_error = "falha HTTP durante roteamento"
@@ -85,6 +90,7 @@ class StreamService:
         client.last_activity_at = time.time()
         artificial_latency_ms = float(result.get("network_latency_ms", 0.0))
         http_rtt_ms = float(result.get("http_rtt_ms", 0.0))
+        queue_wait_ms = float(result.get("queue_wait_ms", 0.0))
         end_to_end_ms = (time.monotonic() - started) * 1000
         if self._repository:
             self._repository.append_traffic({
@@ -97,6 +103,7 @@ class StreamService:
                 "latency_ms": artificial_latency_ms,
                 "artificial_latency_ms": artificial_latency_ms,
                 "http_rtt_ms": http_rtt_ms,
+                "queue_wait_ms": queue_wait_ms,
                 "end_to_end_ms": round(end_to_end_ms, 3),
                 "chunk_id": result["chunk_id"],
             })
@@ -110,6 +117,7 @@ class StreamService:
                 "latency_ms": artificial_latency_ms,
                 "artificial_latency_ms": artificial_latency_ms,
                 "http_rtt_ms": http_rtt_ms,
+                "queue_wait_ms": queue_wait_ms,
                 "end_to_end_ms": round(end_to_end_ms, 3),
                 "protocol": "HTTP/1.1",
                 "routing": "Haversine / nearest healthy CDN",
@@ -155,6 +163,7 @@ class StreamService:
             trace_id=trace_id,
             artificial_latency_ms=artificial_latency_ms,
             http_rtt_ms=http_rtt_ms,
+            queue_wait_ms=queue_wait_ms,
             end_to_end_ms=round(end_to_end_ms, 3),
             routing_candidates=candidate_details,
             routing_reason="primeiro nó falhou; failover determinístico" if failures else ("nó não saudável excluído; menor distância entre nós saudáveis" if len(candidate_details) > len(candidates) else "menor distância entre nós saudáveis"),

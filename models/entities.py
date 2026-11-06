@@ -31,6 +31,16 @@ class CDNServer:
     longitude: float
     city: str
     status: str = "starting"
+    lifecycle_status: str = "starting"
+    health_status: str = "healthy"
+    capacity_tier: str = "basic"
+    capacity_rps: float = 0.0
+    utilization: float = 0.0
+    queue_depth: int = 0
+    queue_rejected: int = 0
+    queue_wait_ms: float = 0.0
+    capacity_pressure: float = 0.0
+    slo_breached: bool = False
     load: int = 0
     blacklist_size: int = 0
     messages_received: int = 0
@@ -99,6 +109,7 @@ class VideoChunk:
     trace_id: str | None = None
     artificial_latency_ms: float = 0.0
     http_rtt_ms: float = 0.0
+    queue_wait_ms: float = 0.0
     end_to_end_ms: float = 0.0
     routing_candidates: List[Dict[str, Any]] = field(default_factory=list)
     routing_reason: str = ""

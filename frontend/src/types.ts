@@ -16,6 +16,9 @@ export interface ServerNode {
   longitude: number;
   city: string;
   status: ServerStatus;
+  lifecycle_status?: string;
+  health_status?: string;
+  capacity_tier?: string;
   load: number;
   blacklist_size: number;
   url: string;
@@ -27,6 +30,13 @@ export interface ServerNode {
   errors_total?: number;
   requests_in_flight?: number;
   last_request_at?: number | null;
+  capacity_rps?: number;
+  utilization?: number;
+  queue_depth?: number;
+  queue_rejected?: number;
+  queue_wait_ms?: number;
+  capacity_pressure?: number;
+  slo_breached?: boolean;
   fault?: { offline?: boolean; extra_latency_ms?: number; drop_rate?: number };
 }
 
@@ -55,6 +65,7 @@ export interface Traffic {
   trace_id?: string;
   artificial_latency_ms?: number;
   http_rtt_ms?: number;
+  queue_wait_ms?: number;
   end_to_end_ms?: number;
   routing_reason?: string;
 }
@@ -137,6 +148,10 @@ export interface SimulationStatus {
     monthly_client_price_usd: number;
     monthly_server_cost_usd: number;
     monthly_fixed_cost_usd: number;
+    node_tier?: string;
+    demand_rps_per_client?: number;
+    slo_p95_ms?: number;
+    slo_success_rate_pct?: number;
   };
   servers_total: number;
   clients_total: number;
@@ -149,11 +164,16 @@ export interface SimulationStatus {
     available_servers?: number;
     capacity_per_server: number;
     total_capacity: number;
+    capacity_rps?: number;
+    demand_rps?: number;
+    served_rps?: number;
     utilization: number;
     profile: string;
     message: string;
     estimated_monthly_cost_usd: number;
     estimated_queue_latency_ms: number;
+    queue_depth?: number;
+    queue_rejected?: number;
     average_latency_ms: number;
     p95_latency_ms: number;
     p50_latency_ms?: number;
@@ -162,6 +182,11 @@ export interface SimulationStatus {
     observed_request_count?: number;
     observed_rps?: number;
     observed_errors?: number;
+    success_rate_pct?: number | null;
+    slo_p95_ms?: number;
+    slo_success_rate_pct?: number;
+    slo_compliant?: boolean;
+    metrics_provenance?: string;
     latency_semantics?: string;
     cost_model: {
       currency: string;

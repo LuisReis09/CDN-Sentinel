@@ -17,6 +17,7 @@ from repositories.in_memory import SimulationRepository
 from services.cdn_http_client import CDNHttpClient
 from services.topology_service import TopologyService
 from services.city_lookup_service import CityLookupService
+from services.capacity_service import capacity_limits, profile_for_tier, service_metrics
 
 
 class SimulationController:
@@ -115,22 +116,30 @@ class SimulationController:
             self.refresh_clients()
         state = self._repository.snapshot()
         now = time.time()
-        healthy_servers = sum(1 for server in state.servers.values() if server.status == "healthy")
-        degraded_servers = sum(1 for server in state.servers.values() if server.status == "degraded")
-        available_servers = healthy_servers + degraded_servers
+        healthy_servers = sum(1 for server in state.servers.values() if server.health_status == "healthy" or server.status == "healthy")
+        degraded_servers = sum(1 for server in state.servers.values() if server.health_status == "degraded" or server.status == "degraded")
+        overloaded_servers = sum(1 for server in state.servers.values() if server.health_status == "overloaded" or server.status == "overloaded")
+        available_servers = sum(1 for server in state.servers.values() if server.health_status in {"healthy", "degraded", "overloaded"} or server.status in {"healthy", "degraded", "overloaded"})
         online_clients = sum(1 for client in state.clients.values() if client.active and client.online)
-        capacity_per_server = 8
-        capacity = available_servers * capacity_per_server
-        utilization = online_clients / capacity if capacity else 0
+        demand_rps = online_clients * float(state.config.get("demand_rps_per_client", 0.25))
+        capacity_values = [float(server.capacity_rps) for server in state.servers.values() if server.server_id and (server.health_status in {"healthy", "degraded", "overloaded"} or server.status in {"healthy", "degraded", "overloaded"}) and server.capacity_rps > 0]
+        if not capacity_values and available_servers:
+            fallback_profile = profile_for_tier(str(state.config.get("node_tier", "basic")))
+            capacity_values = [capacity_limits(fallback_profile)["capacity_rps"]] * available_servers
+        capacity = sum(capacity_values)
+        utilization = demand_rps / capacity if capacity else 0
+        queue_depth = sum(server.queue_depth for server in state.servers.values())
+        queue_rejected = sum(server.queue_rejected for server in state.servers.values())
+        queue_wait_ms = round(sum(server.queue_wait_ms for server in state.servers.values()) / len(state.servers), 1) if state.servers else 0.0
         if not available_servers:
             profile = "indisponível"
             message = "Nenhum nó saudável para atender a demanda"
         elif not healthy_servers:
             profile = "degradada"
             message = "Todos os nós estão degradados, mas ainda podem atender com risco de latência"
-        elif utilization > 1:
+        elif utilization >= 0.95 and (queue_depth or queue_rejected):
             profile = "gargalo"
-            message = "Demanda acima da capacidade: filas e latência tendem a crescer"
+            message = "Demanda efetiva próxima ou acima da capacidade: fila e rejeições observadas"
         elif healthy_servers >= max(1, online_clients * 2):
             profile = "sobredimensionada"
             message = "Muitos nós para poucos clientes: custo operacional elevado"
@@ -152,8 +161,8 @@ class SimulationController:
         p50_latency = percentile(ordered_latencies, 0.50)
         p95_latency = percentile(ordered_latencies, 0.95)
         p99_latency = percentile(ordered_latencies, 0.99)
-        error_count = sum(1 for event in state.events if now - float(event.get("at", now)) <= window_seconds and event.get("status") in {"failed", "error"})
-        monthly_server_cost = available_servers * float(state.config.get("monthly_server_cost_usd", state.config.get("monthly_server_cost_unit", 100.0)))
+        error_count = sum(int(server.errors_total) for server in state.servers.values())
+        monthly_server_cost = sum(float(profile_for_tier(server.capacity_tier).cost_monthly_usd) for server in state.servers.values() if server.status != "stopped") or available_servers * float(state.config.get("monthly_server_cost_usd", state.config.get("monthly_server_cost_unit", 100.0)))
         monthly_fixed_cost = float(state.config.get("monthly_fixed_cost_usd", state.config.get("monthly_fixed_cost_unit", 150.0)))
         monthly_variable_cost = online_clients * 2.0
         monthly_cost = monthly_server_cost + monthly_fixed_cost + monthly_variable_cost
@@ -161,7 +170,15 @@ class SimulationController:
         configured_price = float(state.config.get("monthly_client_price_usd", state.config.get("monthly_client_price_unit", 25.0)))
         break_even_price = monthly_cost / paying_clients if paying_clients else 0
         minimum_price = break_even_price * 1.2 if paying_clients else 0
-        revenue = len(state.clients) * configured_price
+        revenue = sum(1 for client in state.clients.values() if client.active and client.online and not client.malicious) * configured_price
+        observed_requests = len(recent_traffic)
+        observed_rps = round(observed_requests / window_seconds, 3)
+        total_requests = sum(int(server.requests_total) for server in state.servers.values())
+        successful_requests = max(0, total_requests - error_count)
+        success_rate_pct = round(100 * successful_requests / total_requests, 2) if total_requests else None
+        slo_p95_ms = float(state.config.get("slo_p95_ms", 250.0))
+        slo_success_rate_pct = float(state.config.get("slo_success_rate_pct", 99.0))
+        slo_compliant = bool(observed_requests and p95_latency <= slo_p95_ms and (success_rate_pct is None or success_rate_pct >= slo_success_rate_pct))
         return {
             "initialized": state.initialized,
             "paused": state.paused,
@@ -182,22 +199,32 @@ class SimulationController:
                 "healthy_servers": healthy_servers,
                 "degraded_servers": degraded_servers,
                 "available_servers": available_servers,
-                "capacity_per_server": capacity_per_server,
+                "capacity_per_server": round(sum(capacity_values) / len(capacity_values), 3) if capacity_values else 0.0,
                 "total_capacity": capacity,
+                "capacity_rps": round(capacity, 3),
+                "demand_rps": round(demand_rps, 3),
+                "served_rps": observed_rps,
                 "utilization": round(utilization, 3),
                 "profile": profile,
                 "message": message,
                 "estimated_monthly_cost_usd": round(monthly_cost, 2),
-                "estimated_queue_latency_ms": round(12 + max(0, utilization - 0.75) * 100, 1),
+                "estimated_queue_latency_ms": queue_wait_ms,
+                "queue_depth": queue_depth,
+                "queue_rejected": queue_rejected,
                 "average_latency_ms": average_latency,
                 "p50_latency_ms": p50_latency,
                 "p95_latency_ms": p95_latency,
                 "p99_latency_ms": p99_latency,
                 "metrics_window_seconds": window_seconds,
                 "observed_request_count": len(recent_traffic),
-                "observed_rps": round(len(recent_traffic) / window_seconds, 3),
+                "observed_rps": observed_rps,
                 "observed_errors": error_count,
-                "latency_semantics": "end_to_end_ms de requisições concluídas na janela; artificial_latency_ms é separado",
+                "success_rate_pct": success_rate_pct,
+                "slo_p95_ms": slo_p95_ms,
+                "slo_success_rate_pct": slo_success_rate_pct,
+                "slo_compliant": slo_compliant,
+                "metrics_provenance": "demanda/capacidade são modelo virtual; fila, erros, RTT e E2E vêm dos nós HTTP",
+                "latency_semantics": "end_to_end_ms de requisições concluídas na janela; artificial_latency_ms, http_rtt_ms e queue_wait_ms são separados",
                 "cost_model": {
                     "currency": "USD/mês",
                     "server_cost_usd": round(monthly_server_cost, 2),
@@ -342,6 +369,8 @@ class SimulationController:
             server.city,
             "--latency-factor",
             str(config.latency_factor),
+            "--capacity-tier",
+            server.capacity_tier or config.node_tier,
         ]
         environment = os.environ.copy()
         environment["CDN_NODE_SECRET"] = config.secret_key
@@ -422,6 +451,9 @@ class SimulationController:
             try:
                 status = self._http_client.status(server)
                 server.status = status.get("status", "healthy")
+                server.lifecycle_status = status.get("lifecycle_status", "running")
+                server.health_status = status.get("health_status", server.status)
+                server.capacity_tier = status.get("capacity_tier", server.capacity_tier)
                 server.load = int(status.get("load", 0))
                 server.blacklist_size = int(status.get("blacklist_size", 0))
                 server.messages_received = int(status.get("messages_received", 0))
@@ -430,6 +462,14 @@ class SimulationController:
                 server.errors_total = int(status.get("errors_total", server.errors_total))
                 server.requests_in_flight = int(status.get("requests_in_flight", server.requests_in_flight))
                 server.last_request_at = status.get("last_request_at")
+                capacity = status.get("capacity", {})
+                server.capacity_rps = float(capacity.get("capacity_rps", server.capacity_rps))
+                server.utilization = float(capacity.get("utilization", server.utilization))
+                server.queue_depth = int(capacity.get("queue_depth", status.get("queue_depth", server.queue_depth)))
+                server.queue_rejected = int(capacity.get("queue_rejected", status.get("queue_rejected", server.queue_rejected)))
+                server.queue_wait_ms = float(status.get("queue_wait_ms", server.queue_wait_ms))
+                server.capacity_pressure = float(capacity.get("pressure", server.capacity_pressure))
+                server.slo_breached = bool(server.health_status in {"overloaded", "degraded", "offline"})
                 server.fault = status.get("fault", server.fault)
                 server.last_error = None
             except Exception as exc:

@@ -5,7 +5,7 @@ interface MetricCardProps {
   value: string | number;
   caption: string;
   icon: LucideIcon;
-  tone?: "cyan" | "orange" | "green" | "red";
+  tone?: "cyan" | "orange" | "green" | "red" | "warning";
 }
 
 export function MetricCard({

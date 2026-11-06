@@ -42,7 +42,7 @@ def rank_servers(latitude: float, longitude: float, servers: Iterable[object]) -
     """Rank healthy candidates deterministically by distance and server id."""
     candidates: List[tuple[float, object]] = []
     for server in servers:
-        if getattr(server, "status", "healthy") not in {"healthy", "degraded", "starting"}:
+        if getattr(server, "status", "healthy") not in {"healthy", "degraded", "overloaded", "starting"}:
             continue
         distance = haversine_km(latitude, longitude, server.latitude, server.longitude)
         candidates.append((distance, server))
