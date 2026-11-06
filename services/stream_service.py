@@ -33,6 +33,11 @@ class StreamService:
         request_id = request_id or f"req-{uuid.uuid4().hex[:16]}"
         trace_id = f"trace-{uuid.uuid4().hex[:16]}"
         candidates = rank_servers(client.latitude, client.longitude, state.servers.values())
+        policy = str(state.config.get("load_balancing_policy", "nearest-healthy"))
+        if policy == "least-utilized":
+            candidates.sort(key=lambda item: (float(getattr(item[1], "utilization", 0.0)), item[0], item[1].server_id))
+        elif policy == "hybrid-latency-capacity":
+            candidates.sort(key=lambda item: (0.65 * min(1.0, float(getattr(item[1], "utilization", 0.0))) + 0.35 * min(1.0, item[0] / 20_000.0), item[1].server_id))
         if not candidates:
             raise RuntimeError("Nenhum servidor CDN saudável está disponível")
         candidate_details = [{"server_id": server.server_id, "distance_km": round(distance, 2), "status": server.status, "selected": False, "attempted": False, "reason": "candidato saudável"} for distance, server in candidates]
@@ -120,7 +125,7 @@ class StreamService:
                 "queue_wait_ms": queue_wait_ms,
                 "end_to_end_ms": round(end_to_end_ms, 3),
                 "protocol": "HTTP/1.1",
-                "routing": "Haversine / nearest healthy CDN",
+                "routing": policy,
                 "watermark_algorithm": "HMAC-SHA256",
                 "chunk_id": result["chunk_id"],
                 "content_id": state.config.get("video_id", "bigbuckbunny"),

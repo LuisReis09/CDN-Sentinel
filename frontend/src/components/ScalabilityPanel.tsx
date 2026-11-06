@@ -43,9 +43,11 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
         <div>
           <Server size={14} />
           <span>
-            capacidade<strong>{scale.capacity_rps ?? scale.total_capacity} req/s</strong>
+            capacidade
+            <strong>{scale.capacity_rps ?? scale.total_capacity} req/s</strong>
             <small>
-              {scale.healthy_servers} nós disponíveis · demanda virtual {scale.demand_rps ?? 0} req/s
+              {scale.healthy_servers} nós disponíveis · demanda virtual{" "}
+              {scale.demand_rps ?? 0} req/s
             </small>
           </span>
         </div>
@@ -82,7 +84,14 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
           erros: <b>{scale.observed_errors ?? 0}</b>
         </span>
         <span>
-          SLO: <b>{scale.slo_compliant === undefined ? "sem dados" : scale.slo_compliant ? "atendido" : "violado"}</b>
+          SLO:{" "}
+          <b>
+            {scale.slo_compliant === undefined
+              ? "sem dados"
+              : scale.slo_compliant
+                ? "atendido"
+                : "violado"}
+          </b>
         </span>
       </div>
       <div className="economics-grid">
@@ -123,8 +132,9 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
         </div>
       </div>
       <p className="economics-note">
-        <Landmark size={13} /> Capacidade por nó é estimada pelo gargalo de CPU/rede;
-        demanda e custos são didáticos. RTT, fila e E2E vêm dos processos locais.
+        <Landmark size={13} /> Capacidade por nó é estimada pelo gargalo de
+        CPU/rede; demanda e custos são didáticos. RTT, fila e E2E vêm dos
+        processos locais.
       </p>
     </section>
   );

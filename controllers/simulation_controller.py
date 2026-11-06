@@ -338,6 +338,7 @@ class SimulationController:
             latitude=latitude,
             longitude=longitude,
             city=str(payload.get("city") or self._city_lookup.lookup(latitude, longitude)),
+            capacity_tier=str(payload.get("capacity_tier") or state.config.get("node_tier", "basic")),
         )
         self._repository.add_server(server)
         config = SimulationConfig.from_payload({**state.config, "secret_key": self._secret_key})
@@ -347,6 +348,45 @@ class SimulationController:
         self._reconcile_blacklist(state)
         self._repository.update_config({"num_servers": len(state.servers)})
         self._repository.append_event({"type": "server_added", "at": time.time(), "server_id": server_id, "latitude": latitude, "longitude": longitude})
+        return server.to_dict()
+
+    def update_server_capacity(self, server_id: str, tier: str) -> dict:
+        state = self._repository.state_ref()
+        server = state.servers.get(server_id)
+        if server is None:
+            raise KeyError(f"Servidor {server_id} não encontrado")
+        if tier not in {"basic", "standard", "pro", "enterprise"}:
+            raise ValueError("tier inválido")
+        server.lifecycle_status = "recovering"
+        result = self._http_client.configure(server, {"capacity_tier": tier})
+        server.capacity_tier = tier
+        server.lifecycle_status = "running"
+        self.refresh_servers()
+        self._configure_peers(state)
+        self._repository.append_event({"type": "server_capacity_updated", "at": time.time(), "server_id": server_id, "tier": tier, "reason": "ação de gestão com manutenção didática"})
+        return {"server": server.to_dict(), "node": result}
+
+    def retire_server(self, server_id: str) -> dict:
+        state = self._repository.state_ref()
+        server = state.servers.get(server_id)
+        if server is None:
+            raise KeyError(f"Servidor {server_id} não encontrado")
+        active = [item for item in state.servers.values() if item.status not in {"stopped", "offline"}]
+        if len(active) <= 1:
+            raise ValueError("não é permitido retirar o último nó operacional")
+        server.lifecycle_status = "draining"
+        process = self._processes.pop(server_id, None)
+        if process and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        server.lifecycle_status = "stopped"
+        server.status = "stopped"
+        server.health_status = "offline"
+        self._configure_peers(state)
+        self._repository.append_event({"type": "server_retired", "at": time.time(), "server_id": server_id, "reason": "descomissionamento seguro por gestão"})
         return server.to_dict()
 
     def _start_node(self, server: CDNServer, config: SimulationConfig) -> None:

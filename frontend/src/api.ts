@@ -1,5 +1,7 @@
 import type {
   Overview,
+  ManagementActionDefinition,
+  ManagementState,
   SimulationHistory,
   SimulationStatus,
   VideoChunk,
@@ -107,4 +109,23 @@ export const api = {
     variant: "original" | "watermarked" | "difference" = "original",
   ) =>
     `${API_BASE}/security/watermark/demo/video?video_id=${encodeURIComponent(videoId)}&variant=${variant}`,
+  managementState: () => request<ManagementState>("/management/state"),
+  managementActions: () =>
+    request<{ actions: ManagementActionDefinition[] }>("/management/actions"),
+  managementScenarios: () =>
+    request<{ scenarios: Array<Record<string, unknown>> }>(
+      "/management/scenarios",
+    ),
+  startManagementScenario: (scenarioId: string, seed?: number) =>
+    request<ManagementState>("/management/scenarios/start", {
+      method: "POST",
+      body: JSON.stringify({ scenario_id: scenarioId, seed }),
+    }),
+  applyManagementAction: (payload: Record<string, unknown>) =>
+    request<{ action: Record<string, unknown>; state: ManagementState }>(
+      "/management/actions",
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  resetManagement: () =>
+    request<ManagementState>("/management/reset", { method: "POST" }),
 };

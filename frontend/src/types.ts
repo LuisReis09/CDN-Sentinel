@@ -1,6 +1,7 @@
 export type ServerStatus =
   | "healthy"
   | "degraded"
+  | "overloaded"
   | "starting"
   | "stopping"
   | "stopped"
@@ -346,4 +347,85 @@ export interface WatermarkDemo {
     confidence_method?: string;
     survives: boolean;
   }>;
+}
+
+export interface ManagementActionDefinition {
+  action_type: string;
+  label: string;
+  group: string;
+  description: string;
+  investment_usd: number;
+  recurring_monthly_usd: number;
+  lead_days: number;
+  cooldown_days: number;
+  parameters: Array<Record<string, unknown>>;
+  effects: string[];
+  tradeoffs: string[];
+}
+
+export interface ManagementActionRecord {
+  action_id: string;
+  action_type: string;
+  parameters: Record<string, unknown>;
+  status: "pending" | "applied" | "failed";
+  submitted_day: number;
+  apply_day: number;
+  investment_usd: number;
+  recurring_delta_usd: number;
+  rationale: string;
+  result?: Record<string, unknown>;
+  error?: string | null;
+}
+
+export interface ManagementState {
+  simulation_id: string;
+  scenario_id: string;
+  seed: number;
+  day: number;
+  paused: boolean;
+  version: number;
+  cash_balance_usd: number;
+  monthly_price_per_client_usd: number;
+  paying_clients: number;
+  active_clients: number;
+  churned_clients: number;
+  reputation: number;
+  customer_satisfaction: number;
+  demand_rps: number;
+  served_rps: number;
+  capacity_rps: number;
+  utilization: number;
+  backlog: number;
+  requests_rejected: number;
+  latency_p95_ms: number;
+  availability_pct: number;
+  error_rate_pct: number;
+  sla_compliance_pct: number;
+  daily_revenue_usd: number;
+  daily_opex_usd: number;
+  daily_profit_usd: number;
+  monthly_margin_pct: number;
+  objective: Record<string, unknown>;
+  nodes: Record<
+    string,
+    {
+      server_id: string;
+      tier: string;
+      lifecycle_status: string;
+      health_status: string;
+      cache_level: number;
+      cache_hit_rate: number;
+      monthly_cost_usd: number;
+      metadata_indexed: boolean;
+    }
+  >;
+  pending_actions: ManagementActionRecord[];
+  history: Array<Record<string, number | boolean | string>>;
+  alerts: Array<{ severity: string; message: string }>;
+  events: Array<Record<string, unknown>>;
+  load_balancing_policy: string;
+  metadata_tier: string;
+  metadata_query_rps: number;
+  metadata_lookup_ms: number;
+  metadata_staleness_ms: number;
 }

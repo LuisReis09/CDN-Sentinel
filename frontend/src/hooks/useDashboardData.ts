@@ -31,7 +31,7 @@ const demoOverview: Overview = {
     scalability: {
       online_clients: 0,
       healthy_servers: 0,
-      capacity_per_server: 8,
+      capacity_per_server: 0,
       total_capacity: 0,
       utilization: 0,
       profile: "indisponível",

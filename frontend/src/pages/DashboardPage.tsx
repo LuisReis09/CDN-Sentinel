@@ -66,13 +66,17 @@ export function DashboardPage({
       : client,
   );
   const available = overview.servers.filter(
-    (server) => server.status === "healthy" || server.status === "degraded",
+    (server) =>
+      server.status === "healthy" ||
+      server.status === "degraded" ||
+      server.status === "overloaded",
   ).length;
   const healthy = overview.servers.filter(
-    (server) => server.status === "healthy",
+    (server) =>
+      server.status === "healthy" && server.health_status !== "overloaded",
   ).length;
   const degraded = overview.servers.filter(
-    (server) => server.status === "degraded",
+    (server) => server.status === "degraded" || server.status === "overloaded",
   ).length;
 
   async function createPlacement(payload: Record<string, unknown>) {

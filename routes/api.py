@@ -16,6 +16,7 @@ def register_api_routes(api, controller: ApiController) -> None:
     security = api.namespace("security", path="/api/security", description="Forensic security and governance")
     monitor = api.namespace("monitor", path="/api/monitor", description="Piracy monitor")
     observability = api.namespace("observability", path="/api/observability", description="Events and traffic telemetry")
+    management = api.namespace("management", path="/api/management", description="Simulador didático de gestão da CDN")
 
     init_model = api.model(
         "SimulationInit",
@@ -358,4 +359,51 @@ def register_api_routes(api, controller: ApiController) -> None:
         @observability.doc(description="Lista históricos completos de simulações encerradas em memória.")
         def get(self):
             return {"histories": controller.history(request.args.get("simulation_id"))}
+
+    @management.route("/state")
+    class ManagementStateResource(Resource):
+        @management.doc(description="Retorna o estado canônico do simulador de gestão: negócio, demanda, custos e nós.")
+        def get(self):
+            try:
+                return controller.management_state()
+            except RuntimeError as exc:
+                return {"error": str(exc)}, 409
+
+    @management.route("/actions")
+    class ManagementActionsResource(Resource):
+        @management.doc(description="Lista exatamente as seis categorias de ações econômicas e aceita uma decisão validada pelo backend.")
+        def get(self):
+            return {"actions": controller.management_actions()}
+
+        def post(self):
+            try:
+                return controller.management_apply_action(request.get_json(silent=True) or {}), 202
+            except (ValueError, RuntimeError, KeyError) as exc:
+                return {"error": str(exc)}, 409
+
+    @management.route("/scenarios")
+    class ManagementScenariosResource(Resource):
+        def get(self):
+            return {"scenarios": controller.management_scenarios()}
+
+    @management.route("/scenarios/start")
+    class ManagementScenarioStartResource(Resource):
+        def post(self):
+            try:
+                return controller.management_start_scenario(request.get_json(silent=True) or {}), 201
+            except (ValueError, RuntimeError, KeyError) as exc:
+                return {"error": str(exc)}, 409
+
+    @management.route("/history")
+    class ManagementHistoryResource(Resource):
+        def get(self):
+            return {"history": controller.management_history()}
+
+    @management.route("/reset")
+    class ManagementResetResource(Resource):
+        def post(self):
+            try:
+                return controller.management_reset()
+            except (ValueError, RuntimeError) as exc:
+                return {"error": str(exc)}, 409
 

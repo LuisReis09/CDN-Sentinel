@@ -136,6 +136,26 @@ O smoke E2E usado nesta etapa iniciou dois processos CDN locais e verificou inic
 - O monitor é separado por escopo de nó, mas continua coordenado pelo controller no mesmo aplicativo Flask.
 - O watermark visual robusto ainda é apenas um experimento explicitamente rotulado; o prefixo nos bytes é uma prova de transporte.
 
+## Centro de Gestão da CDN
+
+Na branch `feat/cdn-management-simulator`, a tela inicial é um simulador de
+gestão sobre a mesma malha HTTP local. Ela separa observado, simulado e
+projetado e apresenta saldo, lucro diário, margem, pagantes/churn, SLA,
+satisfação, demanda, capacidade, backlog, p95, mapa, inspector de nó, gráficos
+e timeline causal.
+
+O menu econômico tem exatamente seis tipos de ação: escalonamento horizontal,
+escalonamento vertical, ajuste de preço, cache/prefetch, balanceamento de carga
+e otimização de metadados. O backend valida saldo, cooldown, pré-requisitos,
+versão do estado e lead time; ações aparecem como `pending`, `applied` ou
+`failed`. Um tick da gestão representa um dia simulado e não cobra custos
+mensais repetidamente.
+
+O modelo completo, fórmulas, matriz de cenários, roteiro e limitações está em
+[`docs/management-simulator.md`](./docs/management-simulator.md), com a decisão
+arquitetural registrada em
+[`docs/adr/0004-simulador-de-gestao-em-memoria.md`](./docs/adr/0004-simulador-de-gestao-em-memoria.md).
+
 Checklist, C4, ADR, padrões, plano de testes e pendência de equipe:
 
 - [`docs/delivery-2-checklist.md`](./docs/delivery-2-checklist.md)

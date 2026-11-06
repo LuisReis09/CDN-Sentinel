@@ -12,7 +12,7 @@ from services.stream_service import ClientOfflineError, SimulationPausedError, S
 class ClientActivityService:
     """Advances one shared simulation tick and produces client session churn."""
 
-    def __init__(self, repository: SimulationRepository, stream_service: StreamService, interval_seconds: float = 2.5) -> None:
+    def __init__(self, repository: SimulationRepository, stream_service: StreamService, interval_seconds: float = 2.5, on_tick=None) -> None:
         self._repository = repository
         self._stream_service = stream_service
         self._interval_seconds = interval_seconds
@@ -20,6 +20,10 @@ class ClientActivityService:
         self._random = random.Random(20261101)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._on_tick = on_tick
+
+    def set_on_tick(self, callback) -> None:
+        self._on_tick = callback
 
     def start(self, tick_interval_seconds: float = 2.5) -> None:
         self.stop()
@@ -61,6 +65,11 @@ class ClientActivityService:
                 except (ClientOfflineError, PermissionError, RuntimeError, OSError):
                     continue
             self._emit_server_communications(state, tick)
+            if self._on_tick:
+                try:
+                    self._on_tick()
+                except Exception as exc:
+                    self._repository.append_event({"type": "management_tick_failed", "at": time.time(), "error": str(exc)})
 
     def _emit_server_communications(self, state, tick: int) -> None:
         clients = list(state.clients.values())

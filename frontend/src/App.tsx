@@ -14,7 +14,7 @@ import {
 import { useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Link, NavLink, Route, Routes } from "react-router-dom";
-import { DashboardPage } from "./pages/DashboardPage";
+import { ManagementPage } from "./pages/ManagementPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { NetworkLabPage } from "./pages/NetworkLabPage";
 import { SecurityPage } from "./pages/SecurityPage";
@@ -26,9 +26,6 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const onRefresh = async () => {
-    await data.refresh();
-  };
-  const onAction = async () => {
     await data.refresh();
   };
   return (
@@ -115,11 +112,10 @@ export function App() {
           <Route
             path="/"
             element={
-              <DashboardPage
+              <ManagementPage
                 overview={data.overview}
                 connected={data.connected}
                 onRefresh={onRefresh}
-                onAction={onAction}
                 onError={setNotice}
               />
             }

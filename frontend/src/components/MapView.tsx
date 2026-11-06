@@ -159,13 +159,14 @@ function ServerMarker({
   server: ServerNode;
   onSelect: () => void;
 }) {
-  const available = server.status === "healthy" || server.status === "degraded";
-  const overloaded = available && server.load >= 8;
+  const available = !["offline", "stopped", "error"].includes(server.status);
+  const overloaded =
+    server.health_status === "overloaded" || (server.utilization ?? 0) >= 0.95;
   const state = !available
     ? "offline"
     : overloaded
       ? "overloaded"
-      : server.status === "degraded"
+      : server.health_status === "degraded" || server.status === "degraded"
         ? "degraded"
         : "active";
   const colors = {

@@ -43,12 +43,11 @@ export function WatermarkLab({
     }
   }
 
-  const videoVariants =
-    demo?.video_variants ?? {
-      original: api.watermarkVideoUrl("cdn_sentinel_demo"),
-      watermarked: api.watermarkVideoUrl("cdn_sentinel_demo", "watermarked"),
-      difference: api.watermarkVideoUrl("cdn_sentinel_demo", "difference"),
-    };
+  const videoVariants = demo?.video_variants ?? {
+    original: api.watermarkVideoUrl("cdn_sentinel_demo"),
+    watermarked: api.watermarkVideoUrl("cdn_sentinel_demo", "watermarked"),
+    difference: api.watermarkVideoUrl("cdn_sentinel_demo", "difference"),
+  };
   const process = demo?.cryptographic_process;
   const claim = demo?.claim_before_encoding ?? {};
 
@@ -121,7 +120,8 @@ export function WatermarkLab({
         >
           <p>
             O claim didático carrega exatamente estes campos. Ele não é segredo:
-            a integridade vem da assinatura. O vídeo acima é uma trilha visual separada.
+            a integridade vem da assinatura. O vídeo acima é uma trilha visual
+            separada.
           </p>
           <CodeBlock
             value={
