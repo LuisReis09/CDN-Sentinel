@@ -10,7 +10,13 @@ Na raiz do projeto, inicie o backend:
 python app.py
 ```
 
-Em outro terminal:
+O caminho recomendado para a aplicação completa é a raiz do projeto:
+
+```bash
+make dev
+```
+
+Para executar somente o frontend em desenvolvimento, em outro terminal:
 
 ```powershell
 cd frontend

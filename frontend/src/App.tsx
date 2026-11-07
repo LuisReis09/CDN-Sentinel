@@ -79,6 +79,7 @@ export function App() {
         </div>
       </aside>
       <div className="main-shell">
+        {data.loading && <div className="app-loading-strip" role="status">Conectando ao control plane…</div>}
         <header className="topbar">
           <button
             className="mobile-menu"

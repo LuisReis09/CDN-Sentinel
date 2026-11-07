@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { divIcon } from "leaflet";
 import {
   CircleMarker,
@@ -13,6 +13,14 @@ import {
 } from "react-leaflet";
 import type { CSSProperties } from "react";
 import type { Client, ServerNode, SimulationEvent, Traffic } from "../types";
+
+const mapTilerKey = (import.meta.env.VITE_MAPTILER_KEY ?? "").trim();
+const mapTileUrl = mapTilerKey
+  ? `https://api.maptiler.com/maps/streets-v4/256/{z}/{x}/{y}.png?key=${encodeURIComponent(mapTilerKey)}&language=pt`
+  : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+const mapAttribution = mapTilerKey
+  ? 'Dados cartográficos © <a href="https://www.maptiler.com/copyright/" target="_blank" rel="noreferrer">MapTiler</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> colaboradores'
+  : 'Dados cartográficos © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> colaboradores';
 
 interface MapViewProps {
   clients: Client[];
@@ -35,13 +43,18 @@ export function MapView({
   tickIntervalSeconds,
   onNodeSelect,
 }: MapViewProps) {
+  const visibleClients = clients.slice(0, 1_200);
   const clientsById = new Map(
-    clients.map((client) => [client.client_id, client]),
+    visibleClients.map((client) => [client.client_id, client]),
   );
   const serversById = new Map(
     servers.map((server) => [server.server_id, server]),
   );
-  const trafficLines = traffic.slice(-30).flatMap((entry) => {
+  const trafficLinesSeen = new Set<string>();
+  const trafficLines = traffic.slice(-80).reverse().flatMap((entry) => {
+    const routeKey = `${entry.client_id}:${entry.server_id}`;
+    if (trafficLinesSeen.has(routeKey) || trafficLinesSeen.size >= 32) return [];
+    trafficLinesSeen.add(routeKey);
     const client = clientsById.get(entry.client_id);
     const server = serversById.get(entry.server_id);
     return client && server
@@ -56,20 +69,18 @@ export function MapView({
         ]
       : [];
   });
-  const serverLinks: Array<[[number, number], [number, number]]> =
-    servers.flatMap((server, index) =>
-      servers.slice(index + 1).map(
-        (peer) =>
-          [
-            [server.latitude, server.longitude],
-            [peer.latitude, peer.longitude],
-          ] as [[number, number], [number, number]],
-      ),
-    );
   const messageEvents = events.filter(
     (event) =>
       event.type === "server_message" && event.from_server && event.to_server,
   );
+  const serverLinks = minimumSpanningTree(servers);
+  const messageLinks = messageEvents.slice(-16).flatMap((event, index) => {
+    const from = serversById.get(event.from_server ?? "");
+    const to = serversById.get(event.to_server ?? "");
+    return from && to
+      ? [{ event, index, positions: [[from.latitude, from.longitude], [to.latitude, to.longitude]] as [[number, number], [number, number]] }]
+      : [];
+  });
   const mapStyle = {
     "--tick-interval": `${Math.max(0.5, tickIntervalSeconds)}s`,
   } as CSSProperties;
@@ -90,26 +101,39 @@ export function MapView({
         <PortugueseLeafletControls />
         <MapClickHandler enabled={Boolean(editMode)} onPick={onMapPick} />
         <TileLayer
-          attribution='Dados cartográficos © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> e colaboradores'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution={mapAttribution}
+          url={mapTileUrl}
         />
         <CommunicationOverlay
-          clients={clients}
+          clients={visibleClients}
           servers={servers}
           traffic={traffic}
           events={messageEvents}
           tickIntervalSeconds={tickIntervalSeconds}
         />
-        {serverLinks.map((line, index) => (
+        {serverLinks.map((line) => (
           <Polyline
-            key={`gossip-pair-${index}`}
-            positions={line}
+            key={`gossip-pair-${line.from}-${line.to}`}
+            positions={line.positions}
             pathOptions={{
               className: "map-gossip-path",
               color: "#438fe8",
               weight: messageEvents.length ? 3.5 : 2.2,
               opacity: messageEvents.length ? 0.55 : 0.34,
               dashArray: "7 12",
+            }}
+          />
+        ))}
+        {messageLinks.map(({ event, index, positions }) => (
+          <Polyline
+            key={`message-link-${event.message_id ?? event.at}-${index}`}
+            positions={positions}
+            pathOptions={{
+              className: "map-message-path",
+              color: communicationColor(event),
+              weight: 3.5,
+              opacity: 0.8,
+              dashArray: "5 7",
             }}
           />
         ))}
@@ -133,7 +157,7 @@ export function MapView({
             onSelect={() => onNodeSelect("server", server.server_id)}
           />
         ))}
-        {clients.map((client) => (
+        {visibleClients.map((client) => (
           <ClientMarker
             key={client.client_id}
             client={client}
@@ -152,6 +176,48 @@ export function MapView({
   );
 }
 
+type ServerLink = {
+  from: string;
+  to: string;
+  positions: [[number, number], [number, number]];
+};
+
+function minimumSpanningTree(servers: ServerNode[]): ServerLink[] {
+  if (servers.length < 2) return [];
+  const visited = new Set<string>([servers[0].server_id]);
+  const links: ServerLink[] = [];
+  while (visited.size < servers.length) {
+    let best: { from: ServerNode; to: ServerNode; weight: number } | null = null;
+    for (const from of servers) {
+      if (!visited.has(from.server_id)) continue;
+      for (const to of servers) {
+        if (visited.has(to.server_id)) continue;
+        const weight = mapDistance(from, to);
+        if (!best || weight < best.weight) best = { from, to, weight };
+      }
+    }
+    if (!best) break;
+    visited.add(best.to.server_id);
+    links.push({
+      from: best.from.server_id,
+      to: best.to.server_id,
+      positions: [[best.from.latitude, best.from.longitude], [best.to.latitude, best.to.longitude]],
+    });
+  }
+  return links;
+}
+
+function mapDistance(a: ServerNode, b: ServerNode) {
+  const latitude = ((a.latitude + b.latitude) / 2) * Math.PI / 180;
+  const longitudeScale = Math.max(0.2, Math.cos(latitude));
+  return Math.hypot(a.latitude - b.latitude, (a.longitude - b.longitude) * longitudeScale);
+}
+
+function communicationColor(event: SimulationEvent) {
+  const kind = communicationKind(event);
+  return kind === "blacklist" ? "#ff6177" : kind === "failover" ? "#ffb86b" : kind === "capacity" ? "#ffe06b" : kind === "health" ? "#b99cff" : "#438fe8";
+}
+
 function ServerMarker({
   server,
   onSelect,
@@ -159,20 +225,19 @@ function ServerMarker({
   server: ServerNode;
   onSelect: () => void;
 }) {
-  const available = !["offline", "stopped", "error"].includes(server.status);
-  const overloaded =
-    server.health_status === "overloaded" || (server.utilization ?? 0) >= 0.95;
+  const available = ["healthy", "degraded", "overloaded"].includes(server.status);
+  const overloaded = available && (server.load >= 8 || (server.utilization ?? 0) >= 0.9 || (server.capacity_pressure ?? 0) >= 0.9 || server.status === "overloaded");
   const state = !available
     ? "offline"
     : overloaded
       ? "overloaded"
-      : server.health_status === "degraded" || server.status === "degraded"
+      : server.status === "degraded"
         ? "degraded"
         : "active";
   const colors = {
     active: { color: "#9eff6c", fillColor: "#2f8d52" },
     degraded: { color: "#ffb86b", fillColor: "#9b5c25" },
-    overloaded: { color: "#ffe06b", fillColor: "#b58a2e" },
+    overloaded: { color: "#ff6177", fillColor: "#a52b47" },
     offline: { color: "#a5afba", fillColor: "#5b6672" },
   }[state];
   return (
@@ -345,7 +410,7 @@ function CommunicationOverlay({
 
 function communicationKind(
   event: SimulationEvent,
-): "blacklist" | "new_content" | "update" {
+): "blacklist" | "new_content" | "update" | "failover" | "capacity" | "health" {
   if (
     event.communication_kind === "blacklist" ||
     event.message_type === "BLACKLIST_ALERT"
@@ -356,6 +421,9 @@ function communicationKind(
     event.message_type === "NEW_CONTENT_DELIVERY"
   )
     return "new_content";
+  if (event.communication_kind === "failover" || event.message_type === "FAILOVER_ROUTE") return "failover";
+  if (event.communication_kind === "capacity" || event.message_type === "CAPACITY_ALERT") return "capacity";
+  if (event.communication_kind === "health" || event.message_type === "HEALTH_SIGNAL") return "health";
   return "update";
 }
 
@@ -364,11 +432,17 @@ function communicationLabel(event: SimulationEvent) {
     return `aviso de blacklist · ${event.from_server} → ${event.to_server}`;
   if (communicationKind(event) === "new_content")
     return `novo conteúdo · ${event.from_server} → ${event.to_server}`;
+  if (communicationKind(event) === "failover")
+    return `failover de rota · ${event.from_server} → ${event.to_server}`;
+  if (communicationKind(event) === "capacity")
+    return `alerta de capacidade · ${event.from_server} → ${event.to_server}`;
+  if (communicationKind(event) === "health")
+    return `sinal de saúde · ${event.from_server} → ${event.to_server}`;
   return `atualização/metadados · ${event.from_server} → ${event.to_server}`;
 }
 
 function communicationIcon(
-  kind: "blacklist" | "new_content" | "update" | "client_content",
+  kind: "blacklist" | "new_content" | "update" | "client_content" | "failover" | "capacity" | "health",
   small = false,
 ) {
   return divIcon({
@@ -422,6 +496,14 @@ function MapLegends() {
           <LegendItem
             symbol="diamond-client"
             label="entrega de conteúdo ao cliente"
+          />
+          <LegendItem
+            symbol="diamond-failover"
+            label="failover de requisição"
+          />
+          <LegendItem
+            symbol="diamond-capacity"
+            label="alerta de capacidade"
           />
         </div>
       </section>

@@ -31,7 +31,15 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     );
   }
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+  if (!response.ok) {
+    const detail = body.error ?? body.message ?? body.detail;
+    const fieldDetails = body.errors && typeof body.errors === "object"
+      ? ` ${Object.entries(body.errors as Record<string, unknown>).map(([field, value]) => `${field}: ${String(value)}`).join("; ")}`
+      : "";
+    const hint = body.hint ? ` ${body.hint}` : "";
+    const prefix = response.status === 400 ? "Parâmetros inválidos." : `HTTP ${response.status}.`;
+    throw new Error(`${prefix} ${detail ?? "A operação não foi aceita."}${fieldDetails}${hint}`.trim());
+  }
   return body as T;
 }
 

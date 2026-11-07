@@ -7,13 +7,20 @@ from utils.geo import haversine_km, load_global_cities
 from utils.latency import propagation_delay_seconds
 from repositories.in_memory import NodeRepository
 from services.capacity_service import capacity_limits, profile_for_tier, service_metrics
+from controllers.simulation_controller import SimulationController
+from repositories.in_memory import SimulationRepository
+from services.cdn_http_client import CDNHttpClient
+from models.entities import CDNServer, Client, SimulationState
 from utils.video import get_video_asset, list_video_examples
+from utils.security import watermark_encryption_metadata
 
 
 class SecurityAndNetworkTests(unittest.TestCase):
     def test_watermark_identifies_client_server_and_chunk(self):
         service = WatermarkService("unit-test-secret")
         token, issued = service.issue("client-0001", "cdn-01", 4)
+        self.assertTrue(token.startswith("CDNWM2."))
+        self.assertTrue(watermark_encryption_metadata(token)["encrypted"])
         claim = service.verify(token)
         self.assertEqual(claim.client_id, "client-0001")
         self.assertEqual(claim.server_id, "cdn-01")
@@ -67,6 +74,18 @@ class SecurityAndNetworkTests(unittest.TestCase):
         self.assertGreater(hit["capacity_rps"], miss["capacity_rps"])
         self.assertEqual(SimulationConfig.from_payload({"slo_p95_ms": 180, "demand_rps_per_client": 2}).slo_p95_ms, 180)
 
+    def test_scale_limits_and_pressure_states_are_explicit(self):
+        config = SimulationConfig.from_payload({"num_servers": 500, "num_clients": 100000})
+        self.assertEqual(config.num_servers, 500)
+        self.assertEqual(config.num_clients, 100000)
+        repository = SimulationRepository()
+        server = CDNServer("cdn-01", "127.0.0.1", 5101, 0, 0, "Test", status="healthy", capacity_rps=10)
+        clients = {f"client-{index}": Client(f"client-{index}", 0, 0, "Test") for index in range(36)}
+        repository.replace(SimulationState(initialized=True, lifecycle="running", config={"demand_rps_per_client": 0.25}, servers={server.server_id: server}, clients=clients))
+        status = SimulationController(repository, CDNHttpClient()).status()
+        self.assertEqual(status["scalability"]["profile"], "alerta")
+        self.assertGreaterEqual(status["scalability"]["utilization"], 0.9)
+
     def test_local_video_catalog_has_valid_reproducible_mp4_variants(self):
         examples = list_video_examples()
         self.assertTrue(any(item["video_id"] == "cdn_sentinel_demo" for item in examples))
@@ -90,6 +109,66 @@ class SecurityAndNetworkTests(unittest.TestCase):
         self.assertEqual(partial.mimetype, "video/mp4")
         response.close()
         partial.close()
+
+    def test_map_client_creation_and_capacity_are_dynamic(self):
+        from app import create_app
+
+        app = create_app()
+        controller = app.extensions["cdn_controller"]
+        controller.simulation_controller._real_node_process_limit = 0
+        controller.simulation_controller._real_client_process_limit = 0
+        client = app.test_client()
+
+        first = client.post("/api/control/simulation/init", json={"num_servers": 1, "num_clients": 1, "seed": 19})
+        self.assertEqual(first.status_code, 201)
+        first_utilization = client.get("/api/control/simulation/status").get_json()["scalability"]["utilization"]
+        created = client.post("/api/clients", json={"latitude": 12.34, "longitude": -56.78, "malicious": False})
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(client.get("/api/control/simulation/status").get_json()["clients_total"], 2)
+
+        second = client.post("/api/control/simulation/init", json={"num_servers": 1, "num_clients": 1000, "seed": 19})
+        self.assertEqual(second.status_code, 201)
+        second_utilization = client.get("/api/control/simulation/status").get_json()["scalability"]["utilization"]
+        self.assertGreater(second_utilization, first_utilization)
+        client.post("/api/control/simulation/end")
+
+    def test_end_archives_run_for_history_endpoint(self):
+        from app import create_app
+
+        app = create_app()
+        controller = app.extensions["cdn_controller"]
+        controller.simulation_controller._real_node_process_limit = 0
+        controller.simulation_controller._real_client_process_limit = 0
+        client = app.test_client()
+        initialized = client.post("/api/control/simulation/init", json={"num_servers": 2, "num_clients": 1, "seed": 17})
+        self.assertEqual(initialized.status_code, 201)
+        ended = client.post("/api/control/simulation/end")
+        self.assertEqual(ended.status_code, 200)
+        history = client.get("/api/observability/history").get_json()["histories"]
+        self.assertTrue(history)
+        self.assertEqual(history[-1]["simulation_id"], ended.get_json()["simulation_id"])
+
+    def test_network_lab_fault_buttons_reject_invalid_values_without_500(self):
+        from app import create_app
+
+        app = create_app()
+        controller = app.extensions["cdn_controller"]
+        controller.simulation_controller._real_node_process_limit = 0
+        controller.simulation_controller._real_client_process_limit = 0
+        client = app.test_client()
+        initialized = client.post("/api/control/simulation/init", json={"num_servers": 1, "num_clients": 1, "seed": 18})
+        self.assertEqual(initialized.status_code, 201)
+        server_id = initialized.get_json()["servers"][0]["server_id"]
+        for payload in (
+            {"offline": True},
+            {"offline": False, "extra_latency_ms": 0, "drop_rate": 0},
+            {"offline": False, "extra_latency_ms": 250, "drop_rate": 0},
+            {"offline": False, "extra_latency_ms": 0, "drop_rate": 0.25},
+        ):
+            self.assertEqual(client.post(f"/api/control/fault/{server_id}", json=payload).status_code, 200)
+        invalid = client.post(f"/api/control/fault/{server_id}", json={"drop_rate": None})
+        self.assertEqual(invalid.status_code, 400)
+        client.post("/api/control/simulation/end")
 
 
 if __name__ == "__main__":

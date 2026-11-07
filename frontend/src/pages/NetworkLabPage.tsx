@@ -41,6 +41,21 @@ export function NetworkLabPage({
     fault: Record<string, unknown>,
     label: string,
   ) {
+    for (const [field, minimum, maximum] of [
+      ["extra_latency_ms", 0, 30_000],
+      ["drop_rate", 0, 1],
+    ] as const) {
+      if (!(field in fault)) continue;
+      const value = fault[field];
+      if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) {
+        onError(
+          field === "drop_rate"
+            ? "A perda deve ser um número entre 0 e 1."
+            : "O atraso deve ser um número entre 0 e 30.000 ms.",
+        );
+        return;
+      }
+    }
     setBusy(`${serverId}:${label}`);
     try {
       await api.injectFault(serverId, fault);
@@ -250,12 +265,15 @@ function NodeCard({
     server.status === "stopped" ||
     server.fault?.offline;
   const degraded = server.status === "degraded";
+  const overloaded = server.status === "overloaded" || (server.utilization ?? 0) >= 0.9;
   const tone = offline
     ? "status-offline"
-    : degraded
+    : overloaded
+      ? "status-offline"
+      : degraded
       ? "status-degraded"
       : "status-live";
-  const label = offline ? "OFFLINE" : degraded ? "DEGRADED" : "HEALTHY";
+  const label = offline ? "OFFLINE" : overloaded ? "OVERLOADED" : degraded ? "DEGRADED" : "HEALTHY";
   return (
     <article className="lab-node">
       <div className="lab-node-title">

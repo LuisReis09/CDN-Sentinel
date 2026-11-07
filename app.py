@@ -69,7 +69,7 @@ def create_app() -> Flask:
     @app.get("/health")
     def health():
         """Return controller liveness and initialization state."""
-        return jsonify({"ok": True, "initialized": repository.snapshot().initialized})
+        return jsonify({"ok": True, "initialized": repository.snapshot_without_clients().initialized})
 
     app.extensions["cdn_controller"] = controller
     app.extensions["cdn_control_auth"] = {"configured": bool(control_token), "cors_origins": configured_origins}

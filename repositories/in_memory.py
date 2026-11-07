@@ -23,28 +23,29 @@ class SimulationRepository:
                 state.simulation_id = f"sim-{uuid.uuid4().hex[:12]}"
             self._state = state
 
-    def archive_current(self, ended_at: float | None = None, reason: str = "operator") -> dict | None:
+    def archive_current(self, ended_at: float | None = None, reason: str = "operator", client_sample_limit: int = 2_000) -> dict | None:
         with self._lock:
             if not self._state.initialized or self._state.lifecycle == "idle":
                 return None
-            record = copy.deepcopy(self._state)
-            record.ended_at = ended_at or time.time()
-            record.end_reason = reason
-            record.lifecycle = "ended"
+            ended_at = ended_at or time.time()
+            clients = list(self._state.clients.values())
             payload = {
-                "simulation_id": record.simulation_id,
-                "lifecycle": record.lifecycle,
-                "started_at": record.started_at,
-                "ended_at": record.ended_at,
-                "end_reason": record.end_reason,
-                "configuration": record.config,
-                "servers": [server.to_dict() for server in record.servers.values()],
-                "clients": [client.to_dict() for client in record.clients.values()],
-                "blacklist": [entry.to_dict() for entry in record.blacklist.values()],
-                "leaks": copy.deepcopy(record.leaks),
-                "events": copy.deepcopy(record.events),
-                "traffic": copy.deepcopy(record.traffic),
-                "scan_history": copy.deepcopy(record.scan_history),
+                "simulation_id": self._state.simulation_id,
+                "lifecycle": "ended",
+                "started_at": self._state.started_at,
+                "ended_at": ended_at,
+                "end_reason": reason,
+                "configuration": copy.deepcopy(self._state.config),
+                "servers": [server.to_dict() for server in self._state.servers.values()],
+                "clients": [client.to_dict() for client in clients[:max(0, client_sample_limit)]],
+                "clients_total": len(clients),
+                "clients_truncated": len(clients) > max(0, client_sample_limit),
+                "blacklist": [entry.to_dict() for entry in self._state.blacklist.values()],
+                "leaks": copy.deepcopy(self._state.leaks),
+                "events": copy.deepcopy(self._state.events),
+                "traffic": copy.deepcopy(self._state.traffic),
+                "scan_history": copy.deepcopy(self._state.scan_history),
+                "metrics_history": copy.deepcopy(self._state.metrics_history),
             }
             self._history.append(payload)
             self._history = self._history[-20:]
@@ -59,6 +60,47 @@ class SimulationRepository:
         """Return an isolated read snapshot; callers cannot mutate live state."""
         with self._lock:
             return copy.deepcopy(self._state)
+
+    def snapshot_without_clients(self) -> SimulationState:
+        """Copy bounded observability state without cloning a large client map."""
+        with self._lock:
+            snapshot = copy.copy(self._state)
+            snapshot.config = copy.deepcopy(self._state.config)
+            snapshot.clients = {}
+            snapshot.servers = copy.deepcopy(self._state.servers)
+            snapshot.blacklist = copy.deepcopy(self._state.blacklist)
+            snapshot.leaks = copy.deepcopy(self._state.leaks)
+            snapshot.scan_history = copy.deepcopy(self._state.scan_history)
+            snapshot.metrics_history = copy.deepcopy(self._state.metrics_history)
+            snapshot.events = copy.deepcopy(self._state.events)
+            snapshot.traffic = copy.deepcopy(self._state.traffic)
+            return snapshot
+
+    def client_summary(self) -> dict[str, int]:
+        """Calculate client counters without creating a 100k-object snapshot."""
+        with self._lock:
+            clients = self._state.clients.values()
+            online = 0
+            malicious = 0
+            paying = 0
+            for client in clients:
+                if client.active and client.online:
+                    online += 1
+                    if not client.malicious:
+                        paying += 1
+                if client.malicious:
+                    malicious += 1
+            return {
+                "total": len(self._state.clients),
+                "online": online,
+                "malicious": malicious,
+                "paying_online": paying,
+            }
+
+    def client_sample(self, limit: int = 2_000) -> list[Client]:
+        """Return a deterministic prefix for map/API rendering."""
+        with self._lock:
+            return copy.deepcopy(list(self._state.clients.values())[:max(0, limit)])
 
     def state_ref(self) -> SimulationState:
         """Return the live state for short, repository-owned mutations only.
@@ -147,11 +189,17 @@ class SimulationRepository:
             self._state.traffic.append(copy.deepcopy(traffic))
             self._state.traffic = self._state.traffic[-500:]
 
+    def append_metric(self, metric: Dict[str, Any]) -> None:
+        with self._lock:
+            self._state.metrics_history.append(copy.deepcopy(metric))
+            self._state.metrics_history = self._state.metrics_history[-500:]
+
     def reset_metrics(self) -> None:
         with self._lock:
             self._state.events = [event for event in self._state.events if event.get("type") == "simulation_initialized"][-1:]
             self._state.traffic.clear()
             self._state.scan_history.clear()
+            self._state.metrics_history.clear()
 
 
 class NodeRepository:

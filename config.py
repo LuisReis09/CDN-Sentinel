@@ -5,6 +5,10 @@ import math
 from dataclasses import dataclass
 
 
+MAX_SERVERS = 500
+MAX_CLIENTS = 100_000
+
+
 @dataclass(frozen=True)
 class SimulationConfig:
     num_servers: int
@@ -50,10 +54,10 @@ class SimulationConfig:
             seed = int(payload.get("seed", 2026))
         except (TypeError, ValueError) as exc:
             raise ValueError("Parâmetros numéricos inválidos") from exc
-        if not 1 <= num_servers <= 20:
-            raise ValueError("num_servers deve estar entre 1 e 20")
-        if not 1 <= num_clients <= 1000:
-            raise ValueError("num_clients deve estar entre 1 e 1000")
+        if not 1 <= num_servers <= MAX_SERVERS:
+            raise ValueError(f"num_servers deve estar entre 1 e {MAX_SERVERS}")
+        if not 1 <= num_clients <= MAX_CLIENTS:
+            raise ValueError(f"num_clients deve estar entre 1 e {MAX_CLIENTS:,}".replace(",", "."))
         if not 0 <= malicious_probability <= 1:
             raise ValueError("malicious_probability deve estar entre 0 e 1")
         if not 0 <= latency_factor <= 20:
@@ -66,8 +70,9 @@ class SimulationConfig:
             raise ValueError("tick_interval_seconds deve estar entre 0.5 e 5 segundos")
         if not 1024 <= base_client_port <= 64000:
             raise ValueError("base_client_port deve estar entre 1024 e 64000")
-        if base_client_port + num_clients - 1 > 64000:
-            raise ValueError("o intervalo de portas dos clientes excede 64000")
+        # Clientes acima do limite de processos locais são virtuais e não
+        # consomem uma porta dedicada. A porta base continua sendo validada
+        # para preservar compatibilidade com execuções pequenas.
         if not all(math.isfinite(value) for value in (malicious_probability, latency_factor, tick_interval_seconds, monthly_client_price_usd, monthly_server_cost_usd, monthly_fixed_cost_usd, demand_rps_per_client, slo_p95_ms, slo_success_rate_pct)):
             raise ValueError("parâmetros numéricos devem ser finitos")
         if monthly_client_price_usd < 0 or monthly_server_cost_usd < 0 or monthly_fixed_cost_usd < 0:

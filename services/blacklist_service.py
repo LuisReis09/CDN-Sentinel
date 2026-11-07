@@ -62,6 +62,7 @@ class BlacklistService:
                 "status": message.get("status", "delivered"),
                 "payload_summary": message.get("payload_summary", "client_id + HMAC proof + issue time"),
                 "protocol": "HTTP/1.1 gossip",
+                "encryption": "AES-256-GCM",
                 "trace_id": trace_id or f"trace-{entry.client_id}-{entry.proof_signature[:8]}",
             })
         self._repository.append_event({
@@ -73,7 +74,8 @@ class BlacklistService:
             "monitor_server_id": entry.server_id,
             "propagated_to": entry.propagated_to,
             "protocol": "HTTP gossip",
-            "proof_algorithm": "HMAC-SHA256",
+            "encryption": "AES-256-GCM",
+            "proof_algorithm": "AES-256-GCM + HMAC-SHA256",
             "trace_id": trace_id or f"trace-{entry.client_id}-{entry.proof_signature[:8]}",
         })
         return entry

@@ -42,6 +42,10 @@ def rank_servers(latitude: float, longitude: float, servers: Iterable[object]) -
     """Rank healthy candidates deterministically by distance and server id."""
     candidates: List[tuple[float, object]] = []
     for server in servers:
+        # Virtual capacity nodes participate in sizing and visualization, but
+        # data-plane HTTP routing must only target a process that can answer.
+        if getattr(server, "process_mode", "http") != "http":
+            continue
         if getattr(server, "status", "healthy") not in {"healthy", "degraded", "overloaded", "starting"}:
             continue
         distance = haversine_km(latitude, longitude, server.latitude, server.longitude)

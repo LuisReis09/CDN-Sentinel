@@ -10,7 +10,7 @@ O tema exige uma solução que demonstre comunicação distribuída, roteamento,
 
 ## Decisão
 
-Manter um control plane Flask para orquestração e iniciar cada CDN como um processo Python separado (`node_app.py`), com uma porta HTTP dedicada. O control plane usa `CDNHttpClient`; os nós usam HTTP gossip para alertas e telemetria. Clientes simulados também têm processos independentes para tornar a topologia observável.
+Manter um control plane Flask para orquestração e iniciar cada CDN como um processo Python separado (`node_app.py`), com uma porta HTTP dedicada. O control plane usa `CDNHttpClient`; os nós usam envelopes AES-256-GCM assinados com HMAC sobre HTTP para alertas e telemetria. A TopologyService organiza a conversa como origem, regionais e edges, com vizinhança limitada, enquanto clientes simulados continuam independentes para tornar a topologia observável.
 
 ## Consequências
 

@@ -45,7 +45,7 @@ function labelFor(event: SimulationEvent) {
   if (event.type === "simulation_tick")
     return `Tick ${event.tick ?? "?"}: intervalo ${event.tick_interval_seconds ?? "—"}s · churn de sessão 20%`;
   if (event.type === "watermark_verified")
-    return `${event.client_id} validado com HMAC-SHA256`;
+    return `${event.client_id} validado com AES-GCM + HMAC-SHA256`;
   if (event.type === "server_added")
     return `${event.server_id} entrou na malha distribuída`;
   if (event.type === "client_added")

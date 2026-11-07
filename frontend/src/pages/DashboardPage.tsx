@@ -2,8 +2,6 @@ import { Activity, Ban, Globe2, Network, Server, Users } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api";
 import { ControlPanel } from "../components/ControlPanel";
-import { DistributedEvidencePanel } from "../components/DistributedEvidencePanel";
-import { EventLogPanel } from "../components/EventLogPanel";
 import {
   MapBrushToolbar,
   type MapEditMode,
@@ -31,10 +29,6 @@ export function DashboardPage({
 }: DashboardPageProps) {
   const { status } = overview;
   const [activeNode, setActiveNode] = useState<string | null>(null);
-  const [selectedLogTarget, setSelectedLogTarget] = useState<{
-    kind: "server" | "client";
-    id: string;
-  } | null>(null);
   const [editMode, setEditMode] = useState<MapEditMode>(null);
   const [placement, setPlacement] = useState<{
     mode: Exclude<MapEditMode, null>;
@@ -66,17 +60,16 @@ export function DashboardPage({
       : client,
   );
   const available = overview.servers.filter(
-    (server) =>
-      server.status === "healthy" ||
-      server.status === "degraded" ||
-      server.status === "overloaded",
+    (server) => ["healthy", "degraded", "overloaded"].includes(server.status),
   ).length;
   const healthy = overview.servers.filter(
-    (server) =>
-      server.status === "healthy" && server.health_status !== "overloaded",
+    (server) => server.status === "healthy",
   ).length;
   const degraded = overview.servers.filter(
-    (server) => server.status === "degraded" || server.status === "overloaded",
+    (server) => server.status === "degraded",
+  ).length;
+  const overloaded = overview.servers.filter(
+    (server) => server.status === "overloaded" || (server.utilization ?? 0) >= 0.9,
   ).length;
 
   async function createPlacement(payload: Record<string, unknown>) {
@@ -121,7 +114,7 @@ export function DashboardPage({
         <MetricCard
           label="NÓS CDN"
           value={status.servers_total}
-          caption={`${healthy} saudáveis · ${degraded} degradados · ${available} disponíveis`}
+          caption={`${healthy} saudáveis · ${degraded} degradados · ${overloaded} sobrecarregados · ${available} disponíveis`}
           icon={Server}
           tone="green"
         />
@@ -163,6 +156,11 @@ export function DashboardPage({
                 <Globe2 size={15} /> {overview.recent_traffic.length} rotas
                 recentes
               </div>
+              <div className="panel-stat">
+                {overview.clients.length < status.clients_total
+                  ? `amostra ${overview.clients.length}/${status.clients_total} clientes`
+                  : `${overview.clients.length} clientes visíveis`}
+              </div>
               <MapBrushToolbar mode={editMode} onChange={setEditMode} />
             </div>
           </div>
@@ -177,10 +175,12 @@ export function DashboardPage({
               editMode && setPlacement({ mode: editMode, latitude, longitude })
             }
             onNodeSelect={(kind, id) => {
-              setSelectedLogTarget({ kind, id });
               if (kind === "server") setActiveNode(id);
             }}
           />
+          <p className="map-performance-note">
+            <Network size={13} /> Visualização otimizada: o backbone usa uma árvore geradora mínima; linhas de failover e comunicações ativas aparecem por cima. O protocolo real continua enviando HTTP diretamente ao servidor de destino.
+          </p>
         </div>
         <ControlPanel
           status={status}
@@ -195,14 +195,7 @@ export function DashboardPage({
         selected={activeNode}
         onSelect={setActiveNode}
       />
-      <DistributedEvidencePanel overview={overview} />
       <ScalabilityPanel status={status} />
-      <EventLogPanel
-        events={overview.recent_events}
-        servers={overview.servers}
-        clients={clients}
-        selected={selectedLogTarget}
-      />
       {placement && (
         <MapPlacementDialog
           mode={placement.mode}
@@ -259,8 +252,8 @@ function NodeHealthPanel({
                 {server.server_id} · {server.city}
               </strong>
               <small>
-                PID {server.process_id ?? "—"} · porta {server.port} · uptime{" "}
-                {Math.round(server.uptime_seconds ?? 0)}s · {server.status}
+                {server.role ?? "edge"} · {server.process_mode ?? "http"} · PID {server.process_id ?? "—"} · porta {server.port} · uptime{" "}
+                {Math.round(server.uptime_seconds ?? 0)}s · {server.status} · {server.peer_ids?.length ?? 0} peers
               </small>
             </span>
             <span className="node-health-stat">
@@ -288,6 +281,7 @@ function NodeHealthPanel({
 function serverTone(server: ServerNode) {
   if (server.status === "healthy") return "status-live";
   if (server.status === "degraded") return "status-degraded";
+  if (server.status === "overloaded") return "status-offline";
   if (server.status === "starting") return "status-starting";
   if (server.status === "stopped") return "status-stopped";
   return "status-offline";

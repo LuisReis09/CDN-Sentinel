@@ -21,8 +21,8 @@ def register_api_routes(api, controller: ApiController) -> None:
     init_model = api.model(
         "SimulationInit",
         {
-            "num_servers": fields.Integer(description="Quantidade de nós CDN (1-20)", default=3, min=1, max=20),
-            "num_clients": fields.Integer(description="Quantidade de clientes (1-1000)", default=10, min=1, max=1000),
+            "num_servers": fields.Integer(description="Quantidade de nós CDN (1-500)", default=3, min=1, max=500),
+            "num_clients": fields.Integer(description="Quantidade de clientes (1-100000)", default=10, min=1, max=100000),
             "malicious_probability": fields.Float(description="Probabilidade de cliente malicioso (0-1)", default=0.25, min=0, max=1),
             "latency_factor": fields.Float(description="Multiplicador da latência geográfica", default=1.0, min=0, max=20),
             "base_node_port": fields.Integer(description="Primeira porta dedicada aos nós", default=5101, min=1024, max=64000),
@@ -43,8 +43,8 @@ def register_api_routes(api, controller: ApiController) -> None:
     update_model = api.model(
         "SimulationUpdate",
         {
-            "num_servers": fields.Integer(description="Alteração estrutural: recria os nós", min=1, max=20),
-            "num_clients": fields.Integer(description="Alteração estrutural: recria os clientes", min=1, max=1000),
+            "num_servers": fields.Integer(description="Alteração estrutural: recria os nós", min=1, max=500),
+            "num_clients": fields.Integer(description="Alteração estrutural: recria os clientes", min=1, max=100000),
             "malicious_probability": fields.Float(description="Nova probabilidade de clientes maliciosos", min=0, max=1),
             "latency_factor": fields.Float(description="Novo multiplicador de latência", min=0, max=20),
             "base_node_port": fields.Integer(description="Nova porta inicial", min=1024, max=64000),
@@ -198,8 +198,10 @@ def register_api_routes(api, controller: ApiController) -> None:
                 return controller.inject_fault(server_id, request.get_json(silent=True) or {})
             except KeyError as exc:
                 return {"error": str(exc)}, 404
-            except ValueError as exc:
+            except (TypeError, ValueError) as exc:
                 return {"error": str(exc)}, 400
+            except RuntimeError as exc:
+                return {"error": str(exc), "hint": "verifique se o processo local do nó está ativo e tente recuperar o nó"}, 503
 
     @topology.route("/servers")
     class CDNServersResource(Resource):
@@ -272,7 +274,7 @@ def register_api_routes(api, controller: ApiController) -> None:
 
     @security.route("/watermark/verify")
     class WatermarkVerifyResource(Resource):
-        @security.doc(description="Decodifica e valida uma watermark HMAC para uso no laboratório de segurança.")
+        @security.doc(description="Descriptografa e valida uma watermark AES-GCM/HMAC para uso no laboratório de segurança.")
         @security.expect(verify_model, validate=True)
         def post(self):
             """Verify and decode a forensic watermark token."""
@@ -302,7 +304,7 @@ def register_api_routes(api, controller: ApiController) -> None:
                 variant = request.args.get("variant", "original")
                 if variant not in {"original", "watermarked", "difference"}:
                     return {"error": "variant deve ser original, watermarked ou difference"}, 400
-                path, content_type = get_video_asset(video_id, variant)
+                path, content_type = get_video_asset(video_id, variant, request.args.get("generated_id"))
                 response = send_file(path, mimetype=content_type, conditional=True, etag=True, download_name=path.name)
                 response.headers["X-CDN-Content-Source"] = "versioned-local-demo" if video_id.startswith("cdn_sentinel_demo") else "scikit-video-local-opt-in"
                 response.headers["X-CDN-Visual-Transform"] = variant

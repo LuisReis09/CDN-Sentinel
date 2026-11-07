@@ -157,6 +157,19 @@ code {
   flex: 1;
   min-width: 0;
 }
+.app-loading-strip {
+  position: fixed;
+  z-index: 1200;
+  top: 0;
+  left: 248px;
+  right: 0;
+  padding: 6px 14px;
+  color: var(--cyan);
+  background: rgba(69, 217, 255, 0.08);
+  border-bottom: 1px solid rgba(69, 217, 255, 0.2);
+  font: 10px "DM Mono", monospace;
+  text-align: center;
+}
 .topbar {
   height: 64px;
   border-bottom: 1px solid var(--line);
@@ -887,6 +900,7 @@ code {
     10px "DM Mono",
     monospace;
   white-space: nowrap;
+  pointer-events: none;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.25);
 }
 .map-legend span {
@@ -1140,6 +1154,57 @@ label {
 .form-grid input:focus,
 .lab-toolbar select:focus {
   border-color: rgba(69, 217, 255, 0.65);
+}
+.field-error {
+  color: #ff9baa;
+}
+.field-error input {
+  border-color: rgba(255, 97, 119, 0.78);
+}
+.field-error-message {
+  color: #ff9baa;
+  font-size: 9px;
+  line-height: 1.3;
+}
+.form-feedback-error {
+  color: #ff9baa;
+  line-height: 1.45;
+}
+.initialization-progress {
+  margin: 16px 19px 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(69, 217, 255, 0.24);
+  border-radius: 8px;
+  background: rgba(69, 217, 255, 0.05);
+}
+.initialization-progress__heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #bfefff;
+  font-size: 10px;
+}
+.initialization-progress__heading b {
+  color: var(--cyan);
+  font-family: "DM Mono", monospace;
+}
+.initialization-progress__track {
+  height: 5px;
+  margin: 9px 0 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(165, 202, 238, 0.12);
+}
+.initialization-progress__track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--cyan), var(--green));
+  transition: width 0.25s ease;
+}
+.initialization-progress small {
+  color: var(--muted);
+  font-size: 9px;
 }
 .control-actions {
   display: flex;
@@ -1441,6 +1506,9 @@ label {
 .scale-warning .scale-summary strong {
   color: var(--orange);
 }
+.scale-danger .scale-bar b {
+  background: var(--red);
+}
 .node-list,
 .activity-list,
 .blacklist-list,
@@ -1708,6 +1776,16 @@ label {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.noise-video--difference {
+  border-color: rgba(255, 184, 107, 0.55);
+  background: #000;
+}
+.noise-video--difference .noise-video__frame {
+  background: #000;
+}
+.noise-video--difference .noise-video__source {
+  filter: grayscale(1) contrast(1.35);
 }
 .noise-video__noise {
   position: absolute;
@@ -2231,6 +2309,37 @@ label {
     monospace;
   line-height: 1.5;
 }
+.decryption-steps {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+}
+.decryption-steps > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 13px;
+  color: #9bb0c2;
+  background: #0b1929;
+  font-size: 10px;
+}
+.decryption-steps b {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: #07111e;
+  background: var(--cyan);
+  font-size: 9px;
+}
+.crypto-output-label {
+  display: block;
+  padding: 11px 13px 5px;
+  color: #71899e;
+  font-size: 9px;
+  text-transform: uppercase;
+}
 .code-block {
   max-height: 130px;
   overflow: auto;
@@ -2263,12 +2372,26 @@ label {
 }
 .robustness-row {
   display: grid;
-  grid-template-columns: 1fr 140px 100px;
+  grid-template-columns: minmax(150px, 1fr) 140px 100px 75px;
   gap: 10px;
   align-items: center;
   padding: 9px;
   background: #0b1929;
   font-size: 10px;
+}
+.robustness-row > span {
+  display: grid;
+  gap: 3px;
+}
+.robustness-row > span small {
+  color: #71899e;
+  font-size: 8px;
+}
+.robustness-row em {
+  color: var(--cyan);
+  font-size: 8px;
+  font-style: normal;
+  text-transform: uppercase;
 }
 .robustness-row code {
   color: #b6eefa;
@@ -2741,7 +2864,9 @@ label {
 .map-legend-symbol--diamond-blacklist,
 .map-legend-symbol--diamond-content,
 .map-legend-symbol--diamond-update,
-.map-legend-symbol--diamond-client {
+.map-legend-symbol--diamond-client,
+.map-legend-symbol--diamond-failover,
+.map-legend-symbol--diamond-capacity {
   width: 8px;
   height: 8px;
   border: 0;
@@ -2762,6 +2887,12 @@ label {
   width: 6px;
   height: 6px;
   background: #41d9ee;
+}
+.map-legend-symbol--diamond-failover {
+  background: #ffb86b;
+}
+.map-legend-symbol--diamond-capacity {
+  background: #ffe06b;
 }
 .map-communication-icon {
   background: transparent;
@@ -2791,6 +2922,32 @@ label {
 .map-communication-diamond--client_content {
   color: #41d9ee;
   background: #41d9ee;
+}
+.map-communication-diamond--failover {
+  color: #ffb86b;
+  background: #ffb86b;
+}
+.map-communication-diamond--capacity {
+  color: #ffe06b;
+  background: #ffe06b;
+}
+.map-communication-diamond--health {
+  color: #b99cff;
+  background: #b99cff;
+}
+.map-performance-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0 18px 16px;
+  color: #7890aa;
+  font-size: 10px;
+  line-height: 1.55;
+}
+.map-performance-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--cyan);
 }
 .map-communication-diamond--small {
   width: 6px;
@@ -2980,6 +3137,69 @@ label {
 .history-page {
   max-width: 1480px;
 }
+.telemetry-section {
+  margin-top: 13px;
+}
+.section-heading-inline {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.section-heading-inline h2 {
+  margin: 4px 0 0;
+  color: #e9f3ff;
+  font-size: 16px;
+}
+.telemetry-count {
+  color: #7890a7;
+  font: 9px "DM Mono", monospace;
+  text-transform: uppercase;
+}
+.telemetry-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+}
+.telemetry-chart {
+  min-width: 0;
+  padding: 13px 13px 8px;
+}
+.telemetry-chart-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #dcecf6;
+  font-size: 11px;
+}
+.telemetry-chart-heading span {
+  display: grid;
+  place-items: center;
+}
+.telemetry-chart--cyan .telemetry-chart-heading span { color: var(--cyan); }
+.telemetry-chart--red .telemetry-chart-heading span { color: var(--red); }
+.telemetry-chart--orange .telemetry-chart-heading span { color: var(--orange); }
+.telemetry-chart--green .telemetry-chart-heading span { color: var(--green); }
+.telemetry-chart-canvas {
+  height: 210px;
+  margin-top: 8px;
+}
+.telemetry-chart-canvas .recharts-cartesian-axis-tick-value {
+  fill: #7890a7;
+  font-size: 9px;
+}
+.telemetry-chart-canvas .recharts-legend-item-text {
+  color: #7890a7 !important;
+}
+.telemetry-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 20px;
+  color: #7890a7;
+  font-size: 11px;
+}
 .history-toolbar {
   display: flex;
   align-items: center;
@@ -2998,6 +3218,9 @@ label {
 .history-note {
   color: #7890a7;
   font-size: 10px;
+}
+.history-final-topology {
+  margin-top: 13px;
 }
 .history-cards {
   display: grid;
@@ -3295,6 +3518,19 @@ label {
     monospace;
 }
 @media (max-width: 760px) {
+  .noise-preview-grid--triple,
+  .payload-compare {
+    grid-template-columns: 1fr;
+  }
+  .crypto-detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .robustness-row {
+    grid-template-columns: 1fr auto;
+  }
+  .robustness-row em {
+    grid-column: 2;
+  }
   .map-legends {
     grid-template-columns: 1fr;
     bottom: 8px;

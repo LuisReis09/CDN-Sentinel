@@ -15,6 +15,7 @@ from services.capacity_service import profile_for_tier, service_metrics, queue_w
 from services.watermark_service import WatermarkService
 from utils.geo import haversine_km
 from utils.latency import sleep_for_distance
+from utils.crypto import decrypt_payload, encrypt_payload, is_encrypted_payload
 from utils.video import encode_payload, get_video_chunk
 from utils.protocol import signed_headers, verify_headers
 
@@ -69,6 +70,20 @@ class CDNNode:
                     self.repository.clear_consecutive_errors()
         return {"server_id": self.server_id, "latency_factor": self.latency_factor, "capacity_tier": self.capacity_tier, "capacity_profile": self.capacity_profile.to_dict(), "fault": dict(self.fault)}
 
+    def _post_peer(self, peer: dict, path: str, payload: dict) -> dict:
+        """Send an authenticated, encrypted hop to a neighbouring CDN node."""
+
+        url = f"{peer['url']}{path}"
+        wire_payload = encrypt_payload(payload, self.secret_key, aad=path)
+        response = requests.post(
+            url,
+            json=wire_payload,
+            headers=signed_headers(self.secret_key, "POST", path, wire_payload),
+            timeout=2.0,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def status(self) -> dict:
         metrics = self.repository.request_metrics()
         capacity = service_metrics(
@@ -78,7 +93,7 @@ class CDNNode:
             metrics.get("queue_rejected", 0),
         )
         pressure = capacity["pressure"]
-        is_overloaded = pressure >= 0.95 and bool(metrics.get("queue_depth") or metrics.get("queue_rejected") or metrics.get("requests_in_flight"))
+        is_overloaded = pressure >= 0.9
         is_degraded = bool(self.fault["extra_latency_ms"] or self.fault["drop_rate"] or metrics.get("consecutive_errors"))
         health_status = "offline" if self.fault["offline"] else ("overloaded" if is_overloaded else ("degraded" if is_degraded else "healthy"))
         return {
@@ -178,16 +193,8 @@ class CDNNode:
                 message_id = message_id
                 distance = haversine_km(self.latitude, self.longitude, peer["latitude"], peer["longitude"])
                 sleep_for_distance(distance, self.latency_factor)
-                url = f"{peer['url']}/internal/blacklist"
                 payload = {"entry": entry, "visited": visited, "message": {"message_id": message_id, "message_type": "BLACKLIST_ALERT", "from_server": self.server_id, "to_server": peer_id, "hops": max(0, int(message.get("hops", 8)) - 1)}}
-                response = requests.post(
-                    url,
-                    json=payload,
-                    headers=signed_headers(self.secret_key, "POST", "/internal/blacklist", payload),
-                    timeout=2.0,
-                )
-                response.raise_for_status()
-                response_body = response.json()
+                response_body = self._post_peer(peer, "/internal/blacklist", payload)
                 propagated_to.extend(response_body.get("propagated_to", []))
                 message_trace.append({"message_id": message_id, "message_type": "BLACKLIST_ALERT", "from_server": self.server_id, "to_server": peer_id, "client_id": entry.get("client_id"), "status": "delivered", "payload_summary": "client_id + HMAC proof + issue time"})
                 message_trace.extend(response_body.get("message_trace", []))
@@ -215,27 +222,37 @@ class CDNNode:
             for pending in self.repository.pending_messages():
                 peer = pending.get("peer", {})
                 try:
-                    url = f"{peer['url']}/internal/blacklist"
                     payload = {"entry": pending["entry"], "visited": pending.get("visited", []), "message": pending["message"]}
-                    response = requests.post(url, json=payload, headers=signed_headers(self.secret_key, "POST", "/internal/blacklist", payload), timeout=2.0)
-                    response.raise_for_status()
+                    self._post_peer(peer, "/internal/blacklist", payload)
                     self.repository.remove_pending(pending["key"])
                 except (requests.RequestException, KeyError, ValueError):
                     continue
 
     def accept_content_telemetry(self, message: dict) -> dict:
-        self.repository.record_message({"received_at": time.time(), **message})
-        return {"accepted": True, "server_id": self.server_id, "message_id": message.get("message_id")}
+        self.repository.record_message({"received_at": time.time(), "encryption": "AES-256-GCM", **message})
+        return {"accepted": True, "server_id": self.server_id, "message_id": message.get("message_id"), "encryption": "AES-256-GCM"}
 
 
 def create_node_app(node: CDNNode) -> Flask:
     app = Flask(f"cdn-node-{node.server_id}")
 
-    def authenticate(payload: object | None = None):
+    def authenticate(payload: object | None = None, *, encrypted_required: bool = False):
         valid, reason = verify_headers(node.secret_key, request.method, request.path, payload, request.headers, node.repository.mark_message_seen)
         if not valid:
             return jsonify({"error": reason}), 401
+        if encrypted_required and not is_encrypted_payload(payload):
+            return jsonify({"error": "mensagem interna sem envelope AES-256-GCM"}), 403
         return None
+
+    def encrypted_body():
+        wire_payload = request.get_json(silent=True) or {}
+        denied = authenticate(wire_payload, encrypted_required=True)
+        if denied:
+            return None, denied
+        try:
+            return decrypt_payload(wire_payload, node.secret_key, aad=request.path), None
+        except ValueError as exc:
+            return None, (jsonify({"error": str(exc)}), 400)
 
     @app.get("/health")
     def health() -> Any:
@@ -256,12 +273,11 @@ def create_node_app(node: CDNNode) -> Flask:
     @app.post("/internal/peers")
     def internal_peers() -> Any:
         """Configure the peer list used by HTTP gossip."""
-        body = request.get_json(silent=True) or {}
-        denied = authenticate(body)
+        body, denied = encrypted_body()
         if denied:
             return denied
         peers = body.get("peers", [])
-        if not isinstance(peers, list) or len(peers) > 100:
+        if not isinstance(peers, list) or len(peers) > 500:
             return jsonify({"error": "peers deve ser uma lista"}), 400
         if any(not isinstance(peer, dict) or not peer.get("server_id") or not peer.get("url") or not isinstance(peer.get("latitude"), (int, float)) or not isinstance(peer.get("longitude"), (int, float)) for peer in peers):
             return jsonify({"error": "peer inválido"}), 400
@@ -274,8 +290,7 @@ def create_node_app(node: CDNNode) -> Flask:
     @app.post("/internal/config")
     def internal_config() -> Any:
         """Update node-local runtime configuration received over HTTP."""
-        body = request.get_json(silent=True) or {}
-        denied = authenticate(body)
+        body, denied = encrypted_body()
         if denied:
             return denied
         try:
@@ -311,8 +326,7 @@ def create_node_app(node: CDNNode) -> Flask:
     @app.post("/internal/blacklist")
     def internal_blacklist() -> Any:
         """Accept a validated blacklist entry and propagate it over HTTP gossip."""
-        body = request.get_json(silent=True) or {}
-        denied = authenticate(body)
+        body, denied = encrypted_body()
         if denied:
             return denied
         entry = body.get("entry", body)
@@ -325,8 +339,7 @@ def create_node_app(node: CDNNode) -> Flask:
 
     @app.post("/internal/blacklist/reconcile")
     def internal_blacklist_reconcile() -> Any:
-        body = request.get_json(silent=True) or {}
-        denied = authenticate(body)
+        body, denied = encrypted_body()
         if denied:
             return denied
         entries = body.get("entries", [])
@@ -337,8 +350,7 @@ def create_node_app(node: CDNNode) -> Flask:
     @app.post("/internal/content-telemetry")
     def internal_content_telemetry() -> Any:
         """Receive cross-region playback/content telemetry from another CDN node."""
-        body = request.get_json(silent=True) or {}
-        denied = authenticate(body)
+        body, denied = encrypted_body()
         if denied:
             return denied
         if not body.get("message_id") or not body.get("content_id"):

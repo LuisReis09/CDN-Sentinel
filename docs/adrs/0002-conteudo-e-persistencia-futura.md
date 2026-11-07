@@ -2,7 +2,7 @@
 
 ## Decisão
 
-Manter o estado do protótipo em memória e o conteúdo em fallback determinístico. Expor `ContentProvider` e `VideoCatalog` como pontos de substituição. A instalação não baixa nem consulta o dataset Hugging Face.
+Manter o estado do protótipo em memória e expor `ContentProvider` e `VideoCatalog` como pontos de substituição. O laboratório versiona um sample real de Big Buck Bunny para a demonstração e mantém o fallback sintético para smoke tests; a instalação não baixa nem consulta dataset externo.
 
 ## Motivo
 
