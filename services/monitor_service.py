@@ -30,11 +30,15 @@ class MonitorService:
         state = self._repository.state_ref()
         candidates = servers or [server.to_dict() for server in state.servers.values()]
         for server in candidates:
+            if server.get("process_mode", "http") == "virtual":
+                continue
             self.add_server(str(server.get("server_id")), start_thread=server.get("status", "healthy") != "offline")
 
     def add_server(self, server: dict | str, tick_interval_seconds: float | None = None, start_thread: bool = True) -> None:
         server_id = str(server.get("server_id")) if isinstance(server, dict) else str(server)
         if not server_id:
+            return
+        if isinstance(server, dict) and server.get("process_mode", "http") == "virtual":
             return
         if tick_interval_seconds is not None:
             self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
@@ -115,7 +119,7 @@ class MonitorService:
             finally:
                 lock.release()
 
-        state = self._repository.snapshot()
+        state = self._repository.snapshot_without_clients()
         results = [self.scan(server_id=current_id, automatic=automatic) for current_id in state.servers]
         return {
             "server_id": "all",
@@ -128,7 +132,7 @@ class MonitorService:
         }
 
     def _empty_result(self, server_id: str) -> dict:
-        return {"server_id": server_id, "scanned": 0, "detected": [], "rejected": [], "blacklisted_total": len(self._repository.snapshot().blacklist), "scanned_at": time.time(), "automatic": False}
+        return {"server_id": server_id, "scanned": 0, "detected": [], "rejected": [], "blacklisted_total": len(self._repository.snapshot_without_clients().blacklist), "scanned_at": time.time(), "automatic": False}
 
     def _scan(self, server_id: str, automatic: bool) -> Dict[str, Any]:
         state = self._repository.state_ref()
@@ -169,7 +173,7 @@ class MonitorService:
             "monitor_server_id": server_id,
             "detected": len(detected),
             "rejected": len(rejected),
-            "proof_algorithm": "HMAC-SHA256",
+            "proof_algorithm": "AES-256-GCM + HMAC-SHA256",
             "source": "embedded chunk bytes",
             "automatic": automatic,
         })

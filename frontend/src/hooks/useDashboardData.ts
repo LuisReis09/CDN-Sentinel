@@ -10,6 +10,12 @@ const demoOverview: Overview = {
     simulation_id: "",
     started_at: null,
     updated_at: null,
+    initialization: {
+      in_progress: false,
+      progress_pct: 0,
+      phase: "idle",
+      detail: "Backend aguardando",
+    },
     tick_interval_seconds: 2.5,
     configuration: {
       num_servers: 0,
@@ -106,6 +112,7 @@ function normalizeOverview(raw: Partial<Overview>): Overview {
       lifecycle: status.lifecycle ?? (status.initialized ? "running" : "idle"),
       simulation_id: status.simulation_id ?? "",
       tick_interval_seconds: status.tick_interval_seconds ?? 2.5,
+      initialization: status.initialization ?? demoOverview.status.initialization,
       configuration,
       scalability: {
         ...demoOverview.status.scalability,
@@ -158,7 +165,16 @@ export function useDashboardData() {
   const inFlight = useRef<Promise<void> | null>(null);
 
   const refresh = useCallback(async () => {
-    if (inFlight.current) return inFlight.current;
+    // Mutations (for example adding a client on the map) can finish while the
+    // three-second poll is still reading the previous snapshot. Wait for that
+    // request and issue a fresh read instead of returning stale data.
+    if (inFlight.current) {
+      try {
+        await inFlight.current;
+      } catch {
+        // The fresh request below will expose the current connection state.
+      }
+    }
     const work = (async () => {
       try {
         const data = await api.overview();
@@ -179,7 +195,7 @@ export function useDashboardData() {
     try {
       await work;
     } finally {
-      inFlight.current = null;
+      if (inFlight.current === work) inFlight.current = null;
     }
   }, []);
 

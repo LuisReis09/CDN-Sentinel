@@ -41,7 +41,11 @@ class LeakService:
             state = self._repository.state_ref()
             if state.paused or state.lifecycle != "running":
                 continue
-            malicious = [client for client in state.clients.values() if client.malicious and client.active]
+            malicious = [
+                client
+                for client in state.clients.values()
+                if client.malicious and client.active
+            ][:32]
             for client in malicious:
                 if client.client_id in state.blacklist:
                     continue

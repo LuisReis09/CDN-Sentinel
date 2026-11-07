@@ -9,6 +9,7 @@ from node_app import CDNNode, create_node_app
 from repositories.in_memory import SimulationRepository
 from services.stream_service import StreamService
 from utils.protocol import signed_headers, verify_headers
+from utils.crypto import encrypt_payload
 from utils.security import create_watermark_token
 
 
@@ -38,6 +39,21 @@ class Delivery2SecurityTests(unittest.TestCase):
         headers = signed_headers("secret", "POST", "/internal/blacklist", {"entry": entry})
         response = client.post("/internal/blacklist", json={"entry": entry}, headers=headers)
         self.assertEqual(response.status_code, 403)
+        node._retry_stop.set()
+
+    def test_node_accepts_signed_and_encrypted_internal_configuration(self):
+        node = CDNNode("cdn-test", "127.0.0.1", 59992, 0, 0, "Test", "secret", 1)
+        client = create_node_app(node).test_client()
+        cleartext = {"latency_factor": 2}
+        payload = encrypt_payload(cleartext, "secret", aad="/internal/config")
+        response = client.post(
+            "/internal/config",
+            json=payload,
+            headers=signed_headers("secret", "POST", "/internal/config", payload),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["latency_factor"], 2.0)
+        node._retry_stop.set()
 
     def test_snapshot_does_not_expose_live_mutable_state(self):
         repository = SimulationRepository()

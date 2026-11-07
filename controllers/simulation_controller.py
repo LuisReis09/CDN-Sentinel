@@ -7,10 +7,12 @@ import sys
 import time
 import math
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict
 
-from config import SimulationConfig
+from config import MAX_CLIENTS, MAX_SERVERS, SimulationConfig
 from models.entities import CDNServer, SimulationState
 from models.entities import Client
 from repositories.in_memory import SimulationRepository
@@ -18,6 +20,7 @@ from services.cdn_http_client import CDNHttpClient
 from services.topology_service import TopologyService
 from services.city_lookup_service import CityLookupService
 from services.capacity_service import capacity_limits, profile_for_tier, service_metrics
+from utils.geo import haversine_km
 
 
 class SimulationController:
@@ -29,17 +32,36 @@ class SimulationController:
         self._client_processes: Dict[str, subprocess.Popen] = {}
         self._secret_key = "local-development-secret"
         self._city_lookup = CityLookupService()
+        self._initialization_lock = threading.RLock()
+        self._initialization = {
+            "in_progress": False,
+            "progress_pct": 0,
+            "phase": "idle",
+            "detail": "Aguardando inicialização",
+        }
+        self._real_node_process_limit = max(0, int(os.getenv("CDN_REAL_NODE_LIMIT", "64")))
+        self._real_client_process_limit = max(0, int(os.getenv("CDN_REAL_CLIENT_LIMIT", "32")))
 
     @property
     def secret_key(self) -> str:
         return self._secret_key
 
     def initialize(self, payload: dict) -> dict:
-        config = SimulationConfig.from_payload(payload)
+        self._set_initialization_progress(True, 3, "validating", "Validando parâmetros da simulação")
+        try:
+            config = SimulationConfig.from_payload(payload)
+        except Exception:
+            self._set_initialization_progress(False, 0, "error", "Parâmetros inválidos")
+            raise
         self._secret_key = config.secret_key
         self._http_client.configure_secret(config.secret_key)
+        self._set_initialization_progress(True, 8, "stopping", "Encerrando processos da execução anterior")
         self.shutdown_nodes()
+        self._set_initialization_progress(True, 16, "topology", f"Gerando {config.num_servers} servidores e {config.num_clients} clientes")
         servers, clients = self._topology.build(config)
+        for index, server in enumerate(servers.values()):
+            if index >= self._real_node_process_limit:
+                server.process_mode = "virtual"
         state = SimulationState(initialized=True, started_at=time.time(), updated_at=time.time(), config=config.to_dict(), servers=servers, clients=clients, lifecycle="starting")
         self._repository.replace(state)
         self._repository.append_event({
@@ -48,29 +70,61 @@ class SimulationController:
             "config": config.to_dict(),
             "node_protocol": "HTTP/1.1",
             "routing_algorithm": "Haversine / nearest healthy CDN",
-            "gossip_protocol": "HTTP gossip",
-            "watermark_algorithm": "HMAC-SHA256",
+            "gossip_protocol": "hierarchical origin-regional-edge gossip",
+            "internal_encryption": "AES-256-GCM envelope + HMAC-SHA256 signature",
+            "watermark_algorithm": "AES-256-GCM + HMAC-SHA256",
         })
 
-        for server in servers.values():
-            self._start_node(server, config)
-        for client in clients.values():
-            self._start_client(client)
+        self._set_initialization_progress(True, 28, "nodes", f"Preparando {min(len(servers), self._real_node_process_limit)} nós HTTP e {max(0, len(servers) - self._real_node_process_limit)} nós virtuais")
+        if self._real_node_process_limit:
+            node_workers = min(max(1, len(servers)), self._real_node_process_limit, 16)
+            with ThreadPoolExecutor(max_workers=node_workers, thread_name_prefix="cdn-init") as executor:
+                futures = [executor.submit(self._start_node, server, config) for server in servers.values()]
+                completed = 0
+                for future in as_completed(futures):
+                    future.result()
+                    completed += 1
+                    self._set_initialization_progress(True, 28 + int(35 * completed / max(1, len(futures))), "nodes", f"Nós prontos: {completed}/{len(futures)}")
+        else:
+            for server in servers.values():
+                self._start_node(server, config)
+            self._set_initialization_progress(True, 63, "nodes", "Todos os nós foram registrados como capacidade virtual")
+        self._set_initialization_progress(True, 68, "clients", f"Registrando {len(clients)} clientes virtuais")
+        for index, client in enumerate(clients.values()):
+            self._start_client(client, index)
+            if len(clients) <= 5_000 and index % max(1, len(clients) // 10) == 0:
+                self._set_initialization_progress(True, 68 + int(15 * (index + 1) / max(1, len(clients))), "clients", f"Clientes prontos: {index + 1}/{len(clients)}")
+        self._set_initialization_progress(True, 84, "network", "Configurando vizinhança e capacidade da malha")
         self._configure_peers(state)
         self.refresh_servers()
         self._reconcile_blacklist(state)
-        self.refresh_clients()
         state.lifecycle = "running" if any(server.status in {"healthy", "degraded"} for server in state.servers.values()) else "error"
         state.updated_at = time.time()
         self._repository.append_event({"type": "simulation_running" if state.lifecycle == "running" else "simulation_start_failed", "at": time.time(), "lifecycle": state.lifecycle})
+        self._set_initialization_progress(False, 100, "ready", "Simulação pronta")
         malicious_count = sum(1 for client in clients.values() if client.malicious)
         return {
             "initialized": True,
             "configuration": config.to_dict(),
             "malicious_clients": malicious_count,
             "servers": [server.to_dict() for server in servers.values()],
-            "clients": [client.to_dict() for client in clients.values()],
+            "clients": [client.to_dict() for client in list(clients.values())[:2_000]],
+            "clients_total": len(clients),
+            "clients_truncated": len(clients) > 2_000,
         }
+
+    def _set_initialization_progress(self, in_progress: bool, progress_pct: int, phase: str, detail: str) -> None:
+        with self._initialization_lock:
+            self._initialization = {
+                "in_progress": in_progress,
+                "progress_pct": max(0, min(100, int(progress_pct))),
+                "phase": phase,
+                "detail": detail,
+            }
+
+    def initialization_progress(self) -> dict:
+        with self._initialization_lock:
+            return dict(self._initialization)
 
     def update(self, payload: dict) -> dict:
         state = self._repository.state_ref()
@@ -86,7 +140,7 @@ class SimulationController:
             digest = hashlib.sha256(f"{client.client_id}:{config.malicious_probability}".encode()).digest()
             client.malicious = int.from_bytes(digest[:8], "big") / 2**64 < config.malicious_probability
         for server in state.servers.values():
-            if server.status == "healthy":
+            if server.status == "healthy" and server.process_mode == "http":
                 try:
                     self._http_client.configure(server, {"latency_factor": config.latency_factor})
                 except Exception as exc:
@@ -112,15 +166,15 @@ class SimulationController:
         return self.status()
 
     def status(self) -> dict:
-        if self._repository.snapshot().lifecycle != "ended":
-            self.refresh_clients()
-        state = self._repository.snapshot()
+        self._refresh_client_processes()
+        state = self._repository.snapshot_without_clients()
+        client_summary = self._repository.client_summary()
         now = time.time()
         healthy_servers = sum(1 for server in state.servers.values() if server.health_status == "healthy" or server.status == "healthy")
         degraded_servers = sum(1 for server in state.servers.values() if server.health_status == "degraded" or server.status == "degraded")
         overloaded_servers = sum(1 for server in state.servers.values() if server.health_status == "overloaded" or server.status == "overloaded")
         available_servers = sum(1 for server in state.servers.values() if server.health_status in {"healthy", "degraded", "overloaded"} or server.status in {"healthy", "degraded", "overloaded"})
-        online_clients = sum(1 for client in state.clients.values() if client.active and client.online)
+        online_clients = client_summary["online"]
         demand_rps = online_clients * float(state.config.get("demand_rps_per_client", 0.25))
         capacity_values = [float(server.capacity_rps) for server in state.servers.values() if server.server_id and (server.health_status in {"healthy", "degraded", "overloaded"} or server.status in {"healthy", "degraded", "overloaded"}) and server.capacity_rps > 0]
         if not capacity_values and available_servers:
@@ -134,12 +188,18 @@ class SimulationController:
         if not available_servers:
             profile = "indisponível"
             message = "Nenhum nó saudável para atender a demanda"
+        elif utilization >= 1.0 or queue_rejected > 0:
+            profile = "gargalo"
+            message = "Demanda efetiva próxima ou acima da capacidade: fila e rejeições observadas"
+        elif utilization >= 0.9:
+            profile = "alerta"
+            message = "Alerta: mais de 90% da capacidade comprometida, com pouca folga operacional"
         elif not healthy_servers:
             profile = "degradada"
             message = "Todos os nós estão degradados, mas ainda podem atender com risco de latência"
-        elif utilization >= 0.95 and (queue_depth or queue_rejected):
-            profile = "gargalo"
-            message = "Demanda efetiva próxima ou acima da capacidade: fila e rejeições observadas"
+        elif queue_depth > 0 or queue_wait_ms >= 100:
+            profile = "alerta"
+            message = "Alerta: existe fila ou espera de atendimento mesmo com capacidade nominal"
         elif healthy_servers >= max(1, online_clients * 2):
             profile = "sobredimensionada"
             message = "Muitos nós para poucos clientes: custo operacional elevado"
@@ -166,12 +226,12 @@ class SimulationController:
         monthly_fixed_cost = float(state.config.get("monthly_fixed_cost_usd", state.config.get("monthly_fixed_cost_unit", 150.0)))
         monthly_variable_cost = online_clients * 2.0
         monthly_cost = monthly_server_cost + monthly_fixed_cost + monthly_variable_cost
-        paying_clients = max(1, len(state.clients)) if state.clients else 0
+        paying_clients = max(1, client_summary["total"]) if client_summary["total"] else 0
         configured_price = float(state.config.get("monthly_client_price_usd", state.config.get("monthly_client_price_unit", 25.0)))
         break_even_price = monthly_cost / paying_clients if paying_clients else 0
         minimum_price = break_even_price * 1.2 if paying_clients else 0
-        revenue = sum(1 for client in state.clients.values() if client.active and client.online and not client.malicious) * configured_price
-        observed_requests = len(recent_traffic)
+        revenue = client_summary["paying_online"] * configured_price
+        observed_requests = sum(int(item.get("request_count", 1)) for item in recent_traffic)
         observed_rps = round(observed_requests / window_seconds, 3)
         total_requests = sum(int(server.requests_total) for server in state.servers.values())
         successful_requests = max(0, total_requests - error_count)
@@ -221,8 +281,9 @@ class SimulationController:
             "configuration": state.config,
             "tick_interval_seconds": round(float(state.config.get("tick_interval_seconds", 2.5)), 2),
             "servers_total": len(state.servers),
-            "clients_total": len(state.clients),
-            "malicious_clients": sum(1 for client in state.clients.values() if client.malicious),
+            "clients_total": client_summary["total"],
+            "malicious_clients": client_summary["malicious"],
+            "initialization": self.initialization_progress(),
             "blacklisted_total": len(state.blacklist),
             "scalability": {
                 "online_clients": online_clients,
@@ -246,7 +307,7 @@ class SimulationController:
                 "p95_latency_ms": p95_latency,
                 "p99_latency_ms": p99_latency,
                 "metrics_window_seconds": window_seconds,
-                "observed_request_count": len(recent_traffic),
+                "observed_request_count": observed_requests,
                 "observed_rps": observed_rps,
                 "observed_errors": error_count,
                 "success_rate_pct": success_rate_pct,
@@ -318,8 +379,8 @@ class SimulationController:
         state = self._repository.state_ref()
         if not state.initialized or state.lifecycle == "ended":
             raise RuntimeError("A simulação ainda não foi inicializada")
-        if len(state.clients) >= 1000:
-            raise ValueError("A simulação já atingiu o limite de 1000 clientes")
+        if len(state.clients) >= MAX_CLIENTS:
+            raise ValueError(f"A simulação já atingiu o limite de {MAX_CLIENTS:,} clientes".replace(",", "."))
         try:
             latitude = float(payload["latitude"])
             longitude = float(payload["longitude"])
@@ -347,7 +408,7 @@ class SimulationController:
             malicious=malicious,
         )
         self._repository.add_client(client)
-        self._start_client(client)
+        self._start_client(client, len(state.clients) - 1)
         self._repository.update_config({"num_clients": len(state.clients)})
         self._repository.append_event({"type": "client_added", "at": time.time(), "client_id": client_id, "latitude": latitude, "longitude": longitude})
         return client.to_dict()
@@ -356,8 +417,8 @@ class SimulationController:
         state = self._repository.state_ref()
         if not state.initialized or state.lifecycle == "ended":
             raise RuntimeError("A simulação ainda não foi inicializada")
-        if len(state.servers) >= 20:
-            raise ValueError("A simulação já atingiu o limite de 20 servidores")
+        if len(state.servers) >= MAX_SERVERS:
+            raise ValueError(f"A simulação já atingiu o limite de {MAX_SERVERS} servidores")
         try:
             latitude = float(payload["latitude"])
             longitude = float(payload["longitude"])
@@ -382,6 +443,8 @@ class SimulationController:
             longitude=longitude,
             city=str(payload.get("city") or self._city_lookup.lookup(latitude, longitude)),
         )
+        if len(state.servers) >= self._real_node_process_limit:
+            server.process_mode = "virtual"
         self._repository.add_server(server)
         config = SimulationConfig.from_payload({**state.config, "secret_key": self._secret_key})
         self._start_node(server, config)
@@ -393,6 +456,16 @@ class SimulationController:
         return server.to_dict()
 
     def _start_node(self, server: CDNServer, config: SimulationConfig) -> None:
+        if server.process_mode == "virtual":
+            profile = profile_for_tier(server.capacity_tier or config.node_tier)
+            limits = capacity_limits(profile)
+            server.process_id = None
+            server.status = "healthy"
+            server.lifecycle_status = "virtual"
+            server.health_status = "healthy"
+            server.capacity_rps = float(limits["capacity_rps"])
+            server.last_error = None
+            return
         root = Path(__file__).resolve().parents[1]
         command = [
             sys.executable,
@@ -438,7 +511,11 @@ class SimulationController:
                 time.sleep(0.1)
         server.status = "offline"
 
-    def _start_client(self, client: Client) -> None:
+    def _start_client(self, client: Client, index: int = 0) -> None:
+        if index >= self._real_client_process_limit:
+            client.process_id = None
+            client.process_status = "virtual"
+            return
         root = Path(__file__).resolve().parents[1]
         process = subprocess.Popen(
             [sys.executable, str(root / "client_app.py"), "--client-id", client.client_id, "--city", client.city],
@@ -451,52 +528,151 @@ class SimulationController:
         client.process_status = "online" if process.poll() is None else "offline"
         self._client_processes[client.client_id] = process
 
-    def refresh_clients(self) -> list[dict]:
+    def _refresh_client_processes(self) -> None:
+        state = self._repository.state_ref()
+        for client_id, process in self._client_processes.items():
+            client = state.clients.get(client_id)
+            if client is None:
+                continue
+            client.process_status = "online" if process.poll() is None else "offline"
+            if client.process_status == "offline":
+                client.online = False
+
+    def refresh_clients(self, limit: int | None = None) -> list[dict]:
         state = self._repository.state_ref()
         if state.lifecycle == "ended":
-            return [client.to_dict() for client in state.clients.values()]
+            clients = list(state.clients.values())
+            return [client.to_dict() for client in clients[:limit]] if limit is not None else [client.to_dict() for client in clients]
+        self._refresh_client_processes()
         result = []
-        for client in state.clients.values():
-            process = self._client_processes.get(client.client_id)
-            if process is None:
-                client.process_status = "offline"
-            else:
-                client.process_status = "online" if process.poll() is None else "offline"
-                if client.process_status == "offline":
-                    client.online = False
+        clients = list(state.clients.values()) if limit is None else list(state.clients.values())[:limit]
+        for client in clients:
+            if client.client_id not in self._client_processes and client.process_status == "starting":
+                client.process_status = "virtual"
             result.append(client.to_dict())
         return result
 
     def _configure_peers(self, state: SimulationState) -> None:
-        peers = [
-            {
+        self._build_peer_graph(state.servers)
+        peer_directory = {
+            server.server_id: {
                 "server_id": server.server_id,
                 "url": server.url,
                 "latitude": server.latitude,
                 "longitude": server.longitude,
+                "role": server.role,
+                "region": server.region,
             }
             for server in state.servers.values()
-        ]
-        for server in state.servers.values():
-            if server.status != "healthy":
-                continue
+            if server.process_mode == "http"
+        }
+
+        def peers_for(server: CDNServer) -> list[dict]:
+            return [peer_directory[peer_id] for peer_id in server.peer_ids if peer_id in peer_directory]
+
+        eligible = [server for server in state.servers.values() if server.status == "healthy" and server.process_mode == "http"]
+
+        def configure(server: CDNServer):
             try:
-                self._http_client.configure_peers(server, peers)
+                self._http_client.configure_peers(server, peers_for(server))
+                return server, None
             except Exception as exc:
-                server.last_error = str(exc)
+                return server, exc
+
+        if len(eligible) <= 1:
+            configured = [configure(server) for server in eligible]
+        else:
+            with ThreadPoolExecutor(max_workers=min(16, len(eligible)), thread_name_prefix="cdn-peers") as executor:
+                configured = list(executor.map(configure, eligible))
+        for server, error in configured:
+            if error is not None:
+                server.last_error = str(error)
+
+    def _build_peer_graph(self, servers: dict[str, CDNServer]) -> None:
+        """Build a bounded origin/regional/edge graph instead of a full mesh."""
+
+        active = [server for server in servers.values() if server.process_mode == "http"]
+        neighbors = {server.server_id: set() for server in active}
+        if len(active) < 2:
+            for server in active:
+                server.peer_ids = []
+            return
+
+        origin = next((server for server in active if server.role == "origin"), active[0])
+        regionals = [server for server in active if server.role == "regional" and server.server_id != origin.server_id]
+
+        def nearest(source: CDNServer, candidates: list[CDNServer], limit: int) -> list[CDNServer]:
+            return sorted(
+                candidates,
+                key=lambda candidate: (
+                    haversine_km(source.latitude, source.longitude, candidate.latitude, candidate.longitude),
+                    candidate.server_id,
+                ),
+            )[:limit]
+
+        def connect(left: CDNServer, right: CDNServer) -> None:
+            if left.server_id == right.server_id:
+                return
+            neighbors[left.server_id].add(right.server_id)
+            neighbors[right.server_id].add(left.server_id)
+
+        for regional in regionals:
+            connect(origin, regional)
+
+        for server in active:
+            if server.server_id == origin.server_id or server.server_id in {item.server_id for item in regionals}:
+                continue
+            parents = nearest(server, regionals, 2)
+            if not parents:
+                parents = nearest(server, [origin], 1)
+            for parent in parents:
+                connect(server, parent)
+
+        for server in active:
+            server.peer_ids = sorted(neighbors[server.server_id])
 
     def refresh_servers(self) -> list[dict]:
         state = self._repository.state_ref()
         if state.lifecycle in {"ended", "idle"}:
             return [server.to_dict() for server in state.servers.values()]
-        result = []
+        virtual_servers = []
+        http_servers = []
         for server in state.servers.values():
+            if server.process_mode == "virtual":
+                profile = profile_for_tier(server.capacity_tier or str(state.config.get("node_tier", "basic")))
+                limits = capacity_limits(profile)
+                server.status = "offline" if server.fault.get("offline") else ("degraded" if server.fault.get("extra_latency_ms") or server.fault.get("drop_rate") else "healthy")
+                server.lifecycle_status = "virtual"
+                server.health_status = server.status
+                server.capacity_rps = float(limits["capacity_rps"])
+                server.capacity_pressure = float(server.utilization)
+                server.slo_breached = server.status in {"offline", "degraded", "overloaded"}
+                virtual_servers.append(server)
+            else:
+                http_servers.append(server)
+
+        def fetch(server: CDNServer):
             try:
-                status = self._http_client.status(server)
+                return server, self._http_client.status(server), None
+            except Exception as exc:
+                return server, None, exc
+
+        if http_servers:
+            with ThreadPoolExecutor(max_workers=min(16, len(http_servers)), thread_name_prefix="cdn-status") as executor:
+                fetched = list(executor.map(fetch, http_servers))
+        else:
+            fetched = []
+        for server, status, error in fetched:
+            if error is not None:
+                server.status = "offline"
+                server.last_error = str(error)
+                continue
+            try:
                 server.status = status.get("status", "healthy")
                 server.lifecycle_status = status.get("lifecycle_status", "running")
                 server.health_status = status.get("health_status", server.status)
                 server.capacity_tier = status.get("capacity_tier", server.capacity_tier)
+                server.peer_ids = list(status.get("peers", server.peer_ids))
                 server.load = int(status.get("load", 0))
                 server.blacklist_size = int(status.get("blacklist_size", 0))
                 server.messages_received = int(status.get("messages_received", 0))
@@ -518,15 +694,14 @@ class SimulationController:
             except Exception as exc:
                 server.status = "offline"
                 server.last_error = str(exc)
-            result.append(server.to_dict())
-        return result
+        return [server.to_dict() for server in [*virtual_servers, *http_servers]]
 
     def _reconcile_blacklist(self, state: SimulationState) -> None:
         entries = [entry.to_internal_dict() for entry in state.blacklist.values()]
         if not entries:
             return
         for server in state.servers.values():
-            if server.status != "healthy":
+            if server.status != "healthy" or server.process_mode != "http":
                 continue
             try:
                 self._http_client.reconcile_blacklist(server, entries)
@@ -538,16 +713,53 @@ class SimulationController:
         server = state.servers.get(server_id)
         if server is None:
             raise KeyError(f"Servidor {server_id} não encontrado")
+        if not isinstance(payload, dict):
+            raise ValueError("o cenário de falha deve ser um objeto JSON")
         fault = payload.get("fault", payload)
         if not isinstance(fault, dict):
             raise ValueError("fault deve ser um objeto")
         allowed = {"offline", "extra_latency_ms", "drop_rate"}
         if set(fault) - allowed:
             raise ValueError("falha contém campos desconhecidos")
-        result = self._http_client.configure(server, {"fault": fault})
+        if not fault:
+            raise ValueError("informe pelo menos um efeito de falha")
+        normalized_fault: dict[str, object] = {}
+        if "offline" in fault:
+            value = fault["offline"]
+            if not isinstance(value, bool):
+                raise ValueError("offline deve ser booleano")
+            normalized_fault["offline"] = value
+        for field, minimum, maximum in (("extra_latency_ms", 0.0, 30_000.0), ("drop_rate", 0.0, 1.0)):
+            if field not in fault:
+                continue
+            value = fault[field]
+            if isinstance(value, bool):
+                raise ValueError(f"{field} deve ser numérico")
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"{field} deve ser numérico") from exc
+            if not math.isfinite(numeric) or not minimum <= numeric <= maximum:
+                raise ValueError(f"{field} deve estar entre {minimum:g} e {maximum:g}")
+            normalized_fault[field] = numeric
+        if server.process_mode == "virtual":
+            server.fault.update({
+                "offline": bool(normalized_fault.get("offline", server.fault.get("offline", False))),
+                "extra_latency_ms": float(normalized_fault.get("extra_latency_ms", server.fault.get("extra_latency_ms", 0.0))),
+                "drop_rate": float(normalized_fault.get("drop_rate", server.fault.get("drop_rate", 0.0))),
+            })
+            result = {"server_id": server.server_id, "fault": dict(server.fault), "process_mode": "virtual"}
+        else:
+            try:
+                result = self._http_client.configure(server, {"fault": normalized_fault})
+            except Exception as exc:
+                server.status = "offline"
+                server.health_status = "offline"
+                server.last_error = str(exc)
+                raise RuntimeError(f"não foi possível configurar {server.server_id}: processo CDN indisponível") from exc
         self.refresh_servers()
         self._configure_peers(state)
-        self._repository.append_event({"type": "fault_injected", "at": time.time(), "server_id": server_id, "fault": fault, "reason": "laboratório local; nenhum serviço externo afetado"})
+        self._repository.append_event({"type": "fault_injected", "at": time.time(), "server_id": server_id, "fault": normalized_fault, "reason": "laboratório local; nenhum serviço externo afetado"})
         return result
 
     def shutdown_nodes(self) -> None:

@@ -85,6 +85,7 @@ class StreamService:
             raise RuntimeError("Todos os nós candidatos falharam: " + "; ".join(failures))
         server = selected_server
         distance = selected_distance
+        routing_reason = "primeiro nó falhou; failover determinístico" if failures else ("nó não saudável excluído; menor distância entre nós saudáveis" if len(candidate_details) > len(candidates) else "menor distância entre nós saudáveis")
         server.load = int(result.get("load", server.load))
         client.videos_consumed += 1
         client.last_activity_at = time.time()
@@ -106,6 +107,8 @@ class StreamService:
                 "queue_wait_ms": queue_wait_ms,
                 "end_to_end_ms": round(end_to_end_ms, 3),
                 "chunk_id": result["chunk_id"],
+                "routing_reason": routing_reason,
+                "route_kind": "failover" if failures else "delivery",
             })
             self._repository.append_event({
                 "type": "client_request",
@@ -121,14 +124,37 @@ class StreamService:
                 "end_to_end_ms": round(end_to_end_ms, 3),
                 "protocol": "HTTP/1.1",
                 "routing": "Haversine / nearest healthy CDN",
-                "watermark_algorithm": "HMAC-SHA256",
+                "watermark_algorithm": "AES-256-GCM + HMAC-SHA256",
                 "chunk_id": result["chunk_id"],
                 "content_id": state.config.get("video_id", "bigbuckbunny"),
                 "content_title": state.config.get("video_id", "bigbuckbunny"),
                 "routing_candidates": candidate_details,
-                "routing_reason": "primeiro nó falhou; failover determinístico" if failures else ("nó não saudável excluído; menor distância entre nós saudáveis" if len(candidate_details) > len(candidates) else "menor distância entre nós saudáveis"),
+                "routing_reason": routing_reason,
             })
-            peers = [peer for peer in state.servers.values() if peer.server_id != server.server_id and peer.status == "healthy"]
+            if failures:
+                self._repository.append_event({
+                    "type": "server_message",
+                    "at": time.time(),
+                    "message_id": f"failover-{request_id}",
+                    "message_type": "FAILOVER_ROUTE",
+                    "communication_kind": "failover",
+                    "from_server": failures[0].split(":", 1)[0],
+                    "to_server": server.server_id,
+                    "client_id": client.client_id,
+                    "status": "acknowledged",
+                    "payload_summary": "requisição desviada após falha do primeiro candidato",
+                    "protocol": "HTTP/1.1 failover",
+                    "trace_id": trace_id,
+                })
+            peer_ids = set(server.peer_ids)
+            peers = [
+                peer
+                for peer in state.servers.values()
+                if peer.server_id != server.server_id
+                and peer.server_id in peer_ids
+                and peer.process_mode == "http"
+                and peer.status in {"healthy", "degraded", "overloaded"}
+            ]
             if peers and client.videos_consumed % 3 == 0:
                 peer = peers[client.videos_consumed % len(peers)]
                 message = {
@@ -142,12 +168,13 @@ class StreamService:
                     "viewer_count_delta": 1,
                     "from_server": server.server_id,
                     "to_server": peer.server_id,
+                    "encryption": "AES-256-GCM",
                     "session_event": "playback_chunk",
                     "sent_at": time.time(),
                 }
                 try:
                     ack = self._http_client.publish_content_telemetry(peer, message)
-                    self._repository.append_event({"type": "server_message", "at": time.time(), **message, "status": "acknowledged", "payload_summary": "content_id + chunk + região + viewer_count_delta", "ack_server_id": ack.get("server_id")})
+                    self._repository.append_event({"type": "server_message", "at": time.time(), **message, "status": "acknowledged", "payload_summary": "content_id + chunk + região + viewer_count_delta", "ack_server_id": ack.get("server_id"), "encryption": ack.get("encryption", "AES-256-GCM")})
                 except Exception as exc:
                     self._repository.append_event({"type": "server_message", "at": time.time(), **message, "status": "failed", "payload_summary": "content_id + chunk + região + viewer_count_delta", "error": str(exc)})
         return VideoChunk(
@@ -166,7 +193,7 @@ class StreamService:
             queue_wait_ms=queue_wait_ms,
             end_to_end_ms=round(end_to_end_ms, 3),
             routing_candidates=candidate_details,
-            routing_reason="primeiro nó falhou; failover determinístico" if failures else ("nó não saudável excluído; menor distância entre nós saudáveis" if len(candidate_details) > len(candidates) else "menor distância entre nós saudáveis"),
+            routing_reason=routing_reason,
         )
 
     def publish_server_message(self, source_server, target_server, message: dict, latency_factor: float) -> dict:

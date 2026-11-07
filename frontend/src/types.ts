@@ -1,6 +1,7 @@
 export type ServerStatus =
   | "healthy"
   | "degraded"
+  | "overloaded"
   | "starting"
   | "stopping"
   | "stopped"
@@ -24,6 +25,10 @@ export interface ServerNode {
   url: string;
   process_id: number | null;
   last_error: string | null;
+  process_mode?: "http" | "virtual";
+  role?: "origin" | "regional" | "edge" | string;
+  region?: string;
+  peer_ids?: string[];
   messages_received: number;
   uptime_seconds?: number;
   requests_total?: number;
@@ -68,6 +73,9 @@ export interface Traffic {
   queue_wait_ms?: number;
   end_to_end_ms?: number;
   routing_reason?: string;
+  route_kind?: "delivery" | "failover" | string;
+  request_count?: number;
+  virtual?: boolean;
 }
 
 export interface SimulationEvent {
@@ -104,11 +112,15 @@ export interface SimulationEvent {
     | "new_content"
     | "update"
     | "client_content"
+    | "failover"
+    | "capacity"
+    | "health"
     | string;
   emission_probability?: number;
   from_server?: string;
   to_server?: string;
   status?: string;
+  encryption?: string;
   payload_summary?: string;
   ack_server_id?: string;
   error?: string;
@@ -157,6 +169,12 @@ export interface SimulationStatus {
   clients_total: number;
   malicious_clients: number;
   blacklisted_total: number;
+  initialization?: {
+    in_progress: boolean;
+    progress_pct: number;
+    phase: string;
+    detail: string;
+  };
   scalability: {
     online_clients: number;
     healthy_servers: number;
@@ -261,6 +279,8 @@ export interface SimulationHistory {
   configuration: Record<string, unknown>;
   servers: ServerNode[];
   clients: Client[];
+  clients_total?: number;
+  clients_truncated?: boolean;
   blacklist: BlacklistEntry[];
   leaks: LeakRecord[];
   events: SimulationEvent[];
@@ -333,6 +353,8 @@ export interface WatermarkDemo {
   cryptographic_process: {
     algorithm: string;
     key_material: string;
+    encryption_parameters?: string;
+    key_derivation?: string;
     signed_payload: string;
     token_format: string;
     embedding: string;
@@ -340,6 +362,7 @@ export interface WatermarkDemo {
     verification: string;
     reversible_encryption: boolean;
     robust_channel: string;
+    visual_parameters?: string;
     robustness_limit: string;
   };
   extracted_token: string;
@@ -352,9 +375,23 @@ export interface WatermarkDemo {
   encoded_claim: string;
   signature: string;
   payload_prefix: string;
+  decryption_process: {
+    version?: string;
+    algorithm: string;
+    encrypted: boolean;
+    aad?: string;
+    nonce_base64url?: string;
+    ciphertext_base64url?: string;
+    authentication_tag_base64url?: string;
+    steps: string[];
+    decrypted_payload: Record<string, unknown>;
+  };
   robustness_checks: Array<{
     filter: string;
     filter_id: string;
+    intensity?: string;
+    sample_generated?: boolean;
+    sample_method?: string;
     marker: string;
     recovered_marker: string;
     confidence: number;

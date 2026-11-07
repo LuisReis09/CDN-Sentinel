@@ -7,6 +7,7 @@ import time
 import requests
 
 from models.entities import CDNServer
+from utils.crypto import encrypt_payload
 from utils.latency import sleep_for_distance
 from utils.protocol import path_from_url, signed_headers
 
@@ -24,6 +25,11 @@ class CDNHttpClient:
     def _headers(self, method: str, url: str, payload: object | None = None) -> dict[str, str]:
         return signed_headers(self._secret_key, method, path_from_url(url), payload)
 
+    def _wire_payload(self, url: str, payload: object) -> dict:
+        """Encrypt JSON before signing it; signatures cover the ciphertext envelope."""
+
+        return encrypt_payload(payload, self._secret_key, aad=path_from_url(url))
+
     def health(self, server: CDNServer) -> Dict[str, Any]:
         url = f"{server.url}/health"
         response = requests.get(url, headers=self._headers("GET", url), timeout=self._timeout)
@@ -33,13 +39,15 @@ class CDNHttpClient:
     def configure_peers(self, server: CDNServer, peers: list[dict]) -> Dict[str, Any]:
         url = f"{server.url}/internal/peers"
         payload = {"peers": peers}
-        response = requests.post(url, json=payload, headers=self._headers("POST", url, payload), timeout=self._timeout)
+        wire_payload = self._wire_payload(url, payload)
+        response = requests.post(url, json=wire_payload, headers=self._headers("POST", url, wire_payload), timeout=self._timeout)
         response.raise_for_status()
         return response.json()
 
     def configure(self, server: CDNServer, values: dict) -> Dict[str, Any]:
         url = f"{server.url}/internal/config"
-        response = requests.post(url, json=values, headers=self._headers("POST", url, values), timeout=self._timeout)
+        wire_payload = self._wire_payload(url, values)
+        response = requests.post(url, json=wire_payload, headers=self._headers("POST", url, wire_payload), timeout=self._timeout)
         response.raise_for_status()
         return response.json()
 
@@ -71,10 +79,11 @@ class CDNHttpClient:
                     "to_server": server.server_id,
                 },
             }
+        wire_payload = self._wire_payload(url, payload)
         response = requests.post(
             url,
-            json=payload,
-            headers=self._headers("POST", url, payload),
+            json=wire_payload,
+            headers=self._headers("POST", url, wire_payload),
             timeout=self._timeout,
         )
         response.raise_for_status()
@@ -82,7 +91,8 @@ class CDNHttpClient:
 
     def publish_content_telemetry(self, server: CDNServer, message: dict) -> Dict[str, Any]:
         url = f"{server.url}/internal/content-telemetry"
-        response = requests.post(url, json=message, headers=self._headers("POST", url, message), timeout=min(self._timeout, 4.0))
+        wire_payload = self._wire_payload(url, message)
+        response = requests.post(url, json=wire_payload, headers=self._headers("POST", url, wire_payload), timeout=min(self._timeout, 4.0))
         response.raise_for_status()
         return response.json()
 
@@ -95,7 +105,8 @@ class CDNHttpClient:
     def reconcile_blacklist(self, server: CDNServer, entries: list[dict]) -> Dict[str, Any]:
         url = f"{server.url}/internal/blacklist/reconcile"
         payload = {"entries": entries}
-        response = requests.post(url, json=payload, headers=self._headers("POST", url, payload), timeout=self._timeout)
+        wire_payload = self._wire_payload(url, payload)
+        response = requests.post(url, json=wire_payload, headers=self._headers("POST", url, wire_payload), timeout=self._timeout)
         response.raise_for_status()
         return response.json()
 

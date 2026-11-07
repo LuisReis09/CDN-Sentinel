@@ -44,9 +44,9 @@ export function WatermarkLab({
   }
 
   const videoVariants = demo?.video_variants ?? {
-    original: api.watermarkVideoUrl("bigbuckbunny"),
-    watermarked: api.watermarkVideoUrl("bigbuckbunny"),
-    difference: api.watermarkVideoUrl("bigbuckbunny"),
+    original: api.watermarkVideoUrl("cdn_sentinel_demo", "original"),
+    watermarked: api.watermarkVideoUrl("cdn_sentinel_demo", "watermarked"),
+    difference: api.watermarkVideoUrl("cdn_sentinel_demo", "difference"),
   };
   const process = demo?.cryptographic_process;
   const claim = demo?.claim_before_encoding ?? {};
@@ -61,13 +61,13 @@ export function WatermarkLab({
         <Fingerprint size={20} className="accent" />
       </div>
       <p className="panel-subtitle">
-        Siga uma execução completa. A prova criptográfica assina a origem do
-        chunk; o canal robusto experimental testa se um sinal espalhado
+        Siga uma execução completa. O claim é cifrado e assinado antes de ser
+        inserido no chunk; o canal robusto experimental testa se um sinal espalhado
         continuaria detectável após filtros visuais.
       </p>
       <div className="lab-toolbar">
         <span className="standalone-badge">
-          <KeyRound size={13} /> HMAC-SHA256 · chave protegida
+          <KeyRound size={13} /> AES-256-GCM + HMAC · chave protegida
         </span>
         <button
           className="button button-primary"
@@ -88,13 +88,13 @@ export function WatermarkLab({
           videoUrl={videoVariants.watermarked}
           variant="watermarked"
           label="2 · Sinal sutil"
-          description="alteração real de luminância, aplicada aos frames"
+          description="vídeo entregue ao cliente; sinal de luminância imperceptível"
         />
         <NoiseVideoPreview
           videoUrl={videoVariants.difference}
           variant="difference"
           label="3 · Sinal destacado"
-          description="diferença real entre original e vídeo transformado"
+          description="escala de cinza sobre fundo preto; somente o sinal amplificado"
         />
       </div>
       {demo && (
@@ -119,8 +119,8 @@ export function WatermarkLab({
           tone="cyan"
         >
           <p>
-            O claim didático carrega exatamente estes campos. Ele não é segredo:
-            a integridade vem da assinatura. O vídeo acima é uma trilha visual separada.
+            O claim didático carrega exatamente estes campos. Na transmissão, ele
+            fica cifrado; esta versão legível aparece apenas para explicar o laboratório.
           </p>
           <CodeBlock
             value={
@@ -130,14 +130,14 @@ export function WatermarkLab({
         </InfoCard>
         <InfoCard
           icon={<FileKey2 size={17} />}
-          title="2. Como foi assinado"
+          title="2. Como foi cifrado e assinado"
           tone="orange"
         >
           <p>
-            O claim é serializado em JSON compacto, codificado em Base64URL e
-            assinado com HMAC-SHA256.
+            O claim é serializado em JSON compacto, cifrado com AES-256-GCM e
+            o envelope recebe uma assinatura HMAC-SHA256.
           </p>
-          <code>HMAC(secret_key, claim_base64url)</code>
+          <code>AESGCM(key, claim_json, AAD) + HMAC(ciphertext)</code>
           <small>
             {demo
               ? `Fingerprint da chave: ${demo.key_fingerprint} · valor nunca enviado ao navegador`
@@ -150,12 +150,12 @@ export function WatermarkLab({
           tone="green"
         >
           <p>
-            Extrai o prefixo, recalcula o HMAC em tempo constante e só então
-            atribui cliente, servidor e horário.
+            Extrai o prefixo, valida HMAC e tag GCM, descriptografa o claim e só
+            então atribui cliente, servidor e horário.
           </p>
-          <code>compare_digest(received, recalculated)</code>
+          <code>compare_digest + AESGCM.decrypt</code>
           <small>
-            HMAC não é criptografia reversível; é autenticidade + integridade.
+            AES-GCM fornece confidencialidade; HMAC acrescenta a assinatura do envelope.
           </small>
         </InfoCard>
       </div>
@@ -171,7 +171,7 @@ export function WatermarkLab({
             <ArrowRight className="flow-arrow" size={17} />
             <Step
               icon={<Code2 size={17} />}
-              title="2. Codificar + assinar"
+              title="2. Cifrar + assinar"
               value={`${demo.encoded_claim.length} chars Base64URL`}
               mono
             />
@@ -184,13 +184,13 @@ export function WatermarkLab({
             <ArrowRight className="flow-arrow" size={17} />
             <Step
               icon={<UnlockKeyhole size={17} />}
-              title="4. Extrair + validar"
-              value="HMAC válido · round trip OK"
+              title="4. Descriptografar + validar"
+              value="GCM + HMAC válidos · round trip OK"
               valid
             />
           </div>
           <div className="token-box">
-            <span>claim codificado</span>
+            <span>claim cifrado (Base64URL)</span>
             <code>{demo.encoded_claim}</code>
             <span>assinatura HMAC</span>
             <code>{demo.signature}</code>
@@ -209,6 +209,29 @@ export function WatermarkLab({
               <code>{demo.watermarked_payload_base64.slice(0, 120)}…</code>
             </div>
           </div>
+          <div className="crypto-details crypto-decryption">
+            <div className="crypto-details__heading">
+              <UnlockKeyhole size={16} />
+              <strong>Descriptografia passo a passo</strong>
+              <span>{demo.decryption_process.algorithm}</span>
+            </div>
+            <div className="decryption-steps">
+              {demo.decryption_process.steps.map((step, index) => (
+                <div key={step}>
+                  <b>{index + 1}</b>
+                  <span>{step}</span>
+                </div>
+              ))}
+            </div>
+            <div className="crypto-detail-grid">
+              <Detail label="AAD" value={demo.decryption_process.aad} />
+              <Detail label="Nonce" value={demo.decryption_process.nonce_base64url} />
+              <Detail label="Tag de autenticação" value={demo.decryption_process.authentication_tag_base64url} />
+              <Detail label="Ciphertext" value={demo.decryption_process.ciphertext_base64url} />
+            </div>
+            <span className="crypto-output-label">Payload final após descriptografar</span>
+            <CodeBlock value={JSON.stringify(demo.decryption_process.decrypted_payload, null, 2)} />
+          </div>
           <div className="crypto-details">
             <div className="crypto-details__heading">
               <Binary size={16} />
@@ -217,6 +240,8 @@ export function WatermarkLab({
             </div>
             <div className="crypto-detail-grid">
               <Detail label="Algoritmo" value={process?.algorithm} />
+              <Detail label="Parâmetros da cifra" value={process?.encryption_parameters} />
+              <Detail label="Derivação da chave" value={process?.key_derivation} />
               <Detail
                 label="Payload assinado"
                 value={process?.signed_payload}
@@ -226,6 +251,7 @@ export function WatermarkLab({
               <Detail label="Transporte" value={process?.transport_encoding} />
               <Detail label="Verificação" value={process?.verification} />
               <Detail label="Canal robusto" value={process?.robust_channel} />
+              <Detail label="Parâmetros visuais" value={process?.visual_parameters} />
               <Detail label="Limitação" value={process?.robustness_limit} />
               <Detail
                 label="Fonte dos frames"
@@ -250,18 +276,22 @@ function RobustnessTable({
       <div className="crypto-details__heading">
         <ScanSearch size={16} />
         <strong>Teste de resistência do sinal</strong>
-        <span>protótipo spread-spectrum/QIM</span>
+        <span>amostras MP4 H.264 + detector visual</span>
       </div>
       <p>
-        O HMAC continua sendo a prova criptográfica. A confiança não vem do
-        HMAC: é a razão entre bits do marcador recuperados corretamente e bits
-        totais, calculada comparando cada bloco 8×8 transformado com a linha de
-        base. O limite didático de aprovação é 90%.
+        O HMAC/AES continua sendo a prova criptográfica do payload. A métrica
+        abaixo é calculada pelo detector visual: bits do marcador recuperados
+        corretamente em cada bloco 8×8, depois que amostras MP4 reais recebem
+        blur, ruído, resize e re-encode em diferentes intensidades. O limite
+        didático de aprovação é 90%.
       </p>
       <div className="robustness-table">
         {checks.map((check) => (
           <div className="robustness-row" key={check.filter_id}>
-            <span>{check.filter}</span>
+            <span>
+              {check.filter}
+              {check.intensity && <small>{check.intensity}</small>}
+            </span>
             <code>
               {Math.round(check.confidence * 100)}% ·{" "}
               {check.bits_correct ?? "—"}/{check.bits_total ?? "—"} bits
@@ -269,6 +299,7 @@ function RobustnessTable({
             <strong className={check.survives ? "robust-ok" : "robust-fail"}>
               {check.survives ? "detectável" : "perdeu sinal"}
             </strong>
+            {check.sample_generated && <em>amostra real</em>}
           </div>
         ))}
       </div>

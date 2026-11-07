@@ -13,10 +13,10 @@ flowchart LR
     operator["Operador / equipe"]
     system[["CDN Security Simulator"]]
     platforms["Plataformas externas simuladas"]
-    osm["OpenStreetMap"]
+    maptiler["MapTiler Streets\n(labels em português)"]
     operator -->|configura, observa e testa| system
     system -->|registra e consulta evidências simuladas| platforms
-    system -->|carrega tiles do mapa| osm
+    system -->|carrega tiles do mapa| maptiler
 ```
 
 Fonte editável: [`c4-context.puml`](./c4-context.puml).
@@ -30,7 +30,7 @@ flowchart LR
     orchestrator --> repository[("Simulation Repository\nmemória")]
     orchestrator -->|HTTP/1.1: saúde, stream e monitoramento| nodes["CDN Edge Nodes\nN processos Python"]
     orchestrator -->|processos locais| clients["Simulated Clients\nN processos Python"]
-    nodes <-->|HTTP gossip| nodes
+    nodes <-->|AES-256-GCM + HMAC gossip| nodes
     orchestrator --> assets[("Cidades + amostras")]
 ```
 

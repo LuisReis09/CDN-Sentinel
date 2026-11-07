@@ -18,9 +18,10 @@ export function HistoryPage() {
     api.history()
       .then((result) => {
         if (cancelled) return;
-        setHistories(result.histories ?? []);
-        if (!selectedId && result.histories?.length) {
-          setSelectedId(result.histories[result.histories.length - 1].simulation_id);
+        const remote = result.histories ?? [];
+        setHistories(remote);
+        if (!selectedId && remote.length) {
+          setSelectedId(remote[remote.length - 1].simulation_id);
         }
         setError(null);
       })
@@ -39,6 +40,7 @@ export function HistoryPage() {
     .map((item) => item.end_to_end_ms ?? item.http_rtt_ms ?? item.latency_ms ?? 0)
     .sort((a, b) => a - b);
   const p95 = latencies.length ? latencies[Math.min(latencies.length - 1, Math.ceil(latencies.length * 0.95) - 1)] : 0;
+  const requestCount = history?.traffic.reduce((total, item) => total + (item.request_count ?? 1), 0) ?? 0;
 
   return (
     <main className="page-content history-page">
@@ -66,10 +68,10 @@ export function HistoryPage() {
         <>
           <section className="history-cards">
             <HistoryCard icon={<Clock3 size={15} />} label="Duração" value={formatDuration(duration)} />
-            <HistoryCard icon={<Activity size={15} />} label="Requisições" value={String(history.traffic.length)} />
+            <HistoryCard icon={<Activity size={15} />} label="Requisições" value={String(requestCount)} />
             <HistoryCard icon={<GitBranch size={15} />} label="Eventos" value={String(history.events.length)} />
             <HistoryCard icon={<ShieldCheck size={15} />} label="Blacklist" value={String(history.blacklist.length)} />
-            <HistoryCard icon={<Server size={15} />} label="Nós / clientes" value={`${history.servers.length} / ${history.clients.length}`} />
+            <HistoryCard icon={<Server size={15} />} label="Nós / clientes" value={`${history.servers.length} / ${history.clients_total ?? history.clients.length}`} />
             <HistoryCard icon={<Activity size={15} />} label="P95 e2e" value={`${Number(p95).toFixed(1)} ms`} />
           </section>
           <TelemetryCharts samples={history.metrics_history ?? []} />
@@ -94,7 +96,7 @@ export function HistoryPage() {
                 </tbody>
               </table>
             </div>
-            <p className="history-note">Eventos e evidências detalhadas continuam disponíveis no snapshot JSON da API; o histórico visual prioriza evolução e leitura rápida.</p>
+            <p className="history-note">Eventos e evidências detalhadas continuam disponíveis no snapshot JSON da API; o histórico visual prioriza evolução e leitura rápida. {history.clients_truncated ? "A lista visual de clientes foi amostrada para manter a consulta leve." : ""}</p>
           </section>
         </>
       )}

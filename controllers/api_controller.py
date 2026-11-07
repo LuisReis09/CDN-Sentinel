@@ -47,7 +47,7 @@ class ApiController:
         return result
 
     def update_simulation(self, payload: dict) -> dict:
-        current = self.repository.snapshot()
+        current = self.repository.snapshot_without_clients()
         structural = {key for key in ("num_servers", "num_clients", "base_node_port", "base_client_port", "seed") if key in payload and payload[key] != current.config.get(key)}
         if structural:
             self.leak_service.stop()
@@ -128,7 +128,9 @@ class ApiController:
         return [entry.to_dict() for entry in self.repository.blacklist_values()]
 
     def clients(self) -> list[dict]:
-        return [client.to_dict() for client in self.repository.snapshot().clients.values()]
+        # Keep the control-plane payload bounded; status.clients_total remains
+        # the authoritative count for large simulations.
+        return [client.to_dict() for client in self.repository.client_sample(2_000)]
 
     def leaks(self) -> list[dict]:
         return list(self.repository.snapshot().leaks)
@@ -145,7 +147,9 @@ class ApiController:
 
     def overview(self) -> dict:
         status = self.status()
-        state = self.repository.snapshot()
+        state = self.repository.snapshot_without_clients()
+        servers = self.servers()
+        blacklist = [entry.to_dict() for entry in self.repository.blacklist_values()]
         recent_events = state.events[-25:]
         message_events = [event for event in state.events if event.get("type") == "server_message"][-10:]
         seen_events: set[tuple] = set()
@@ -157,9 +161,9 @@ class ApiController:
                 selected_events.append(event)
         return {
             "status": status,
-            "servers": self.servers(),
+            "servers": servers,
             "clients": self.clients(),
-            "blacklist": self.blacklist(),
+            "blacklist": blacklist,
             "leaks": self.leak_summaries(),
             "recent_events": sorted(selected_events, key=lambda event: event.get("at", 0))[-35:],
             "recent_traffic": self.traffic()[-25:],
@@ -174,7 +178,7 @@ class ApiController:
             "at": time.time(),
             "client_id": claim["client_id"],
             "server_id": claim["server_id"],
-            "proof_algorithm": "HMAC-SHA256",
+            "proof_algorithm": "AES-256-GCM + HMAC-SHA256",
         })
         return claim
 

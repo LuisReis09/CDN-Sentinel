@@ -69,14 +69,14 @@ export function DistributedEvidencePanel({ overview }: { overview: Overview }) {
         <EvidenceItem
           icon={<KeyRound size={17} />}
           label="Prova forense"
-          value="HMAC-SHA256"
+          value="AES-GCM / HMAC"
           detail={`${verifiedWatermarks} verificações registradas`}
           tone="green"
         />
         <EvidenceItem
           icon={<GitBranch size={17} />}
           label="Gossip de blacklist"
-          value="HTTP gossip"
+          value="gossip cifrado"
           detail={`${syncedNodes || 0} nós sincronizados`}
           tone="red"
         />
@@ -102,7 +102,7 @@ export function DistributedEvidencePanel({ overview }: { overview: Overview }) {
           <TraceStep
             icon={<KeyRound size={14} />}
             title="watermark"
-            value={latestRequest?.watermark_algorithm ?? "HMAC-SHA256"}
+            value={latestRequest?.watermark_algorithm ?? "AES-GCM + HMAC"}
           />
           <span className="trace-arrow">→</span>
           <TraceStep

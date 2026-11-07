@@ -52,6 +52,10 @@ class CDNServer:
     requests_in_flight: int = 0
     last_request_at: float | None = None
     fault: Dict[str, Any] = field(default_factory=dict)
+    process_mode: str = "http"
+    role: str = "edge"
+    region: str = ""
+    peer_ids: List[str] = field(default_factory=list)
 
     @property
     def url(self) -> str:

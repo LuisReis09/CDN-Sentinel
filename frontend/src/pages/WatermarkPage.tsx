@@ -22,7 +22,7 @@ export function WatermarkPage({
           <p className="eyebrow">CRYPTOGRAPHIC CONTENT PROTECTION</p>
           <h1>Watermark studio</h1>
           <p className="page-lead">
-            Uma visão didática do ciclo de vida da assinatura forense sem expor
+            Uma visão didática do ciclo de vida da cifra e assinatura forense sem expor
             a chave secreta.
           </p>
         </div>
@@ -36,12 +36,12 @@ export function WatermarkPage({
         <StoryCard
           icon={<Fingerprint />}
           title="Assinar"
-          text="HMAC-SHA256 detecta adulteração; sozinho, não impede replay do token."
+          text="AES-256-GCM cifra o claim; HMAC-SHA256 assina o envelope e detecta adulteração."
         />
         <StoryCard
           icon={<ScanSearch />}
           title="Extrair"
-          text="O monitor lê o prefixo CDNWM1 diretamente dos bytes redistribuídos."
+          text="O monitor extrai o prefixo CDNWM2 e descriptografa o claim dos bytes redistribuídos."
         />
         <StoryCard
           icon={<ShieldCheck />}

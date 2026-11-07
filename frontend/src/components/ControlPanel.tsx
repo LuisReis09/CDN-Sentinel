@@ -29,8 +29,8 @@ export function ControlPanel({
 }: ControlPanelProps) {
   const config = status.configuration;
   const [form, setForm] = useState({
-    num_servers: config.num_servers ?? 4,
-    num_clients: config.num_clients ?? 32,
+    num_servers: config.num_servers > 0 ? config.num_servers : 4,
+    num_clients: config.num_clients > 0 ? config.num_clients : 32,
     malicious_probability: config.malicious_probability ?? 0.25,
     latency_factor: config.latency_factor ?? 1,
     tick_interval_seconds: config.tick_interval_seconds ?? 2.5,
@@ -39,12 +39,19 @@ export function ControlPanel({
     monthly_fixed_cost_usd: config.monthly_fixed_cost_usd ?? 150,
   });
   const [busy, setBusy] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [initProgress, setInitProgress] = useState({
+    in_progress: false,
+    progress_pct: 0,
+    phase: "idle",
+    detail: "",
+  });
 
   useEffect(() => {
     setForm((current) => ({
       ...current,
-      num_servers: config.num_servers ?? 4,
-      num_clients: config.num_clients ?? 32,
+      num_servers: config.num_servers > 0 ? config.num_servers : 4,
+      num_clients: config.num_clients > 0 ? config.num_clients : 32,
       malicious_probability: config.malicious_probability ?? 0.25,
       latency_factor: config.latency_factor ?? 1,
       tick_interval_seconds: config.tick_interval_seconds ?? 2.5,
@@ -68,10 +75,54 @@ export function ControlPanel({
     try {
       await action();
       await onRefresh();
-      await onAction();
     } catch (cause) {
       onError(cause instanceof Error ? cause.message : "Falha no controle");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function initializeSimulation() {
+    const errors = validateForm(form);
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+    setBusy(true);
+    setInitProgress({
+      in_progress: true,
+      progress_pct: 1,
+      phase: "starting",
+      detail: "Enviando configuração ao backend",
+    });
+    const poller = window.setInterval(() => {
+      void api.status()
+        .then((next) => {
+          if (next.initialization) setInitProgress(next.initialization);
+        })
+        .catch(() => undefined);
+    }, 500);
+    try {
+      await api.initialize({
+        ...form,
+        tick_interval_seconds: tickInterval,
+        base_node_port: status.configuration.base_node_port || 5101,
+        base_client_port: status.configuration.base_client_port || 6101,
+      });
+      setInitProgress({
+        in_progress: false,
+        progress_pct: 100,
+        phase: "ready",
+        detail: "Simulação pronta",
+      });
+      await onRefresh();
+    } catch (cause) {
+      setInitProgress((current) => ({ ...current, in_progress: false }));
+      onError(
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível iniciar. Revise os parâmetros e tente novamente.",
+      );
+    } finally {
+      window.clearInterval(poller);
       setBusy(false);
     }
   }
@@ -80,6 +131,14 @@ export function ControlPanel({
     setBusy(true);
     try {
       const result = await api.end();
+      // Do not persist the complete archive in browser storage: a large
+      // client sample can exceed the sessionStorage quota. The backend
+      // archives the run and the dashboard reads that authoritative snapshot.
+      try {
+        window.sessionStorage.removeItem("cdn-sentinel:last-ended-simulation");
+      } catch {
+        // Storage can be disabled by the browser; the redirect still works.
+      }
       await onRefresh();
       if (onEnded) onEnded(result.simulation_id);
       else
@@ -99,6 +158,12 @@ export function ControlPanel({
 
   function update(name: keyof typeof form, value: number) {
     setForm((current) => ({ ...current, [name]: value }));
+    setFieldErrors((current) => {
+      if (!current[name]) return current;
+      const next = { ...current };
+      delete next[name];
+      return next;
+    });
   }
 
   const monitorCount = Object.values(monitor.per_server ?? {}).filter(
@@ -148,12 +213,18 @@ export function ControlPanel({
           label="Servidores"
           value={form.num_servers}
           integer
+          min={1}
+          max={500}
+          error={fieldErrors.num_servers}
           onValueChange={(value) => update("num_servers", value)}
         />
         <NumericField
           label="Clientes"
           value={form.num_clients}
           integer
+          min={1}
+          max={100000}
+          error={fieldErrors.num_clients}
           onValueChange={(value) => update("num_clients", value)}
         />
         <NumericField
@@ -187,6 +258,18 @@ export function ControlPanel({
           chance de alternar login/logout.
         </small>
       </div>
+      {initProgress.in_progress && (
+        <div className="initialization-progress" role="status" aria-live="polite">
+          <div className="initialization-progress__heading">
+            <span>{initProgress.detail || "Preparando simulação"}</span>
+            <b>{Math.round(initProgress.progress_pct)}%</b>
+          </div>
+          <div className="initialization-progress__track">
+            <i style={{ width: `${Math.min(100, Math.max(2, initProgress.progress_pct))}%` }} />
+          </div>
+          <small>O dashboard será atualizado quando a malha estiver pronta.</small>
+        </div>
+      )}
       <details className="advanced-economics">
         <summary>Custos e precificação da infraestrutura (USD)</summary>
         <div className="form-grid">
@@ -220,17 +303,7 @@ export function ControlPanel({
           <button
             className="button button-primary"
             disabled={busy}
-            onClick={() =>
-              void run(() =>
-                api.initialize({
-                  ...form,
-                  tick_interval_seconds: tickInterval,
-                  base_node_port: status.configuration.base_node_port || 5101,
-                  base_client_port:
-                    status.configuration.base_client_port || 6101,
-                }),
-              )
-            }
+            onClick={() => void initializeSimulation()}
           >
             <RefreshCw size={15} /> Inicializar
           </button>
@@ -266,11 +339,17 @@ function NumericField({
   label,
   value,
   integer = false,
+  min,
+  max,
+  error,
   onValueChange,
 }: {
   label: string;
   value: number;
   integer?: boolean;
+  min?: number;
+  max?: number;
+  error?: string;
   onValueChange: (value: number) => void;
 }) {
   const [text, setText] = useState(String(value));
@@ -283,19 +362,52 @@ function NumericField({
   }
 
   return (
-    <label>
+    <label className={error ? "field-error" : undefined}>
       {label}
       <input
         type="text"
         inputMode={integer ? "numeric" : "decimal"}
         value={text}
+        min={min}
+        max={max}
+        aria-invalid={Boolean(error)}
         onChange={(event) => handleChange(event.target.value)}
         onKeyDown={(event) => {
           if (["e", "E", "+", "-"].includes(event.key)) event.preventDefault();
         }}
       />
+      {error && <small className="field-error-message">{error}</small>}
     </label>
   );
+}
+
+function validateForm(form: {
+  num_servers: number;
+  num_clients: number;
+  malicious_probability: number;
+  latency_factor: number;
+  tick_interval_seconds: number;
+  monthly_client_price_usd: number;
+  monthly_server_cost_usd: number;
+  monthly_fixed_cost_usd: number;
+}) {
+  const errors: Record<string, string> = {};
+  if (!Number.isInteger(form.num_servers) || form.num_servers < 1 || form.num_servers > 500) {
+    errors.num_servers = "Use de 1 a 500 servidores.";
+  }
+  if (!Number.isInteger(form.num_clients) || form.num_clients < 1 || form.num_clients > 100000) {
+    errors.num_clients = "Use de 1 a 100.000 clientes.";
+  }
+  if (!Number.isFinite(form.malicious_probability) || form.malicious_probability < 0 || form.malicious_probability > 1) {
+    errors.malicious_probability = "Use um valor entre 0 e 1.";
+  }
+  if (!Number.isFinite(form.latency_factor) || form.latency_factor < 0 || form.latency_factor > 20) {
+    errors.latency_factor = "Use um valor entre 0 e 20.";
+  }
+  if (!Number.isFinite(form.tick_interval_seconds) || form.tick_interval_seconds < 0.5 || form.tick_interval_seconds > 5) {
+    errors.tick_interval_seconds = "Use um intervalo entre 0,5 e 5 segundos.";
+  }
+  return errors;
 }
 
 function sanitizeNumericText(value: string, integer: boolean) {

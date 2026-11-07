@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -132,12 +133,85 @@ def assess_robustness(content: bytes, token: str) -> list[dict]:
     return checks
 
 
+def assess_video_robustness(original_path: Path, watermarked_path: Path, token: str) -> list[dict]:
+    """Generate real transformed samples and measure the monitor's recovery."""
+
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", str(original_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    width, height = (int(value) for value in probe.stdout.strip().split("x", 1))
+    marker = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+    transforms = [
+        ("sem filtro", "controle", "controle", None, 18),
+        ("borramento leve", "blur-light", "intensidade 1", "boxblur=1:1", 24),
+        ("borramento forte", "blur-heavy", "intensidade 4", "boxblur=4:2", 24),
+        ("ruído de transmissão leve", "noise-light", "4/255", "noise=alls=4:allf=u:all_seed=1234", 24),
+        ("ruído de transmissão forte", "noise-heavy", "18/255", "noise=alls=18:allf=u:all_seed=1234", 24),
+        ("re-encode qualidade alta", "reencode-high", "CRF 23", None, 23),
+        ("re-encode qualidade baixa", "reencode-low", "CRF 38", None, 38),
+        ("escala + re-encode", "resize-reencode", "50% → 100% / CRF 34", "scale=iw/2:ih/2,scale=iw*2:ih*2", 34),
+    ]
+    checks: list[dict] = []
+    with tempfile.TemporaryDirectory(prefix="cdn-sentinel-robustness-") as temp_dir:
+        temp_root = Path(temp_dir)
+        for label, filter_id, intensity, filter_expression, crf in transforms:
+            sample_generated = filter_id != "controle"
+            if sample_generated:
+                original_sample = temp_root / f"{filter_id}-original.mp4"
+                watermarked_sample = temp_root / f"{filter_id}-watermarked.mp4"
+                _render_transform_sample(original_path, original_sample, filter_expression, crf)
+                _render_transform_sample(watermarked_path, watermarked_sample, filter_expression, crf)
+                baseline = _decode_first_frame(original_sample)
+                embedded = _decode_first_frame(watermarked_sample)
+            else:
+                baseline = _decode_first_frame(original_path)
+                embedded = _decode_first_frame(watermarked_path)
+            recovered, confidence, bits_correct, bits_total = _extract_video_marker(baseline, embedded, width, height, marker)
+            checks.append(
+                {
+                    "filter": label,
+                    "filter_id": filter_id,
+                    "intensity": intensity,
+                    "marker": marker,
+                    "recovered_marker": recovered,
+                    "confidence": round(confidence, 3),
+                    "bits_correct": bits_correct,
+                    "bits_total": bits_total,
+                    "sample_generated": sample_generated,
+                    "sample_method": "amostra MP4 H.264 real de 1s, mesma transformação aplicada ao original e ao watermark",
+                    "confidence_method": "bits corretamente recuperados / 64 bits do sinal HMAC após decodificação do primeiro frame da amostra",
+                    "survives": confidence >= 0.9,
+                }
+            )
+    return checks
+
+
 def _decode_first_frame(path: Path, filter_expression: str | None = None) -> bytes:
     command = ["ffmpeg", "-v", "error", "-i", str(path)]
     if filter_expression:
         command.extend(["-vf", filter_expression])
     command.extend(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"])
     return subprocess.run(command, check=True, capture_output=True).stdout
+
+
+def _render_transform_sample(input_path: Path, output_path: Path, filter_expression: str | None, crf: int) -> None:
+    """Create a short, real H.264 sample before the monitor measures it."""
+
+    command = ["ffmpeg", "-y", "-v", "error", "-i", str(input_path), "-t", "1"]
+    if filter_expression:
+        command.extend(["-vf", filter_expression])
+    command.extend([
+        "-an",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", str(crf),
+        "-pix_fmt", "yuv420p",
+        str(output_path),
+    ])
+    subprocess.run(command, check=True, capture_output=True)
 
 
 def _quantize(frame: bytes) -> bytes:
@@ -171,7 +245,7 @@ def _extract_video_marker(
     return recovered_bytes.hex(), correct / total if total else 0, correct, total
 
 
-def assess_video_robustness(original_path: Path, watermarked_path: Path, token: str) -> list[dict]:
+def assess_video_robustness_legacy(original_path: Path, watermarked_path: Path, token: str) -> list[dict]:
     """Measure recovery from the first real video frame after real transforms."""
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", str(original_path)],

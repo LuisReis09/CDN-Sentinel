@@ -23,7 +23,7 @@ Rel(api, orchestrator, "Encaminha casos de uso", "Chamadas internas")
 Rel(orchestrator, repository, "Lê e atualiza estado", "Objetos em memória")
 Rel(orchestrator, node, "Inicializa, configura, consulta saúde, monitora leaks e solicita stream", "HTTP/1.1")
 Rel(orchestrator, client, "Inicia e encerra processos", "Processos locais")
-Rel(node, node, "Propaga BLACKLIST_ALERT e telemetria", "HTTP gossip")
+Rel(node, node, "Propaga BLACKLIST_ALERT e telemetria cifrados", "AES-256-GCM + HMAC sobre HTTP")
 Rel(orchestrator, asset, "Carrega cidades e amostras", "Filesystem")
 
 SHOW_LEGEND()

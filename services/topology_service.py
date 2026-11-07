@@ -19,9 +19,19 @@ class TopologyService:
         cities = list(load_global_cities())
         rng.shuffle(cities)
         servers: Dict[str, CDNServer] = {}
+        regional_count = min(8, max(1, config.num_servers // 12)) if config.num_servers > 1 else 0
         for index in range(config.num_servers):
             city = cities[index % len(cities)]
             server_id = f"cdn-{index + 1:02d}"
+            if index == 0:
+                role = "origin"
+                region = "origin"
+            elif index <= regional_count:
+                role = "regional"
+                region = f"region-{index:02d}"
+            else:
+                role = "edge"
+                region = f"region-{((index - regional_count - 1) % max(1, regional_count)) + 1:02d}" if regional_count else "origin"
             servers[server_id] = CDNServer(
                 server_id=server_id,
                 host="127.0.0.1",
@@ -30,6 +40,8 @@ class TopologyService:
                 longitude=city.longitude,
                 city=city.name,
                 capacity_tier=config.node_tier,
+                role=role,
+                region=region,
             )
 
         clients: Dict[str, Client] = {}
