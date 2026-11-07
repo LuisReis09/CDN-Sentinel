@@ -14,7 +14,7 @@ System_Boundary(system, "CDN Security Simulator") {
   Container(node, "CDN Edge Node (N processos)", "Python + Flask + HTTP", "Entrega chunks, mantém estado local e propaga alertas de blacklist entre pares.")
   Container(client, "Simulated Client Runtime (N processos)", "Python", "Representa o player/cliente independente usado pelos ticks da simulação.")
   ContainerDb(repository, "Simulation Repository", "Memória do processo controlador", "Estado da topologia, clientes, eventos, tráfego, leaks e blacklist.")
-  ContainerDb(asset, "City catalog / video samples", "JSON + dataset opcional", "Cidades globais e amostras de conteúdo usadas pela simulação.")
+  ContainerDb(asset, "City catalog / video samples", "JSON + MP4 Big Buck Bunny + fallback", "Cidades globais, Big Buck Bunny real e amostras locais; variantes visuais são geradas em runtime com FFmpeg.")
 }
 
 Rel(operator, frontend, "Opera", "HTTP")

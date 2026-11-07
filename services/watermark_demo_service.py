@@ -4,8 +4,16 @@ import hashlib
 import time
 
 from services.watermark_service import WatermarkService
-from utils.video import choose_video_example, encode_payload, extract_watermark_token, get_video_asset, get_video_chunk, list_video_examples
-from utils.robust_watermark import assess_robustness
+from utils.robust_watermark import assess_video_robustness
+from utils.video import (
+    choose_video_example,
+    encode_payload,
+    extract_watermark_token,
+    generate_visual_variants,
+    get_video_asset,
+    get_video_chunk,
+    list_video_examples,
+)
 
 
 class WatermarkDemoService:
@@ -21,18 +29,28 @@ class WatermarkDemoService:
         chunk_number = int(payload.get("chunk", 0))
         requested_video_id = payload.get("video_id")
         if requested_video_id:
-            video = next((item for item in list_video_examples() if item["video_id"] == str(requested_video_id) and not item["video_id"].endswith(("_watermarked", "_difference"))), None)
+            video = next(
+                (
+                    item
+                    for item in list_video_examples()
+                    if item["video_id"] == str(requested_video_id)
+                    and not item["video_id"].endswith(("_watermarked", "_difference"))
+                ),
+                None,
+            )
             if video is None:
                 raise ValueError(f"vídeo local inválido: {requested_video_id}")
         else:
-            video = choose_video_example(str(payload.get("exclude_video_id")) if payload.get("exclude_video_id") else None)
-            if video["video_id"].endswith(("_watermarked", "_difference")):
-                video = next(item for item in list_video_examples() if item["video_id"] == "cdn_sentinel_demo")
+            video = choose_video_example(
+                str(payload.get("exclude_video_id")) if payload.get("exclude_video_id") else None
+            )
+
         original_bytes, content_type = get_video_chunk(chunk_number, video["video_id"])
-        original_asset, _ = get_video_asset(video["video_id"])
-        _, _ = get_video_asset(video["video_id"], "watermarked")
-        _, _ = get_video_asset(video["video_id"], "difference")
+        original_asset, _ = get_video_asset(video["video_id"], "original")
         token, claim = self._watermark_service.issue(client_id, server_id, chunk_number)
+        generated_id = generate_visual_variants(video["video_id"], token)
+        watermarked_asset, _ = get_video_asset(video["video_id"], "watermarked", generated_id)
+        difference_asset, _ = get_video_asset(video["video_id"], "difference", generated_id)
         watermarked_bytes = token.encode("utf-8") + b"\n" + original_bytes
         extracted_token = extract_watermark_token(encode_payload(watermarked_bytes))
         verified_claim = self._watermark_service.verify(extracted_token)
@@ -44,43 +62,43 @@ class WatermarkDemoService:
             "content_type": content_type,
             "video_id": video["video_id"],
             "video_label": video["label"],
-            "video_source": video.get("source", "scikit-video local opt-in"),
+            "video_source": video.get("source", "asset MP4 local"),
             "video_asset_url": f"/api/security/watermark/demo/video?video_id={video['video_id']}&variant=original",
             "video_variants": {
                 "original": f"/api/security/watermark/demo/video?video_id={video['video_id']}&variant=original",
-                "watermarked": f"/api/security/watermark/demo/video?video_id={video['video_id']}&variant=watermarked",
-                "difference": f"/api/security/watermark/demo/video?video_id={video['video_id']}&variant=difference",
+                "watermarked": f"/api/security/watermark/demo/video?video_id={video['video_id']}&variant=watermarked&generated_id={generated_id}",
+                "difference": f"/api/security/watermark/demo/video?video_id={video['video_id']}&variant=difference&generated_id={generated_id}",
             },
             "video_metadata": {
                 "mime": content_type,
-                "resolution": video.get("resolution", "320x180"),
+                "resolution": video.get("resolution", "1280x720"),
                 "size_bytes": original_asset.stat().st_size,
-                "source": "asset MP4 versionado; padrão testsrc2 próprio",
-                "visual_transform": "drawbox + ajuste sutil de luminância; diferença = blend original/watermarked",
+                "source": video.get("source", "asset MP4 local"),
+                "visual_transform": "sinal HMAC de 64 bits aplicado em 8×8 regiões de luminância de cada frame; diferença = blend real",
             },
             "chunk_number": chunk_number,
             "original_payload_base64": encode_payload(original_bytes),
             "watermarked_payload_base64": encode_payload(watermarked_bytes),
             "watermark_token": token,
             "noise_hex": claim.signature,
-            "noise_source": "assinatura HMAC-SHA256 embutida no prefixo do chunk",
+            "noise_source": "digest HMAC-SHA256 convertido em 64 bits e embutido como sinal de luminância no MP4 real",
             "key_fingerprint": key_fingerprint,
             "claim_before_encoding": claim.to_dict(),
             "encoded_claim": encoded_claim,
             "signature": signature,
             "payload_prefix": f"{token}\\n",
-            "robustness_checks": assess_robustness(original_bytes, token),
+            "robustness_checks": assess_video_robustness(original_asset, watermarked_asset, token),
             "cryptographic_process": {
                 "algorithm": "HMAC-SHA256",
                 "key_material": f"chave secreta da CDN · fingerprint SHA-256 {key_fingerprint} (valor nunca exposto)",
                 "signed_payload": "client_id + server_id + issued_at + chunk_id",
                 "token_format": "CDNWM1.<payload-base64url>.<signature-hex>",
-                "embedding": "token UTF-8 + byte \"\\n\" + chunk original",
+                "embedding": "token UTF-8 + byte '\\n' no transporte; sinal HMAC visual separado no MP4",
                 "transport_encoding": "Base64 apenas para transporte da demonstração",
                 "verification": "decodificar, extrair claim, recalcular HMAC e comparar em tempo constante",
                 "reversible_encryption": False,
-                "robust_channel": "transformação visual real em frames H.264: luminância sutil e arquivo de diferença derivado",
-                "robustness_limit": "esta versão demonstra pixels transformados; não afirma robustez contra re-encode. O detector spread-spectrum experimental permanece separado e não é aplicado ao MP4",
+                "robust_channel": "64 bits do digest HMAC distribuídos em 8×8 regiões de luminância dos frames H.264",
+                "robustness_limit": "a métrica é medida no primeiro frame real após blur, ruído determinístico e quantização; não substitui um detector de produção",
             },
             "extracted_token": extracted_token,
             "claim": verified_claim.to_dict(),
@@ -88,4 +106,3 @@ class WatermarkDemoService:
             "payload_sha256": hashlib.sha256(original_bytes).hexdigest(),
             "generated_at": time.time(),
         }
-

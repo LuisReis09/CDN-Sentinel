@@ -179,6 +179,36 @@ class SimulationController:
         slo_p95_ms = float(state.config.get("slo_p95_ms", 250.0))
         slo_success_rate_pct = float(state.config.get("slo_success_rate_pct", 99.0))
         slo_compliant = bool(observed_requests and p95_latency <= slo_p95_ms and (success_rate_pct is None or success_rate_pct >= slo_success_rate_pct))
+        self._record_metric(
+            state,
+            now,
+            {
+                "blacklist_total": len(state.blacklist),
+                "total_requests": total_requests,
+                "total_errors": error_count,
+                "average_latency_ms": average_latency,
+                "p95_latency_ms": p95_latency,
+                "healthy_servers": healthy_servers,
+                "available_servers": available_servers,
+                "servers_total": len(state.servers),
+                "health_score_pct": round(
+                    100
+                    * (
+                        healthy_servers
+                        + (degraded_servers * 0.6)
+                        + (overloaded_servers * 0.3)
+                    )
+                    / len(state.servers),
+                    1,
+                )
+                if state.servers
+                else 0.0,
+                "server_requests": {
+                    server.server_id: int(server.requests_total)
+                    for server in state.servers.values()
+                },
+            },
+        )
         return {
             "initialized": state.initialized,
             "paused": state.paused,
@@ -239,6 +269,19 @@ class SimulationController:
                 },
             },
         }
+
+    def _record_metric(self, state: SimulationState, now: float, values: dict) -> None:
+        """Keep a bounded, cumulative series for dashboard evolution charts."""
+        last = state.metrics_history[-1] if state.metrics_history else None
+        if last and now - float(last.get("at", 0)) < 1.0:
+            return
+        self._repository.append_metric(
+            {
+                "at": now,
+                "elapsed_seconds": round(max(0.0, now - float(state.started_at or now)), 1),
+                **values,
+            }
+        )
 
     def reset_metrics(self) -> dict:
         self._repository.reset_metrics()

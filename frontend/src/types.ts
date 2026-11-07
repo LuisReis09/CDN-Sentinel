@@ -233,7 +233,23 @@ export interface Overview {
   leaks: LeakRecord[];
   recent_events: SimulationEvent[];
   recent_traffic: Traffic[];
+  metrics_history: TelemetrySample[];
   monitor: MonitorStatus;
+}
+
+export interface TelemetrySample {
+  at: number;
+  elapsed_seconds: number;
+  blacklist_total: number;
+  total_requests: number;
+  total_errors: number;
+  average_latency_ms: number;
+  p95_latency_ms: number;
+  healthy_servers: number;
+  available_servers: number;
+  servers_total: number;
+  health_score_pct: number;
+  server_requests: Record<string, number>;
 }
 
 export interface SimulationHistory {
@@ -249,6 +265,7 @@ export interface SimulationHistory {
   leaks: LeakRecord[];
   events: SimulationEvent[];
   traffic: Traffic[];
+  metrics_history?: TelemetrySample[];
   scan_history: Array<Record<string, unknown>>;
 }
 

@@ -301,7 +301,7 @@ def register_api_routes(api, controller: ApiController) -> None:
                 variant = request.args.get("variant", "original")
                 if variant not in {"original", "watermarked", "difference"}:
                     return {"error": "variant deve ser original, watermarked ou difference"}, 400
-                path, content_type = get_video_asset(video_id, variant)
+                path, content_type = get_video_asset(video_id, variant, request.args.get("generated_id"))
                 response = send_file(path, mimetype=content_type, conditional=True, etag=True, download_name=path.name)
                 response.headers["X-CDN-Content-Source"] = "versioned-local-demo" if video_id.startswith("cdn_sentinel_demo") else "scikit-video-local-opt-in"
                 response.headers["X-CDN-Visual-Transform"] = variant

@@ -8,8 +8,8 @@ O controlador Flask coordena processos `node_app.py`; cada nó mantém estado lo
 
 ## Fora do escopo
 
-Não há Supabase/PostgreSQL, dataset Hugging Face, broker, Kubernetes, cloud ou API paga. O fallback de conteúdo é determinístico e local. A integração futura deve respeitar licença, armazenamento e reprodução de vídeos.
+Não há Supabase/PostgreSQL, dataset Hugging Face, broker, Kubernetes, cloud ou API paga. O projeto inclui um sample local real de Big Buck Bunny, atribuído à Blender Foundation sob CC-BY-3.0, e mantém um fallback determinístico. A integração futura deve respeitar licença, armazenamento e reprodução de vídeos.
 
 ## Critério de honestidade
 
-Dados observados vêm de processos e requisições reais. Valores de capacidade, custo e latência geográfica são explicitamente estimativas/modelos. HMAC protege integridade/autenticidade do claim; não cifra vídeo, não é watermark visual robusto e um token pode ser reapresentado fora do protocolo interno anti-replay.
+Dados observados vêm de processos e requisições reais. Valores de capacidade, custo e latência geográfica são explicitamente estimativas/modelos. HMAC protege integridade/autenticidade do claim; não cifra vídeo. O laboratório aplica o digest HMAC como sinal visual real em frames e mede sua recuperação, mas isso não é um watermark de produção. Um token pode ser reapresentado fora do protocolo interno anti-replay.

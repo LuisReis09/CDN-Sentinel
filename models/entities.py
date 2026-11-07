@@ -130,6 +130,7 @@ class SimulationState:
     blacklist: Dict[str, BlacklistEntry] = field(default_factory=dict)
     leaks: List[Dict[str, Any]] = field(default_factory=list)
     scan_history: List[Dict[str, Any]] = field(default_factory=list)
+    metrics_history: List[Dict[str, Any]] = field(default_factory=list)
     events: List[Dict[str, Any]] = field(default_factory=list)
     traffic: List[Dict[str, Any]] = field(default_factory=list)
     simulation_id: str = ""

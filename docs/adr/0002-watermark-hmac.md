@@ -10,10 +10,10 @@ O monitor precisa identificar cliente, servidor, instante e chunk de uma cópia 
 
 ## Decisão
 
-Emitir tokens `CDNWM1.<payload-base64url>.<assinatura-hex>`. O payload contém `client_id`, `server_id`, `issued_at` e `chunk_id`; a assinatura é HMAC-SHA256 calculada com uma chave mantida no backend. O token é prefixado ao chunk para extração durante a simulação. O Watermark Studio também mede um canal experimental spread-spectrum/QIM separado do mecanismo criptográfico.
+Emitir tokens `CDNWM1.<payload-base64url>.<assinatura-hex>`. O payload contém `client_id`, `server_id`, `issued_at` e `chunk_id`; a assinatura é HMAC-SHA256 calculada com uma chave mantida no backend. O token é prefixado ao chunk para extração durante a simulação. O Watermark Studio usa o digest do mesmo claim para gerar 64 bits de sinal de luminância em frames reais do Big Buck Bunny e mede a recuperação após transformações.
 
 ## Consequências
 
 - O monitor consegue validar integridade e atribuir a origem sem expor a chave ao navegador.
-- HMAC não cifra o vídeo e não constitui, sozinho, uma marca robusta contra re-encode; o README e a tela do laboratório deixam esse limite explícito.
+- HMAC não cifra o vídeo e o canal visual experimental não é uma garantia de robustez contra re-encode de produção; a tela mede explicitamente `bits_correct / bits_total` no primeiro frame após blur, ruído determinístico e quantização.
 - Rotação de chaves, KMS/Vault e watermark de produção ficam como evolução; o protótipo mantém uma chave configurável por variável de ambiente.

@@ -8,7 +8,7 @@
 | Visualização | React-Leaflet/Leaflet e Recharts | Mostra topologia geográfica, fluxos entre nós e métricas de latência/escalabilidade. |
 | Segurança | HMAC-SHA256, `secrets`/variável `CDN_SECRET_KEY` | Autentica os claims da watermark e evita colocar a chave secreta no navegador. |
 | Dados do protótipo | Repositório em memória, JSON de cidades | Reduz dependências para a Entrega 2 e deixa o fluxo distribuído observável; persistência é um trade-off explícito. |
-| Empacotamento | Docker, Docker Compose, Nginx | Padroniza backend/frontend e fornece proxy `/api` para execução local. |
+| Empacotamento | Docker, Docker Compose, Nginx, Makefile | Caminho principal de execução reproduzível; `make docker-smoke` valida build/health/proxy e `make dev` inicia backend e frontend juntos sem containers. |
 | Qualidade | `unittest`, `compileall`, TypeScript, GitHub Actions | Valida lógica, sintaxe, build e regressões básicas a cada push/PR. |
 
 ## Limites assumidos

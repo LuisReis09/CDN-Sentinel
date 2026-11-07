@@ -45,6 +45,7 @@ class SimulationRepository:
                 "events": copy.deepcopy(record.events),
                 "traffic": copy.deepcopy(record.traffic),
                 "scan_history": copy.deepcopy(record.scan_history),
+                "metrics_history": copy.deepcopy(record.metrics_history),
             }
             self._history.append(payload)
             self._history = self._history[-20:]
@@ -147,11 +148,17 @@ class SimulationRepository:
             self._state.traffic.append(copy.deepcopy(traffic))
             self._state.traffic = self._state.traffic[-500:]
 
+    def append_metric(self, metric: Dict[str, Any]) -> None:
+        with self._lock:
+            self._state.metrics_history.append(copy.deepcopy(metric))
+            self._state.metrics_history = self._state.metrics_history[-500:]
+
     def reset_metrics(self) -> None:
         with self._lock:
             self._state.events = [event for event in self._state.events if event.get("type") == "simulation_initialized"][-1:]
             self._state.traffic.clear()
             self._state.scan_history.clear()
+            self._state.metrics_history.clear()
 
 
 class NodeRepository:

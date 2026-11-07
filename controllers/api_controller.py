@@ -144,6 +144,7 @@ class ApiController:
         return list(self.repository.snapshot().traffic)
 
     def overview(self) -> dict:
+        status = self.status()
         state = self.repository.snapshot()
         recent_events = state.events[-25:]
         message_events = [event for event in state.events if event.get("type") == "server_message"][-10:]
@@ -155,13 +156,14 @@ class ApiController:
                 seen_events.add(key)
                 selected_events.append(event)
         return {
-            "status": self.status(),
+            "status": status,
             "servers": self.servers(),
             "clients": self.clients(),
             "blacklist": self.blacklist(),
             "leaks": self.leak_summaries(),
             "recent_events": sorted(selected_events, key=lambda event: event.get("at", 0))[-35:],
             "recent_traffic": self.traffic()[-25:],
+            "metrics_history": list(state.metrics_history),
             "monitor": self.monitor_status(),
         }
 

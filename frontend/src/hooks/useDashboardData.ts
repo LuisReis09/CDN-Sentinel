@@ -60,6 +60,7 @@ const demoOverview: Overview = {
   leaks: [],
   recent_events: [],
   recent_traffic: [],
+  metrics_history: [],
   monitor: {
     automatic: false,
     interval_seconds: 2.5,
@@ -133,6 +134,7 @@ function normalizeOverview(raw: Partial<Overview>): Overview {
     leaks: raw.leaks ?? [],
     recent_events: raw.recent_events ?? [],
     recent_traffic: raw.recent_traffic ?? [],
+    metrics_history: raw.metrics_history ?? [],
     monitor: {
       ...demoOverview.monitor,
       ...(raw.monitor ?? {}),

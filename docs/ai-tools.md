@@ -18,4 +18,4 @@ A ferramenta recebeu o PDF fornecido pelo grupo, o código existente no reposit�
 
 ## Avaliação honesta
 
-O uso foi útil para transformar os requisitos em uma matriz verificável e preencher a documentação ausente. A implementação existente foi preservada quando os testes e o build já passavam. A saída extraída do PDF e a configuração Docker foram conferidas manualmente; comandos e smoke tests ainda são a fonte de verdade para a execução. Nenhum artefato gerado automaticamente deve ser tratado como prova de que a apresentação, a divisão nominal do grupo ou o histórico de commits já estão completos: esses pontos precisam ser confirmados pela equipe.
+O uso foi útil para transformar os requisitos em uma matriz verificável e preencher a documentação ausente. A implementação existente foi preservada quando os testes e o build já passavam. A configuração Docker, o Makefile e os smoke tests são a fonte de verdade para a execução. Nenhum artefato gerado automaticamente deve ser tratado como prova de que a apresentação, a divisão nominal do grupo ou o histórico de commits já estão completos: esses pontos precisam ser confirmados pela equipe.

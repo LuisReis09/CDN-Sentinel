@@ -1,20 +1,27 @@
 # Mídia demonstrativa local
 
-Os três arquivos `cdn-sentinel-demo-*.mp4` são um asset pequeno, versionado e
-reproduzível do projeto. O original foi gerado com `ffmpeg` a partir do filtro
-`testsrc2`, em 320×180, 12 fps e aproximadamente dois segundos. Não contém
-material de terceiros nem exige download externo.
+O Watermark Studio usa `bigbuckbunny.mp4`, um sample real de 10 segundos do
+curta-metragem Big Buck Bunny, em 1280×720. O filme foi produzido pela Blender
+Foundation e o material é distribuído sob CC-BY-3.0; a interface exibe essa
+atribuição na origem do vídeo.
 
-- `original`: fonte de referência.
-- `watermarked`: o mesmo vídeo com uma alteração sutil de luminância e uma
-  região de sinal visual aplicada aos frames.
-- `difference`: `blend=difference` entre os dois arquivos, com contraste
-  amplificado para inspeção.
+Os arquivos `cdn-sentinel-demo-*.mp4` continuam disponíveis como fallback local
+pequeno e reproduzível:
 
-O endpoint expõe todos como `video/mp4` com suporte condicional/range do Flask.
-O `HMAC-SHA256` mostrado no laboratório continua sendo um claim de
-autenticidade inserido no transporte; ele não é confundido com o watermark
-visual dos frames.
+- `cdn-sentinel-demo-original.mp4`: fonte `testsrc2` de controle.
+- `cdn-sentinel-demo-watermarked.mp4`: luminância alterada para testes legados.
+- `cdn-sentinel-demo-difference.mp4`: diferença amplificada do fallback.
 
-O dataset `scikit-video`/Big Buck Bunny permanece opcional (`USE_BIGBUCKBUNNY_DATASET=1`)
-e não é baixado automaticamente.
+Durante uma execução do laboratório, o backend usa FFmpeg para gerar em
+`data/media/generated/` duas variantes temporárias/cacheadas do Big Buck Bunny:
+
+- `watermarked`: 64 bits do digest HMAC distribuídos em uma grade 8×8 de regiões
+  de luminância em cada frame;
+- `difference`: blend real entre o frame original e o frame transformado, com
+  contraste aumentado para inspeção.
+
+O token HMAC prefixado ao chunk é uma prova de transporte separada do sinal
+visual. O detector do laboratório lê o primeiro frame real de ambos os MP4s e
+calcula `bits_correct / bits_total`; os filtros blur, ruído determinístico e
+quantização são aplicados antes da comparação. A pasta `generated/` é cache
+local de runtime e não faz parte do conjunto versionado.

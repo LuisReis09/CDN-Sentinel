@@ -2567,6 +2567,69 @@ label {
 .history-page {
   max-width: 1480px;
 }
+.telemetry-section {
+  margin-top: 13px;
+}
+.section-heading-inline {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.section-heading-inline h2 {
+  margin: 4px 0 0;
+  color: #e9f3ff;
+  font-size: 16px;
+}
+.telemetry-count {
+  color: #7890a7;
+  font: 9px "DM Mono", monospace;
+  text-transform: uppercase;
+}
+.telemetry-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+}
+.telemetry-chart {
+  min-width: 0;
+  padding: 13px 13px 8px;
+}
+.telemetry-chart-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #dcecf6;
+  font-size: 11px;
+}
+.telemetry-chart-heading span {
+  display: grid;
+  place-items: center;
+}
+.telemetry-chart--cyan .telemetry-chart-heading span { color: var(--cyan); }
+.telemetry-chart--red .telemetry-chart-heading span { color: var(--red); }
+.telemetry-chart--orange .telemetry-chart-heading span { color: var(--orange); }
+.telemetry-chart--green .telemetry-chart-heading span { color: var(--green); }
+.telemetry-chart-canvas {
+  height: 210px;
+  margin-top: 8px;
+}
+.telemetry-chart-canvas .recharts-cartesian-axis-tick-value {
+  fill: #7890a7;
+  font-size: 9px;
+}
+.telemetry-chart-canvas .recharts-legend-item-text {
+  color: #7890a7 !important;
+}
+.telemetry-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 20px;
+  color: #7890a7;
+  font-size: 11px;
+}
 .history-toolbar {
   display: flex;
   align-items: center;
@@ -2585,6 +2648,9 @@ label {
 .history-note {
   color: #7890a7;
   font-size: 10px;
+}
+.history-final-topology {
+  margin-top: 13px;
 }
 .history-cards {
   display: grid;

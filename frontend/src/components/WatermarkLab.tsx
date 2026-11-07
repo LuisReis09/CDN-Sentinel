@@ -43,12 +43,11 @@ export function WatermarkLab({
     }
   }
 
-  const videoVariants =
-    demo?.video_variants ?? {
-      original: api.watermarkVideoUrl("cdn_sentinel_demo"),
-      watermarked: api.watermarkVideoUrl("cdn_sentinel_demo", "watermarked"),
-      difference: api.watermarkVideoUrl("cdn_sentinel_demo", "difference"),
-    };
+  const videoVariants = demo?.video_variants ?? {
+    original: api.watermarkVideoUrl("bigbuckbunny"),
+    watermarked: api.watermarkVideoUrl("bigbuckbunny"),
+    difference: api.watermarkVideoUrl("bigbuckbunny"),
+  };
   const process = demo?.cryptographic_process;
   const claim = demo?.claim_before_encoding ?? {};
 

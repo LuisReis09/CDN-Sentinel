@@ -2,8 +2,6 @@ import { Activity, Ban, Globe2, Network, Server, Users } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api";
 import { ControlPanel } from "../components/ControlPanel";
-import { DistributedEvidencePanel } from "../components/DistributedEvidencePanel";
-import { EventLogPanel } from "../components/EventLogPanel";
 import {
   MapBrushToolbar,
   type MapEditMode,
@@ -12,6 +10,7 @@ import { MapPlacementDialog } from "../components/MapPlacementDialog";
 import { MapView } from "../components/MapView";
 import { MetricCard } from "../components/MetricCard";
 import { ScalabilityPanel } from "../components/ScalabilityPanel";
+import { TelemetryCharts } from "../components/TelemetryCharts";
 import type { Overview, ServerNode } from "../types";
 
 interface DashboardPageProps {
@@ -31,10 +30,6 @@ export function DashboardPage({
 }: DashboardPageProps) {
   const { status } = overview;
   const [activeNode, setActiveNode] = useState<string | null>(null);
-  const [selectedLogTarget, setSelectedLogTarget] = useState<{
-    kind: "server" | "client";
-    id: string;
-  } | null>(null);
   const [editMode, setEditMode] = useState<MapEditMode>(null);
   const [placement, setPlacement] = useState<{
     mode: Exclude<MapEditMode, null>;
@@ -173,7 +168,6 @@ export function DashboardPage({
               editMode && setPlacement({ mode: editMode, latitude, longitude })
             }
             onNodeSelect={(kind, id) => {
-              setSelectedLogTarget({ kind, id });
               if (kind === "server") setActiveNode(id);
             }}
           />
@@ -191,14 +185,8 @@ export function DashboardPage({
         selected={activeNode}
         onSelect={setActiveNode}
       />
-      <DistributedEvidencePanel overview={overview} />
+      <TelemetryCharts samples={overview.metrics_history} />
       <ScalabilityPanel status={status} />
-      <EventLogPanel
-        events={overview.recent_events}
-        servers={overview.servers}
-        clients={clients}
-        selected={selectedLogTarget}
-      />
       {placement && (
         <MapPlacementDialog
           mode={placement.mode}

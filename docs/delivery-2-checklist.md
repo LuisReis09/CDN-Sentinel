@@ -12,7 +12,9 @@ Este documento registra o recorte implementado sobre o código real disponível.
 | P1-02 | Gossip síncrono não registrava retry | P1 | `message_id`, deduplicação, hops, ACK e fila de retry local | inspeção de `NodeRepository`/eventos de gossip | concluído |
 | P1-03 | Métrica `load=0` era ambígua | P1 | requests totais, erros, in-flight, janela de 60 s e latências separadas | status `/api/control/simulation/status`, build e smoke | concluído |
 | P1-04 | Não havia experimento de falha acionável | P1 | Network Lab e `POST /api/control/fault/{server_id}` | build frontend; smoke offline→failover | concluído |
-| P1-05 | Dataset externo era requisito implícito | P1 | provider/fallback determinístico e dataset local somente por opt-in | execução sem `USE_BIGBUCKBUNNY_DATASET` | concluído |
+| P1-05 | Dataset externo era requisito implícito | P1 | Big Buck Bunny real versionado + fallback determinístico; dataset adicional somente por opt-in | `make docker-smoke` sem download externo | concluído |
+| P1-06 | Dashboard não mostrava evolução temporal | P1 | `metrics_history` bounded com blacklist, requisições por nó, latência e saúde; gráficos no dashboard/histórico | `docs/test-plan.md` / build frontend | concluído |
+| P1-07 | Ruído visual não era derivado do claim | P1 | FFmpeg aplica 64 bits do digest HMAC em frames reais; detector calcula bits recuperados após filtros | Watermark Studio / `assess_video_robustness` | concluído |
 | P2-01 | Persistência durável e catálogo grande ainda não existem | P2 | interfaces `ContentProvider`/`VideoCatalog`; adaptador futuro documentado | revisão arquitetural | pendente — fora do limite |
 | P2-02 | Cliente HTTP real em massa não é objetivo desta etapa | P2 | poucos processos locais + carga virtual limitada | documentação | pendente — fora do limite |
 
@@ -20,5 +22,5 @@ Este documento registra o recorte implementado sobre o código real disponível.
 
 - P0/P1 implementados sem broker, banco, serviço externo ou credencial nova.
 - O smoke E2E cria processos locais e precisa de portas livres.
-- Persistência Supabase/PostgreSQL e dataset Hugging Face permanecem fora desta entrega.
+- Persistência Supabase/PostgreSQL e dataset Hugging Face permanecem fora desta entrega; o sample Big Buck Bunny usado na demo é local e versionado.
 - A equipe em `docs/responsibilities.md` precisa de confirmação humana antes da apresentação.

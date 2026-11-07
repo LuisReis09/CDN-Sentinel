@@ -41,5 +41,6 @@ Fonte editável: [`c4-containers.puml`](./c4-containers.puml).
 - O controller não acessa diretamente a memória dos nós: usa `CDNHttpClient` para saúde, configuração, streaming e blacklist.
 - `TopologyService` e `choose_server` implementam descoberta/routing por proximidade geográfica entre nós saudáveis.
 - `ApiController.overview()` funciona como composição de dados para o frontend.
+- Cada leitura do status registra uma amostra bounded em `SimulationState.metrics_history`; o overview e o histórico arquivado expõem essa série para os gráficos de blacklist, tráfego por servidor, latência e saúde da CDN.
 - `node_app.py` mantém o estado local do nó e propaga `BLACKLIST_ALERT` por gossip HTTP.
 - O estado do protótipo é deliberadamente em memória; persistência externa fica como trade-off documentado para a Entrega 3.

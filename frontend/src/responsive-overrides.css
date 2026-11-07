@@ -9,6 +9,9 @@
   .history-grid {
     grid-template-columns: 1fr;
   }
+  .telemetry-chart-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
