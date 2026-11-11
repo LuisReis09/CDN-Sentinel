@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from utils.dct_watermark import _decode_scores as _decode_dct_scores, detect_image_dct, embed_image_dct
 from utils.image_watermark import (
     ImageWatermarkUnsupported,
     _decode_score_vector,
@@ -21,7 +22,22 @@ from utils.image_watermark import (
 )
 
 
-VIDEO_STRENGTH = 16.0
+VIDEO_STRENGTH = 24.0
+
+
+def transcode_video(source: Path, destination: Path, crf: int = 24, preset: str = "veryfast") -> dict:
+    """Encode a no-watermark control under the same conditions as embed_video."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-v", "error", "-i", str(source),
+            "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", preset,
+            "-crf", str(crf), "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(destination),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return {"crf": crf, "preset": preset}
 
 
 def _probe(path: Path) -> tuple[int, int, float]:
@@ -47,7 +63,15 @@ def _frame_command(path: Path, width: int, height: int, fps: float) -> list[str]
     ]
 
 
-def embed_video(source: Path, destination: Path, token: str, secret: str, strength: float = VIDEO_STRENGTH) -> dict:
+def embed_video(
+    source: Path,
+    destination: Path,
+    token: str,
+    secret: str,
+    strength: float = VIDEO_STRENGTH,
+    adaptive: bool = True,
+    algorithm: str = "adaptive-spread",
+) -> dict:
     """Watermark a video frame-by-frame with bounded memory usage."""
     width, height, fps = _probe(source)
     frame_size = width * height * 3
@@ -79,7 +103,12 @@ def embed_video(source: Path, destination: Path, token: str, secret: str, streng
                 if len(raw) < frame_size:
                     break
                 frame = Image.frombytes("RGB", (width, height), raw)
-                marked, _metadata = embed_image(frame, token, secret, strength=strength)
+                if algorithm == "dct":
+                    marked, _metadata = embed_image_dct(frame, token, secret, step=strength)
+                elif algorithm == "adaptive-spread":
+                    marked, _metadata = embed_image(frame, token, secret, strength=strength, adaptive=adaptive)
+                else:
+                    raise ValueError(f"algoritmo visual de vídeo não suportado: {algorithm}")
                 encoder.stdin.write(marked.tobytes())
                 processed += 1
             decoder.stdout.close()
@@ -112,10 +141,21 @@ def embed_video(source: Path, destination: Path, token: str, secret: str, streng
     return {"frames_processed": processed, "width": width, "height": height, "fps": fps}
 
 
-def detect_video(path: Path, secret: str, max_frames: int = 24) -> dict:
+def detect_video(
+    path: Path,
+    secret: str,
+    max_frames: int = 24,
+    adaptive: bool = True,
+    algorithm: str = "adaptive-spread",
+    dct_step: float = 10.0,
+) -> dict:
     """Sample a video and aggregate independent frame evidence."""
     width, height, fps = _probe(path)
-    sample_fps = max(1.0, min(float(fps), max_frames / 6.0))
+    # Temporal redundancy is intentional: sample the complete short clip when
+    # possible instead of looking at only a few widely spaced frames. Averaging
+    # independent frame evidence lets the delivered amplitude stay low while
+    # the detector benefits from more observations.
+    sample_fps = max(1.0, min(float(fps), max_frames / 2.0))
     scaled_width = min(width, 640)
     scaled_height = max(2, round(height * scaled_width / width))
     if scaled_height % 2:
@@ -137,12 +177,18 @@ def detect_video(path: Path, secret: str, max_frames: int = 24) -> dict:
                 break
             frame = Image.frombytes("RGB", (scaled_width, scaled_height), raw)
             try:
-                raw_evidence = _decode_scores(frame, secret)
+                if algorithm == "dct":
+                    raw_evidence = _decode_dct_scores(frame, secret, step=dct_step)
+                else:
+                    raw_evidence = _decode_scores(frame, secret, adaptive=adaptive)
                 evidences.append(classify_image_evidence(raw_evidence))
                 score_vectors.append(raw_evidence["scores"])
                 aggregate_layout = raw_evidence["layout"]
             except ImageWatermarkUnsupported:
-                evidences.append(detect_image(frame, secret))
+                if algorithm == "dct":
+                    evidences.append(detect_image_dct(frame, secret, step=dct_step))
+                else:
+                    evidences.append(detect_image(frame, secret, adaptive=adaptive))
         process.stdout.close()
         result = process.wait(timeout=60)
         if result:
@@ -163,6 +209,8 @@ def detect_video(path: Path, secret: str, max_frames: int = 24) -> dict:
             "status": aggregate["status"],
             "marker": aggregate.get("marker"),
             "confidence": aggregate.get("confidence", 0.0),
+            "sync_confidence": aggregate.get("sync_confidence", 0.0),
+            "repetition_consistency": aggregate.get("repetition_consistency", 0.0),
             "frame_support": round(len(candidates) / max(1, len(supported)), 4),
             "frames_sampled": len(evidences),
             "width": width,
@@ -190,7 +238,15 @@ def detect_video(path: Path, secret: str, max_frames: int = 24) -> dict:
     }
 
 
-def assess_video_robustness(source: Path, watermarked: Path, token: str, secret: str) -> list[dict]:
+def assess_video_robustness(
+    source: Path,
+    watermarked: Path,
+    token: str,
+    secret: str,
+    adaptive: bool = True,
+    algorithm: str = "adaptive-spread",
+    dct_step: float = 10.0,
+) -> list[dict]:
     """Run independent detection after reproducible media transformations."""
     expected = visual_marker(token)
     transforms = [
@@ -213,7 +269,7 @@ def assess_video_robustness(source: Path, watermarked: Path, token: str, secret:
                 command = ["ffmpeg", "-y", "-v", "error", "-i", str(input_path), "-t", "2", "-vf", transform, "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", str(crf), "-pix_fmt", "yuv420p", str(sample)]
                 subprocess.run(command, check=True, capture_output=True)
                 generated = True
-            evidence = detect_video(sample, secret)
+            evidence = detect_video(sample, secret, adaptive=adaptive, algorithm=algorithm, dct_step=dct_step)
             recovered = evidence.get("marker")
             bits_total = len(marker_bits(expected))
             bits_correct = sum(
@@ -232,7 +288,7 @@ def assess_video_robustness(source: Path, watermarked: Path, token: str, secret:
                 "frame_support": evidence.get("frame_support", 0.0),
                 "status": evidence.get("status"),
                 "sample_generated": generated,
-                "sample_method": "detecção independente em amostra MP4 H.264",
+                "sample_method": f"detecção independente em amostra MP4 H.264 ({algorithm})",
                 "confidence_method": "sincronização conhecida + consistência das repetições; autenticidade separada pelo registro do token",
                 "survives": (not is_negative) and evidence.get("status") == "CANDIDATE" and recovered == expected,
             })

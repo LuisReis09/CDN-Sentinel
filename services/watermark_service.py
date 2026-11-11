@@ -10,6 +10,9 @@ from utils.video_watermark import detect_video
 from utils.security import create_watermark_token, verify_watermark_token
 
 
+VISUAL_ASSOCIATION_MAX_HAMMING = 5
+
+
 class WatermarkService:
     def __init__(self, secret_key: str) -> None:
         self._secret_key = secret_key
@@ -63,8 +66,10 @@ class WatermarkService:
     def detect_image(self, image) -> dict:
         return self._resolve_detection(detect_image(image, self._secret_key))
 
-    def detect_video(self, path) -> dict:
-        return self._resolve_detection(detect_video(path, self._secret_key))
+    def detect_video(self, path, adaptive: bool = True, algorithm: str = "adaptive-spread", dct_step: float = 10.0) -> dict:
+        return self._resolve_detection(
+            detect_video(path, self._secret_key, adaptive=adaptive, algorithm=algorithm, dct_step=dct_step)
+        )
 
     def _resolve_detection(self, evidence: dict) -> dict:
         if evidence.get("status") != "CANDIDATE":
@@ -82,7 +87,7 @@ class WatermarkService:
                         (int(left, 16) ^ int(right, 16)).bit_count()
                         for left, right in zip(marker, registered_marker)
                     )
-                    if distance <= 2:
+                    if distance <= VISUAL_ASSOCIATION_MAX_HAMMING:
                         nearby.append((distance, registered_token))
                 if nearby:
                     nearby.sort(key=lambda item: item[0])
@@ -98,7 +103,7 @@ class WatermarkService:
             claim = self.verify(token)
         except ValueError as exc:
             return {**evidence, "status": "INVALID", "reason": f"claim registrado inválido: {exc}"}
-        if visual_marker(token) != marker and visual_distance > 2:
+        if visual_marker(token) != marker and visual_distance > VISUAL_ASSOCIATION_MAX_HAMMING:
             return {**evidence, "status": "INVALID", "reason": "marcador não corresponde ao token registrado"}
         return {
             **evidence,

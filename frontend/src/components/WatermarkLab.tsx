@@ -91,7 +91,7 @@ export function WatermarkLab({
             videoUrl={videoVariants.difference}
             variant="difference"
             label="3 · Sinal destacado"
-            description="escala de cinza sobre fundo preto; somente o sinal amplificado"
+            description="diferença amplificada para auditoria; não é o vídeo entregue ao cliente"
           />
         </div>
       ) : (

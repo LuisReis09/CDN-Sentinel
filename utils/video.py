@@ -10,12 +10,14 @@ from pathlib import Path
 from typing import Tuple
 
 from services.content_provider import DatasetContentProvider, default_content_id
-from utils.video_watermark import embed_video
+from utils.video_watermark import VIDEO_STRENGTH, embed_video, transcode_video
+from utils.image_watermark import ADAPTIVE_MASK_FLOOR, CARRIER_BLOCK, DATA_BITS, SYNC_BITS, DATA_REPETITIONS
 
 
 MEDIA_ROOT = Path(__file__).resolve().parents[1] / "data" / "media"
 GENERATED_ROOT = MEDIA_ROOT / "generated"
-VISUAL_WATERMARK_VERSION = "independent-v7-keyed-spread-spectrum-48bit"
+VISUAL_WATERMARK_VERSION = "independent-v9-adaptive-perceptual-spread-40bit"
+VISUAL_WATERMARK_ALGORITHM = "adaptive-spread"
 VIDEO_CATALOG = (
     ("bigbuckbunny", "Big Buck Bunny · clipe real", "bigbuckbunny.mp4"),
     ("cdn_sentinel_demo", "CDN-Sentinel demo · original", "cdn-sentinel-demo-original.mp4"),
@@ -188,7 +190,9 @@ def generate_visual_variants(video_id: str, token: str, secret_key: str | None =
     """Create cached MP4 variants with the keyed visual marker embedded in frames."""
     source, _ = get_video_asset(video_id, "original")
     generated_id = hashlib.sha256(
-        f"{VISUAL_WATERMARK_VERSION}:{source}:{source.stat().st_mtime_ns}:{token}".encode()
+        f"{VISUAL_WATERMARK_VERSION}:{VISUAL_WATERMARK_ALGORITHM}:{VIDEO_STRENGTH}:"
+        f"{ADAPTIVE_MASK_FLOOR}:{CARRIER_BLOCK}:{DATA_BITS}:{SYNC_BITS}:{DATA_REPETITIONS}:"
+        f"diagnostic-lut8:{source}:{source.stat().st_mtime_ns}:{token}".encode()
     ).hexdigest()[:16]
     watermarked = GENERATED_ROOT / f"{generated_id}-watermarked.mp4"
     difference = GENERATED_ROOT / f"{generated_id}-difference.mp4"
@@ -198,13 +202,23 @@ def generate_visual_variants(video_id: str, token: str, secret_key: str | None =
     GENERATED_ROOT.mkdir(parents=True, exist_ok=True)
     partial_watermarked = watermarked.with_suffix(".part.mp4")
     partial_difference = difference.with_suffix(".part.mp4")
+    partial_control = watermarked.with_suffix(".control.part.mp4")
     try:
-        embed_video(source, partial_watermarked, token, secret_key or os.getenv("CDN_SECRET_KEY", "local-development-secret"))
+        embed_video(
+            source,
+            partial_watermarked,
+            token,
+            secret_key or os.getenv("CDN_SECRET_KEY", "local-development-secret"),
+            strength=VIDEO_STRENGTH,
+            adaptive=True,
+            algorithm=VISUAL_WATERMARK_ALGORITHM,
+        )
+        transcode_video(source, partial_control, crf=24, preset="veryfast")
         subprocess.run(
             [
-                "ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-i", str(partial_watermarked),
-                "-filter_complex", "[1:v][0:v]blend=all_mode=difference,eq=contrast=10:brightness=0.5",
-                "-map", "0:v:0", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(partial_difference),
+                "ffmpeg", "-y", "-loglevel", "error", "-i", str(partial_control), "-i", str(partial_watermarked),
+                "-filter_complex", "[1:v][0:v]blend=all_mode=difference,format=gray,lut=y=val*8[diff]",
+                "-map", "[diff]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(partial_difference),
             ],
             check=True,
             capture_output=True,
@@ -214,7 +228,7 @@ def generate_visual_variants(video_id: str, token: str, secret_key: str | None =
         partial_watermarked.replace(watermarked)
         partial_difference.replace(difference)
     finally:
-        for partial in (partial_watermarked, partial_difference):
+        for partial in (partial_watermarked, partial_difference, partial_control):
             if partial.exists():
                 partial.unlink()
     return generated_id

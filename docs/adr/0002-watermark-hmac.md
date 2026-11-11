@@ -10,7 +10,7 @@ O monitor precisa identificar cliente, servidor, instante e chunk de uma cópia 
 
 ## Decisão
 
-Emitir tokens `CDNWM3.<nonce+ciphertext+tag-base64url>.<assinatura-hex>`, mantendo leitura compatível de `CDNWM1`/`CDNWM2`. O claim contém `client_id`, `server_id`, `issued_at`, `chunk_id` e `content_id`; ele é cifrado com AES-256-GCM e o envelope é assinado com HMAC-SHA256 por uma chave mantida no backend. O token é prefixado ao chunk para extração e descriptografia durante a simulação. O Watermark Studio deriva um localizador visual de 48 bits do digest do token, aplica uma portadora de baixa frequência nos frames locais disponíveis e mede a recuperação independente em amostras MP4 H.264 transformadas.
+Emitir tokens `CDNWM3.<nonce+ciphertext+tag-base64url>.<assinatura-hex>`, mantendo leitura compatível de `CDNWM1`/`CDNWM2`. O claim contém `client_id`, `server_id`, `issued_at`, `chunk_id` e `content_id`; ele é cifrado com AES-256-GCM e o envelope é assinado com HMAC-SHA256 por uma chave mantida no backend. O token é prefixado ao chunk para extração e descriptografia durante a simulação. O Watermark Studio deriva um localizador visual de 40 bits do digest do token, aplica mascaramento perceptual e portadora de baixa frequência nos frames locais disponíveis e mede a recuperação independente em amostras MP4 H.264 transformadas.
 
 ## Consequências
 
