@@ -6,6 +6,9 @@ services:
     environment:
       CDN_SECRET_KEY: ${CDN_SECRET_KEY:-local-development-secret}
       USE_BIGBUCKBUNNY_DATASET: ${USE_BIGBUCKBUNNY_DATASET:-0}
+      CDN_DATASET_ROOT: /app/data/datasets/youtube_clipped_videos
+    volumes:
+      - ${CDN_DATASET_DIR:-./data/datasets/youtube_clipped_videos}:/app/data/datasets/youtube_clipped_videos:ro
     ports:
       - "${BACKEND_PORT:-5000}:5000"
     healthcheck:

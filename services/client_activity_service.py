@@ -7,13 +7,17 @@ import uuid
 
 from repositories.in_memory import SimulationRepository
 from services.stream_service import ClientOfflineError, SimulationPausedError, StreamService
+from services.content_provider import default_content_id
 from utils.geo import haversine_km
+from utils.latency import propagation_delay_seconds
 
 
 class ClientActivityService:
     """Advances one shared simulation tick and produces client session churn."""
 
-    def __init__(self, repository: SimulationRepository, stream_service: StreamService, interval_seconds: float = 2.5) -> None:
+    session_transition_probability = 0.2
+
+    def __init__(self, repository: SimulationRepository, stream_service: StreamService, interval_seconds: float = 2.5, on_tick=None) -> None:
         self._repository = repository
         self._stream_service = stream_service
         self._interval_seconds = interval_seconds
@@ -21,6 +25,10 @@ class ClientActivityService:
         self._random = random.Random(20261101)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._on_tick = on_tick
+
+    def set_on_tick(self, callback) -> None:
+        self._on_tick = callback
 
     def start(self, tick_interval_seconds: float = 2.5) -> None:
         self.stop()
@@ -35,6 +43,10 @@ class ClientActivityService:
             self._thread.join(timeout=1.0)
         self._thread = None
 
+    def configure_tick_interval(self, tick_interval_seconds: float) -> None:
+        """Change the cadence for the next wait without recreating the worker."""
+        self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
+
     def _run(self) -> None:
         tick = 0
         while not self._stop_event.wait(self._tick_interval_seconds):
@@ -47,17 +59,14 @@ class ClientActivityService:
                 "at": time.time(),
                 "tick": tick,
                 "tick_interval_seconds": self._tick_interval_seconds,
-                "session_transition_probability": 0.2,
+                "session_transition_probability": self.session_transition_probability,
             })
             clients = [client for client in state.clients.values() if client.active]
             if len(clients) > 250:
                 self._advance_virtual_clients(state, clients, tick)
             else:
                 for client in clients:
-                    if self._random.random() < 0.2:
-                        client.online = not client.online
-                        event_type = "client_connected" if client.online else "client_disconnected"
-                        self._repository.append_event({"type": event_type, "at": time.time(), "client_id": client.client_id, "tick": tick, "probability": 0.2, "reason": "tick_session_churn", "videos_consumed": client.videos_consumed})
+                    self._maybe_toggle_client(client, tick)
                     if not client.online:
                         continue
                     try:
@@ -65,16 +74,22 @@ class ClientActivityService:
                     except (ClientOfflineError, SimulationPausedError, PermissionError, RuntimeError, OSError):
                         continue
             self._emit_server_communications(state, tick)
+            if self._on_tick:
+                try:
+                    self._on_tick()
+                except Exception as exc:
+                    self._repository.append_event({"type": "management_tick_failed", "at": time.time(), "error": str(exc)})
 
     def _advance_virtual_clients(self, state, clients: list, tick: int) -> None:
         """Account for large populations without one subprocess/request per client."""
         # A bounded sample keeps session churn visible without making a tick
         # O(number of clients). The demand calculation below still uses every
         # online client in the population.
-        sample_step = max(1, len(clients) // 128)
-        for client in clients[::sample_step][:128]:
-            if self._random.random() < 0.2:
-                client.online = not client.online
+        sample_size = min(128, len(clients))
+        sample_start = (tick * sample_size) % max(1, len(clients))
+        sampled_clients = [clients[(sample_start + index) % len(clients)] for index in range(sample_size)]
+        for client in sampled_clients:
+            self._maybe_toggle_client(client, tick)
 
         online_clients = [client for client in clients if client.online]
         demand_rps = len(online_clients) * float(state.config.get("demand_rps_per_client", 0.25))
@@ -104,7 +119,11 @@ class ClientActivityService:
             client = online_clients[index % len(online_clients)]
             distance = haversine_km(client.latitude, client.longitude, server.latitude, server.longitude)
             utilization = demand_rps / max(total_capacity, 1.0)
-            latency = round(18.0 + min(240.0, distance * 0.006 * float(state.config.get("latency_factor", 1.0))), 3)
+            # The virtual path follows the same geospatial model as a real
+            # stream.  Distance is the only latency input exposed to the
+            # simulation; a client twice as far observes roughly twice the
+            # propagation delay (before queueing and HTTP overhead).
+            latency = round(propagation_delay_seconds(distance, 1.0) * 1000, 3)
             rejected = max(0, round(request_count * max(0.0, utilization - 1.0)))
             server.requests_total += request_count
             server.errors_total += rejected
@@ -115,6 +134,22 @@ class ClientActivityService:
             server.queue_depth = max(0, round((server.utilization - 0.9) * 20))
             server.queue_rejected += rejected
             server.queue_wait_ms = round(max(0.0, (server.utilization - 0.75) * 120), 3)
+            client.videos_consumed += request_count
+            client.last_activity_at = time.time()
+            watch_record = {
+                "at": time.time(),
+                "video_id": state.config.get("video_id") or default_content_id(),
+                "chunk_number": client.videos_consumed % 5,
+                "chunk_id": f"batch-chunk-{tick}-{server.server_id}",
+                "server_id": server.server_id,
+                "latency_ms": round(latency + server.queue_wait_ms, 3),
+                "network_latency_ms": latency,
+                "queue_wait_ms": server.queue_wait_ms,
+                "liked": None,
+            }
+            client.watch_history.append(watch_record)
+            client.watch_history = client.watch_history[-100:]
+            self._stream_service.record_delivery_feedback(client, watch_record)
             self._repository.append_traffic({
                 "at": time.time(),
                 "request_id": f"batch-{tick}-{server.server_id}",
@@ -144,6 +179,25 @@ class ClientActivityService:
             "reason": "agregação de telemetria para população grande",
         })
 
+    def _maybe_toggle_client(self, client, tick: int) -> None:
+        """Toggle sessions in both directions, but only after first delivery."""
+        if client.videos_consumed < 1:
+            client.online = True
+            return
+        if self._random.random() >= self.session_transition_probability:
+            return
+        client.online = not client.online
+        event_type = "client_connected" if client.online else "client_disconnected"
+        self._repository.append_event({
+            "type": event_type,
+            "at": time.time(),
+            "client_id": client.client_id,
+            "tick": tick,
+            "probability": self.session_transition_probability,
+            "reason": "tick_session_churn_after_first_video",
+            "videos_consumed": client.videos_consumed,
+        })
+
     def _emit_server_communications(self, state, tick: int) -> None:
         online_count = sum(1 for client in state.clients.values() if client.online)
         peers = [server for server in state.servers.values() if server.status in {"healthy", "degraded", "overloaded"} and server.process_mode == "http"]
@@ -164,8 +218,8 @@ class ClientActivityService:
             probability = 0.12
             payload_summary = "content_id + versão do asset + região de origem"
             message = {
-                "content_id": state.config.get("video_id", "bigbuckbunny"),
-                "content_title": state.config.get("video_id", "bigbuckbunny"),
+                "content_id": state.config.get("video_id") or default_content_id(),
+                "content_title": state.config.get("video_id") or default_content_id(),
                 "asset_version": f"tick-{tick:04d}",
                 "region": source.city,
                 "delivery_mode": "edge_prefetch",
@@ -176,8 +230,8 @@ class ClientActivityService:
             probability = 0.30
             payload_summary = "content_id + contagem de viewers + metadados de catálogo"
             message = {
-                "content_id": state.config.get("video_id", "bigbuckbunny"),
-                "content_title": state.config.get("video_id", "bigbuckbunny"),
+                "content_id": state.config.get("video_id") or default_content_id(),
+                "content_title": state.config.get("video_id") or default_content_id(),
                 "viewer_count_delta": online_count,
                 "region": source.city,
                 "metadata_version": f"catalog-{tick:04d}",
@@ -189,8 +243,8 @@ class ClientActivityService:
             probability = 0.20
             payload_summary = "utilização por nó + folga de capacidade + fila"
             message = {
-                "content_id": state.config.get("video_id", "bigbuckbunny"),
-                "content_title": state.config.get("video_id", "bigbuckbunny"),
+                "content_id": state.config.get("video_id") or default_content_id(),
+                "content_title": state.config.get("video_id") or default_content_id(),
                 "capacity_signal": round(max(float(server.utilization or 0) for server in peers), 3),
                 "queue_depth": max(int(server.queue_depth or 0) for server in peers),
                 "region": source.city,
@@ -229,4 +283,5 @@ class ClientActivityService:
                 "payload_summary": payload_summary,
                 "error": str(exc),
             })
+
 

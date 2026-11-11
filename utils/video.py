@@ -9,12 +9,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Tuple
 
+from services.content_provider import DatasetContentProvider, default_content_id
 from utils.robust_watermark import marker_bits, signal_rects
 
 
 MEDIA_ROOT = Path(__file__).resolve().parents[1] / "data" / "media"
 GENERATED_ROOT = MEDIA_ROOT / "generated"
-VISUAL_WATERMARK_VERSION = "subtle-v4-gray-difference"
+VISUAL_WATERMARK_VERSION = "subtle-v5-validated-gray-difference"
 VIDEO_CATALOG = (
     ("bigbuckbunny", "Big Buck Bunny · clipe real", "bigbuckbunny.mp4"),
     ("cdn_sentinel_demo", "CDN-Sentinel demo · original", "cdn-sentinel-demo-original.mp4"),
@@ -36,7 +37,7 @@ def _dataset_root() -> Path:
 
 
 def list_video_examples() -> list[dict[str, str]]:
-    """Return valid local MP4 examples; the real BBB clip is always preferred."""
+    """Return valid local MP4 examples, including downloaded dataset clips."""
     examples: list[dict[str, str]] = []
     for video_id, label, filename in VIDEO_CATALOG[:4]:
         path = MEDIA_ROOT / filename
@@ -71,14 +72,37 @@ def list_video_examples() -> list[dict[str, str]]:
                 for video_id, label, filename in VIDEO_CATALOG[4:]
                 if (root / filename).is_file()
             )
+    dataset_provider = DatasetContentProvider()
+    for item in dataset_provider.list_catalog():
+        relative_path = item.content_id.removeprefix("youtube_clipped_videos/")
+        path = dataset_provider.root / relative_path
+        content_type = item.content_type
+        examples.append(
+            {
+                "video_id": item.content_id,
+                "label": item.title,
+                "filename": path.relative_to(dataset_provider.root).as_posix(),
+                "content_type": content_type,
+                "source": item.source,
+                "resolution": "dataset",
+                "size_bytes": str(path.stat().st_size),
+            }
+        )
     return examples
 
 
 def choose_video_example(exclude_video_id: str | None = None) -> dict[str, str]:
-    """Choose a deterministic local example, preferring the real BBB clip."""
+    """Choose a deterministic local example, preferring the downloaded dataset."""
     examples = list_video_examples()
     if not examples:
         raise FileNotFoundError("nenhum vídeo MP4 local está disponível")
+    dataset_examples = [
+        item for item in examples if item["source"] == "kishan51/youtube_clipped_videos"
+    ]
+    if dataset_examples:
+        candidates = [item for item in dataset_examples if item["video_id"] != exclude_video_id]
+        if candidates:
+            return candidates[0]
     preferred = next((item for item in examples if item["video_id"] == "bigbuckbunny"), None)
     if preferred and preferred["video_id"] != exclude_video_id:
         return preferred
@@ -94,19 +118,25 @@ def _generated_variant_path(generated_id: str, variant: str) -> Path:
     path = GENERATED_ROOT / f"{generated_id}-{variant}.mp4"
     if not path.is_file():
         raise FileNotFoundError(f"variante gerada não encontrada: {generated_id}/{variant}")
+    if variant == "difference" and not _difference_is_valid(path):
+        raise FileNotFoundError(f"variante de diferença inválida: {generated_id}; execute a demonstração novamente")
     return path
 
 
 def get_video_asset(
-    video_id: str = "bigbuckbunny",
+    video_id: str | None = None,
     variant: str = "original",
     generated_id: str | None = None,
 ) -> tuple[Path, str]:
     """Resolve a named MP4 asset and MIME type without allowing path traversal."""
+    video_id = video_id or default_content_id()
     if generated_id:
         return _generated_variant_path(generated_id, variant), "video/mp4"
+    dataset_provider = DatasetContentProvider()
+    if dataset_provider.supports(video_id):
+        return dataset_provider.resolve_asset(video_id)
     aliases = {
-        "original": "bigbuckbunny",
+        "original": default_content_id(),
         "watermarked": "cdn_sentinel_demo_watermarked",
         "difference": "cdn_sentinel_demo_difference",
     }
@@ -120,6 +150,8 @@ def get_video_asset(
     path = MEDIA_ROOT / selected["filename"]
     if selected["source"] == "scikit-video-local":
         path = _dataset_root() / selected["filename"]
+    elif selected["source"] == "kishan51/youtube_clipped_videos":
+        path, _ = dataset_provider.resolve_asset(selected_id)
     if not path.is_file():
         raise FileNotFoundError(f"vídeo não encontrado: {selected_id}")
     return path, selected["content_type"]
@@ -136,6 +168,22 @@ def _probe_dimensions(path: Path) -> tuple[int, int]:
     return int(width), int(height)
 
 
+def _difference_is_valid(path: Path) -> bool:
+    """Reject stale/buggy cached difference videos that render as a white card."""
+    try:
+        frame = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(path), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"],
+            check=True,
+            capture_output=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    if not frame:
+        return False
+    average = sum(frame) / len(frame)
+    return average < 128 and max(frame) - min(frame) >= 8
+
+
 def generate_visual_variants(video_id: str, token: str) -> str:
     """Create cached MP4 variants with the HMAC-derived signal embedded in frames."""
     source, _ = get_video_asset(video_id, "original")
@@ -144,7 +192,7 @@ def generate_visual_variants(video_id: str, token: str) -> str:
     ).hexdigest()[:16]
     watermarked = GENERATED_ROOT / f"{generated_id}-watermarked.mp4"
     difference = GENERATED_ROOT / f"{generated_id}-difference.mp4"
-    if watermarked.is_file() and difference.is_file():
+    if watermarked.is_file() and difference.is_file() and _difference_is_valid(difference):
         return generated_id
 
     width, height = _probe_dimensions(source)
@@ -157,6 +205,13 @@ def generate_visual_variants(video_id: str, token: str) -> str:
         color = "white@0.015" if bit else "black@0.015"
         filters.append(f"drawbox=x={x}:y={y}:w={block_width}:h={block_height}:color={color}:t=fill")
     watermark_filter = ",".join(filters + ["format=yuv420p"])
+    signal_filters = ["format=gray", "lut=y=0"]
+    for bit, (x, y, block_width, block_height) in zip(bits, signal_rects(width, height)):
+        color = "white" if bit else "black"
+        signal_filters.append(
+            f"drawbox=x={x}:y={y}:w={block_width}:h={block_height}:color={color}:t=fill"
+        )
+    difference_filter = ",".join(signal_filters + ["format=yuv420p"])
     GENERATED_ROOT.mkdir(parents=True, exist_ok=True)
     partial_watermarked = watermarked.with_suffix(".part.mp4")
     partial_difference = difference.with_suffix(".part.mp4")
@@ -167,10 +222,12 @@ def generate_visual_variants(video_id: str, token: str) -> str:
             capture_output=True,
         )
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-i", str(partial_watermarked), "-filter_complex", "[0:v][1:v]blend=all_mode=difference,format=gray,lut=y='clip(val*10,0,255)',format=yuv420p[v]", "-map", "[v]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(partial_difference)],
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-vf", difference_filter, "-map", "0:v:0", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(partial_difference)],
             check=True,
             capture_output=True,
         )
+        if not _difference_is_valid(partial_difference):
+            raise RuntimeError("a diferença visual gerada ficou saturada; variante descartada")
         partial_watermarked.replace(watermarked)
         partial_difference.replace(difference)
     finally:
@@ -180,7 +237,7 @@ def generate_visual_variants(video_id: str, token: str) -> str:
     return generated_id
 
 
-def get_video_chunk(chunk_number: int = 0, video_id: str = "bigbuckbunny") -> Tuple[bytes, str]:
+def get_video_chunk(chunk_number: int = 0, video_id: str | None = None) -> Tuple[bytes, str]:
     """Return the deterministic local MP4 as a transport sample."""
     del chunk_number
     path, content_type = get_video_asset(video_id, "original")

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from flask import request, send_file
+import json
+import time
+
+from flask import Response, request, send_file, stream_with_context
 from flask_restx import Namespace, Resource, fields
 
 from controllers.api_controller import ApiController
+from services.content_provider import default_content_id
 from services.stream_service import ClientOfflineError, SimulationPausedError
 from utils.video import get_video_asset
 
@@ -16,6 +20,7 @@ def register_api_routes(api, controller: ApiController) -> None:
     security = api.namespace("security", path="/api/security", description="Forensic security and governance")
     monitor = api.namespace("monitor", path="/api/monitor", description="Piracy monitor")
     observability = api.namespace("observability", path="/api/observability", description="Events and traffic telemetry")
+    management = api.namespace("management", path="/api/management", description="Simulador didático de gestão da CDN")
 
     init_model = api.model(
         "SimulationInit",
@@ -26,7 +31,7 @@ def register_api_routes(api, controller: ApiController) -> None:
             "latency_factor": fields.Float(description="Multiplicador da latência geográfica", default=1.0, min=0, max=20),
             "base_node_port": fields.Integer(description="Primeira porta dedicada aos nós", default=5101, min=1024, max=64000),
             "secret_key": fields.String(description="Chave HMAC da CDN", required=False),
-            "video_id": fields.String(description="Identificador do conteúdo", default="bigbuckbunny"),
+            "video_id": fields.String(description="Identificador do conteúdo", default=default_content_id()),
             "tick_interval_seconds": fields.Float(description="Intervalo real entre ticks do sistema, em segundos", default=2.5, min=0.5, max=5),
             "base_client_port": fields.Integer(description="Base opcional para processos de cliente", default=6101, min=1024, max=64000),
             "monthly_client_price_usd": fields.Float(description="Preço didático por cliente/mês em USD", default=25.0, min=0),
@@ -100,6 +105,16 @@ def register_api_routes(api, controller: ApiController) -> None:
             "longitude": fields.Float(required=True, min=-180, max=180),
             "city": fields.String(description="Nome exibido no mapa"),
             "malicious": fields.Boolean(default=False),
+        },
+    )
+    client_feedback_model = api.model(
+        "ClientFeedback",
+        {
+            "video_id": fields.String(description="Conteúdo avaliado"),
+            "chunk_number": fields.Integer(description="Chunk assistido", min=0),
+            "liked": fields.Boolean(required=True, description="Like ou dislike"),
+            "rating": fields.Integer(description="Nota opcional de 1 a 5", min=1, max=5),
+            "comment": fields.String(description="Comentário opcional", max_length=280),
         },
     )
     server_create_model = api.model(
@@ -238,6 +253,19 @@ def register_api_routes(api, controller: ApiController) -> None:
             except RuntimeError as exc:
                 return {"error": str(exc)}, 409
 
+    @clients.route("/<string:client_id>/feedback")
+    @clients.param("client_id", "ID do cliente cadastrado")
+    class ClientFeedbackResource(Resource):
+        @clients.doc(description="Registra like/dislike e relaciona a percepção do cliente à latência da última entrega.")
+        @clients.expect(client_feedback_model, validate=True)
+        def post(self, client_id: str):
+            try:
+                return controller.client_feedback(client_id, request.get_json(silent=True) or {})
+            except KeyError as exc:
+                return {"error": str(exc)}, 404
+            except ValueError as exc:
+                return {"error": str(exc)}, 400
+
     @clients.route("/<string:client_id>/stream")
     @clients.param("client_id", "ID do cliente cadastrado")
     class ClientStreamResource(Resource):
@@ -292,6 +320,8 @@ def register_api_routes(api, controller: ApiController) -> None:
                 return controller.watermark_demo(request.get_json(silent=True) or {})
             except (TypeError, ValueError) as exc:
                 return {"error": str(exc)}, 400
+            except (FileNotFoundError, OSError, RuntimeError) as exc:
+                return {"error": str(exc), "hint": "a variante visual não pôde ser gerada; tente novamente com o clipe local"}, 503
 
     @security.route("/watermark/demo/video")
     class WatermarkDemoVideoResource(Resource):
@@ -355,9 +385,80 @@ def register_api_routes(api, controller: ApiController) -> None:
             """Return dashboard data in one request."""
             return controller.overview()
 
+    @observability.route("/realtime/stream")
+    class RealtimeStreamResource(Resource):
+        @observability.doc(description="Canal persistente SSE para estado, telemetria e gestão.")
+        def get(self):
+            """Push bounded snapshots over one long-lived connection."""
+            @stream_with_context
+            def generate():
+                yield ": cdn-sentinel realtime connected\n\n"
+                while True:
+                    payload = controller.overview()
+                    # The map does not need the full 2,000-client sample on
+                    # every frame; the regular endpoint remains authoritative.
+                    payload["clients"] = payload.get("clients", [])[:600]
+                    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                    yield f"event: overview\ndata: {encoded}\n\n"
+                    time.sleep(1.5)
+
+            return Response(
+                generate(),
+                mimetype="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
     @observability.route("/history")
     class SimulationHistoryResource(Resource):
         @observability.doc(description="Lista históricos completos de simulações encerradas em memória.")
         def get(self):
             return {"histories": controller.history(request.args.get("simulation_id"))}
+
+    @management.route("/state")
+    class ManagementStateResource(Resource):
+        @management.doc(description="Retorna o estado canônico do simulador de gestão: negócio, demanda, custos e nós.")
+        def get(self):
+            try:
+                return controller.management_state()
+            except RuntimeError as exc:
+                return {"error": str(exc)}, 409
+
+    @management.route("/actions")
+    class ManagementActionsResource(Resource):
+        @management.doc(description="Lista exatamente as seis categorias de ações econômicas e aceita uma decisão validada pelo backend.")
+        def get(self):
+            return {"actions": controller.management_actions()}
+
+        def post(self):
+            try:
+                return controller.management_apply_action(request.get_json(silent=True) or {}), 202
+            except (ValueError, RuntimeError, KeyError) as exc:
+                return {"error": str(exc)}, 409
+
+    @management.route("/scenarios")
+    class ManagementScenariosResource(Resource):
+        def get(self):
+            return {"scenarios": controller.management_scenarios()}
+
+    @management.route("/scenarios/start")
+    class ManagementScenarioStartResource(Resource):
+        def post(self):
+            try:
+                return controller.management_start_scenario(request.get_json(silent=True) or {}), 201
+            except (ValueError, RuntimeError, KeyError) as exc:
+                return {"error": str(exc)}, 409
+
+    @management.route("/history")
+    class ManagementHistoryResource(Resource):
+        def get(self):
+            return {"history": controller.management_history()}
+
+    @management.route("/reset")
+    class ManagementResetResource(Resource):
+        def post(self):
+            try:
+                return controller.management_reset()
+            except (ValueError, RuntimeError) as exc:
+                return {"error": str(exc)}, 409
+
 

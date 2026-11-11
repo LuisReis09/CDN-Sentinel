@@ -38,7 +38,8 @@ export function NoiseVideoPreview({
           />
         )}
         <span className="noise-video__source-badge">
-          MP4 real · {variant === "original" ? "fonte" : "transformação de pixels"}
+          MP4 real ·{" "}
+          {variant === "original" ? "fonte" : "transformação de pixels"}
         </span>
       </div>
       <div className="noise-video__caption">
@@ -48,3 +49,4 @@ export function NoiseVideoPreview({
     </div>
   );
 }
+

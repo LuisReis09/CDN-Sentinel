@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Overview } from "../types";
 
+const DEFAULT_VIDEO_ID = "youtube_clipped_videos";
+
 const demoOverview: Overview = {
   status: {
     initialized: false,
@@ -21,9 +23,8 @@ const demoOverview: Overview = {
       num_servers: 0,
       num_clients: 0,
       malicious_probability: 0.25,
-      latency_factor: 1,
       base_node_port: 5101,
-      video_id: "bigbuckbunny",
+      video_id: DEFAULT_VIDEO_ID,
       tick_interval_seconds: 2.5,
       base_client_port: 6101,
       monthly_client_price_usd: 25,
@@ -37,7 +38,7 @@ const demoOverview: Overview = {
     scalability: {
       online_clients: 0,
       healthy_servers: 0,
-      capacity_per_server: 8,
+      capacity_per_server: 0,
       total_capacity: 0,
       utilization: 0,
       profile: "indisponível",
@@ -87,9 +88,8 @@ function normalizeOverview(raw: Partial<Overview>): Overview {
     num_servers: status.configuration?.num_servers ?? 0,
     num_clients: status.configuration?.num_clients ?? 0,
     malicious_probability: status.configuration?.malicious_probability ?? 0.25,
-    latency_factor: status.configuration?.latency_factor ?? 1,
     base_node_port: status.configuration?.base_node_port ?? 5101,
-    video_id: status.configuration?.video_id ?? "bigbuckbunny",
+    video_id: status.configuration?.video_id ?? DEFAULT_VIDEO_ID,
     tick_interval_seconds: status.configuration?.tick_interval_seconds ?? 2.5,
     base_client_port: status.configuration?.base_client_port ?? 6101,
     monthly_client_price_usd:
@@ -136,6 +136,12 @@ function normalizeOverview(raw: Partial<Overview>): Overview {
       process_id: client.process_id ?? null,
       process_status: client.process_status ?? "unknown",
       last_activity_at: client.last_activity_at ?? null,
+      watch_history: client.watch_history ?? [],
+      feedback_history: client.feedback_history ?? [],
+      likes: client.likes ?? 0,
+      dislikes: client.dislikes ?? 0,
+      feedback_score: client.feedback_score ?? 0,
+      feedback_latency_avg_ms: client.feedback_latency_avg_ms ?? 0,
     })),
     blacklist: raw.blacklist ?? [],
     leaks: raw.leaks ?? [],
@@ -200,10 +206,30 @@ export function useDashboardData() {
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 3000);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+    const source = new EventSource(api.realtimeUrl());
+    const handleOverview = (event: MessageEvent<string>) => {
+      try {
+        const data = normalizeOverview(JSON.parse(event.data) as Partial<Overview>);
+        setOverview(data);
+        setConnected(true);
+        setLastSuccessAt(Date.now());
+        setError(null);
+        setLoading(false);
+      } catch {
+        setError("O backend enviou um snapshot inválido");
+      }
+    };
+    source.addEventListener("overview", handleOverview as EventListener);
+    source.onerror = () => {
+      setConnected(false);
+      setError("Canal realtime indisponível; tentando reconectar");
+      setLoading(false);
+    };
+    return () => {
+      source.removeEventListener("overview", handleOverview as EventListener);
+      source.close();
+    };
+  }, []);
 
   const freshness = connected ? "LIVE" : lastSuccessAt ? "STALE" : "OFFLINE";
   return {
@@ -217,3 +243,4 @@ export function useDashboardData() {
     setOverview,
   };
 }
+

@@ -1,18 +1,50 @@
 # CDN-Sentinel
 
+## Dataset de clipes do YouTube
+
+O backend e o Watermark Studio usam automaticamente os vídeos locais do
+dataset [`kishan51/youtube_clipped_videos`](https://huggingface.co/datasets/kishan51/youtube_clipped_videos)
+quando ele estiver disponível. O snapshot fica em
+`data/datasets/youtube_clipped_videos/`, que está no `.gitignore`.
+
+Depois de instalar as dependências, execute o downloader na raiz do projeto:
+
+```powershell
+python tools/download_youtube_clipped_videos.py
+```
+
+O download pode ser repetido para continuar uma transferência interrompida.
+Por padrão, o backend descobre os arquivos de vídeo recursivamente nesse
+diretório e usa o dataset automaticamente. O seletor
+`video_id = "youtube_clipped_videos"` continua disponível para deixar essa
+escolha explícita; para o Watermark Studio, os clipes baixados também são
+escolhidos automaticamente. Sem o dataset, o Big Buck Bunny local continua
+sendo o fallback.
+
+Se o backend estiver em Docker, o Compose monta esse diretório como somente
+leitura. Para usar outro local, defina `CDN_DATASET_DIR` antes de subir os
+serviços.
+
 Protótipo acadêmico de uma control room para Engenharia de Sistemas Distribuídos e Segurança Computacional. A aplicação torna observáveis, em processos locais reais, roteamento por distância, failover, watermarking forense AES-GCM/HMAC, monitoramento de vazamentos, blacklist idempotente, gossip hierárquico cifrado, retry e métricas de requisição.
 
-> Escopo da Entrega 2: execução local, armazenamento em memória, Big Buck Bunny real versionado para a demonstração e conteúdo fallback determinístico. Não há Supabase/PostgreSQL, dataset Hugging Face, broker, Kubernetes, serviço externo ou credencial paga.
+> Escopo da Entrega 2: execução local, armazenamento em memória, Big Buck Bunny real versionado para a demonstração e conteúdo fallback determinístico. O dataset Hugging Face é opcional e baixado explicitamente; não há Supabase/PostgreSQL, broker, Kubernetes, serviço externo ou credencial paga obrigatória.
 
 ## O que existe
 
 - **Backend Flask/RESTX**: control plane, data plane, segurança, monitor e observabilidade em `/docs`.
 - **Processos CDN independentes**: `node_app.py` inicia um processo HTTP por nó, com PID, porta, health, métricas e estado local.
 - **Frontend React/TypeScript**: console em `frontend/`, com Command Center, Network Lab, Security Observatory e Watermark Studio.
+- **Modos operacionais**: o seletor do topo alterna entre **Orquestração**, que mantém o dashboard da main, e **Gamificação**, que usa o simulador de gestão da branch `feat/cdn-management-simulator`.
 - **Comunicação distribuída real**: controller↔nó e nó↔nó usam HTTP local assinado; o gossip possui `message_id`, deduplicação, hops, ACK e retry pendente.
 - **Conteúdo desacoplado**: `ContentProvider`/`VideoCatalog` permitem trocar Big Buck Bunny ou o fallback por um catálogo futuro sem acoplar routing ou segurança.
 
 As coordenadas das cidades e a latência de propagação são um modelo didático. Elas não representam presença geográfica real nem uma CDN de produção.
+
+O fator de latência não é mais editável no frontend: o atraso de propagação é calculado pela distância até o servidor escolhido. Mantido o mesmo caminho e sem saturação do limite didático, 2N km produz aproximadamente o dobro do atraso de N km; fila, RTT HTTP e falhas continuam sendo métricas separadas.
+
+### Modo de gamificação
+
+O modo de gamificação começa com caixa, preço, clientes pagantes, nós e custos visíveis no painel **Como o modo começa**. Cada tick representa um dia: a população do jogo pode receber clientes ou perder clientes por preço, satisfação, reputação, capacidade e cenário. Ações de escala horizontal/vertical, cache, balanceamento, metadados e preço debitam investimento quando aplicável e alteram custos recorrentes, receita ou margem; ações pendentes respeitam lead time e cooldown.
 
 ## Console e ciclo de vida
 
@@ -119,7 +151,7 @@ Após uma mutação no mapa, o console faz uma leitura nova do control plane mes
 Inicializar uma rede pequena:
 
 ```powershell
-$body = @{ num_servers = 3; num_clients = 4; malicious_probability = 0.35; latency_factor = 1.0; tick_interval_seconds = 2.5; seed = 2026 } | ConvertTo-Json
+$body = @{ num_servers = 3; num_clients = 4; malicious_probability = 0.35; tick_interval_seconds = 2.5; seed = 2026 } | ConvertTo-Json
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5000/api/control/simulation/init -ContentType "application/json" -Body $body
 ```
 
@@ -134,10 +166,12 @@ Endpoints principais:
 | Controle | `POST /api/control/metrics/reset` | zera telemetria sem apagar topologia/blacklist |
 | Controle | `POST /api/control/simulation/end` | encerra processos/workers e arquiva a simulacao |
 | Dados | `GET /api/clients/{id}/stream?chunk=0` | roteia, faz failover e entrega chunk watermarkado |
+| Dados | `POST /api/clients/{id}/feedback` | registra like/nota e relaciona a percepção à latência observada |
 | Topologia | `GET/POST /api/topology/servers` | observa/adiciona nós |
 | Segurança | `POST /api/security/watermark/verify` | descriptografa e valida token AES-GCM/HMAC sem expor chave |
 | Monitor | `POST /api/monitor/scan` | dispara varredura manual |
 | Observabilidade | `GET /api/observability/overview` | snapshot agregado para o console |
+| Observabilidade | `GET /api/observability/realtime/stream` | stream SSE persistente para estado, telemetria e gestão |
 | Observabilidade | `GET /api/observability/history` | lista historicos completos arquivados |
 
 Uma resposta de stream distingue `artificial_latency_ms`, `http_rtt_ms` e `end_to_end_ms`, além de `request_id`, `trace_id`, candidatos e razão de routing.
@@ -155,7 +189,7 @@ O roteiro completo está em [`docs/demo-script.md`](./docs/demo-script.md).
 ## Testes e verificações
 
 ```powershell
-python -m compileall app.py config.py client_app.py node_app.py controllers models repositories routes services utils tests
+python -m compileall app.py config.py client_app.py node_app.py controllers models repositories routes services utils tools tests
 python -m unittest discover -s tests -v
 Push-Location frontend
 npm.cmd run build
@@ -167,7 +201,7 @@ O smoke E2E local inicia processos CDN e verifica inicialização, stream e over
 ## Decisões e limitações
 
 - A persistência é em memória; interfaces permitem um adaptador futuro para Supabase/PostgreSQL, que não faz parte desta etapa.
-- O Big Buck Bunny é um asset local de demonstração, atribuído à Blender Foundation sob CC-BY-3.0; o download é mantido fora do runtime. Uma futura integração com `kishan51/youtube_clipped_videos` precisa tratar licença, cache, armazenamento e reprodução antes de ser implementada.
+- O Big Buck Bunny é um asset local de demonstração, atribuído à Blender Foundation sob CC-BY-3.0; ele continua como fallback. O dataset `kishan51/youtube_clipped_videos` é baixado explicitamente pelo script documentado acima e fica fora do Git; licenças e termos de uso dos clipes devem ser verificados antes de uma distribuição pública.
 - Clientes pequenos podem ter processos locais observaveis; populacoes grandes usam clientes virtuais e lotes de telemetria, evitando milhares de processos ociosos.
 - Custos mensais, capacidade por nó e latência de fila são cenários didáticos estimados, nunca fatos de produção.
 - O monitor é separado por escopo de nó, mas continua coordenado pelo controller no mesmo aplicativo Flask.

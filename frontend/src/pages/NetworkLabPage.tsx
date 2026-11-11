@@ -90,7 +90,7 @@ export function NetworkLabPage({
           <p className="eyebrow">CONTROL PLANE / EXPERIMENTS</p>
           <h1>Network lab</h1>
           <p className="page-lead">
-            Cenarios executaveis sobre os processos locais. Cada botao chama uma
+            Cenários executáveis sobre os processos locais. Cada botão chama uma
             API real e os efeitos aparecem no health, no roteamento e na trilha
             de eventos.
           </p>

@@ -29,6 +29,7 @@ export function DashboardPage({
 }: DashboardPageProps) {
   const { status } = overview;
   const [activeNode, setActiveNode] = useState<string | null>(null);
+  const [activeClient, setActiveClient] = useState<string | null>(null);
   const [editMode, setEditMode] = useState<MapEditMode>(null);
   const [placement, setPlacement] = useState<{
     mode: Exclude<MapEditMode, null>;
@@ -51,14 +52,26 @@ export function DashboardPage({
       : status.scalability.slo_compliant
         ? "green"
         : "red";
-  const visibleServers = activeNode
-    ? overview.servers.filter((server) => server.server_id === activeNode)
-    : overview.servers;
   const clients = overview.clients.map((client) =>
     overview.blacklist.some((entry) => entry.client_id === client.client_id)
       ? { ...client, active: false }
       : client,
   );
+  const visibleServers = activeNode
+    ? overview.servers.filter((server) => server.server_id === activeNode)
+    : overview.servers;
+  const selectedClient = activeClient
+    ? clients.find((client) => client.client_id === activeClient)
+    : undefined;
+  const selectedClientHistory = selectedClient?.watch_history ?? [];
+  const selectedClientWatch = selectedClientHistory[selectedClientHistory.length - 1];
+  const selectedClientTraffic = selectedClient
+    ? [...overview.recent_traffic].reverse().find((entry) => entry.client_id === selectedClient.client_id)
+    : undefined;
+  const selectedClientServerId = selectedClientWatch?.server_id ?? selectedClientTraffic?.server_id ?? null;
+  const selectedClientServer = selectedClientServerId
+    ? overview.servers.find((server) => server.server_id === selectedClientServerId)
+    : undefined;
   const available = overview.servers.filter(
     (server) => ["healthy", "degraded", "overloaded"].includes(server.status),
   ).length;
@@ -175,9 +188,28 @@ export function DashboardPage({
               editMode && setPlacement({ mode: editMode, latitude, longitude })
             }
             onNodeSelect={(kind, id) => {
-              if (kind === "server") setActiveNode(id);
+              if (kind === "server") {
+                setActiveNode(id);
+                setActiveClient(null);
+              } else {
+                setActiveClient(id);
+                setActiveNode(null);
+              }
             }}
+            highlightedClientId={activeClient}
+            highlightedServerId={selectedClientServerId}
           />
+          {selectedClient && (
+            <div className="selected-client-route">
+              <div>
+                <small>CLIENTE SELECIONADO</small>
+                <strong>{selectedClient.client_id} · {selectedClient.city}</strong>
+              </div>
+              <span>servido por</span>
+              <b>{selectedClientServerId ?? "sem entrega recente"}</b>
+              {selectedClientServer && <small>{selectedClientServer.city} · linha destacada no mapa</small>}
+            </div>
+          )}
           <p className="map-performance-note">
             <Network size={13} /> Visualização otimizada: o backbone usa uma árvore geradora mínima; linhas de failover e comunicações ativas aparecem por cima. O protocolo real continua enviando HTTP diretamente ao servidor de destino.
           </p>

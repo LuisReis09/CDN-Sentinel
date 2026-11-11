@@ -19,6 +19,7 @@ from services.stream_service import StreamService
 from services.watermark_service import WatermarkService
 from services.watermark_demo_service import WatermarkDemoService
 from services.client_activity_service import ClientActivityService
+from management.engine import ManagementEngine
 
 
 def create_app() -> Flask:
@@ -55,7 +56,9 @@ def create_app() -> Flask:
     monitor_service = MonitorService(repository, watermark_service, blacklist_service)
     leak_service = LeakService(repository, stream_service)
     watermark_demo_service = WatermarkDemoService(watermark_service)
-    controller = ApiController(repository, simulation_controller, stream_service, monitor_service, leak_service, watermark_service, watermark_demo_service, client_activity_service)
+    management_engine = ManagementEngine(repository, simulation_controller)
+    client_activity_service.set_on_tick(management_engine.tick)
+    controller = ApiController(repository, simulation_controller, stream_service, monitor_service, leak_service, watermark_service, watermark_demo_service, client_activity_service, management_engine)
     register_api_routes(api, controller)
 
     @app.get("/")
@@ -82,4 +85,5 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), threaded=True, use_reloader=False)
+
 

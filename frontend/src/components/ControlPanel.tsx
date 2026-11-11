@@ -32,7 +32,6 @@ export function ControlPanel({
     num_servers: config.num_servers > 0 ? config.num_servers : 4,
     num_clients: config.num_clients > 0 ? config.num_clients : 32,
     malicious_probability: config.malicious_probability ?? 0.25,
-    latency_factor: config.latency_factor ?? 1,
     tick_interval_seconds: config.tick_interval_seconds ?? 2.5,
     monthly_client_price_usd: config.monthly_client_price_usd ?? 25,
     monthly_server_cost_usd: config.monthly_server_cost_usd ?? 100,
@@ -46,14 +45,23 @@ export function ControlPanel({
     phase: "idle",
     detail: "",
   });
+  const hasDraftChanges = status.initialized && (
+    form.num_servers !== config.num_servers ||
+    form.num_clients !== config.num_clients ||
+    form.malicious_probability !== config.malicious_probability ||
+    form.tick_interval_seconds !== config.tick_interval_seconds ||
+    form.monthly_client_price_usd !== config.monthly_client_price_usd ||
+    form.monthly_server_cost_usd !== config.monthly_server_cost_usd ||
+    form.monthly_fixed_cost_usd !== config.monthly_fixed_cost_usd
+  );
 
   useEffect(() => {
+    if (!status.initialized || busy || hasDraftChanges) return;
     setForm((current) => ({
       ...current,
       num_servers: config.num_servers > 0 ? config.num_servers : 4,
       num_clients: config.num_clients > 0 ? config.num_clients : 32,
       malicious_probability: config.malicious_probability ?? 0.25,
-      latency_factor: config.latency_factor ?? 1,
       tick_interval_seconds: config.tick_interval_seconds ?? 2.5,
       monthly_client_price_usd: config.monthly_client_price_usd ?? 25,
       monthly_server_cost_usd: config.monthly_server_cost_usd ?? 100,
@@ -63,11 +71,22 @@ export function ControlPanel({
     config.num_servers,
     config.num_clients,
     config.malicious_probability,
-    config.latency_factor,
     config.tick_interval_seconds,
     config.monthly_client_price_usd,
     config.monthly_server_cost_usd,
     config.monthly_fixed_cost_usd,
+    hasDraftChanges,
+    busy,
+    status.initialized,
+  ]);
+
+  useEffect(() => {
+    if (status.initialization) setInitProgress(status.initialization);
+  }, [
+    status.initialization?.in_progress,
+    status.initialization?.progress_pct,
+    status.initialization?.phase,
+    status.initialization?.detail,
   ]);
 
   async function run(action: () => Promise<unknown>) {
@@ -93,13 +112,6 @@ export function ControlPanel({
       phase: "starting",
       detail: "Enviando configuração ao backend",
     });
-    const poller = window.setInterval(() => {
-      void api.status()
-        .then((next) => {
-          if (next.initialization) setInitProgress(next.initialization);
-        })
-        .catch(() => undefined);
-    }, 500);
     try {
       await api.initialize({
         ...form,
@@ -122,7 +134,6 @@ export function ControlPanel({
           : "Não foi possível iniciar. Revise os parâmetros e tente novamente.",
       );
     } finally {
-      window.clearInterval(poller);
       setBusy(false);
     }
   }
@@ -150,6 +161,28 @@ export function ControlPanel({
         cause instanceof Error
           ? cause.message
           : "Falha ao encerrar a simulação",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyChanges() {
+    const errors = validateForm(form);
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+    setBusy(true);
+    try {
+      await api.updateConfig({
+        ...form,
+        tick_interval_seconds: tickInterval,
+      });
+      await onAction();
+    } catch (cause) {
+      onError(
+        cause instanceof Error
+          ? cause.message
+          : "Não foi possível aplicar as alterações",
       );
     } finally {
       setBusy(false);
@@ -232,11 +265,6 @@ export function ControlPanel({
           value={form.malicious_probability}
           onValueChange={(value) => update("malicious_probability", value)}
         />
-        <NumericField
-          label="Fator de latência"
-          value={form.latency_factor}
-          onValueChange={(value) => update("latency_factor", value)}
-        />
         <label className="range-field">
           <span>
             Intervalo do tick <b>{tickInterval.toFixed(1)} s</b>
@@ -291,6 +319,15 @@ export function ControlPanel({
         </div>
       </details>
       <div className="control-actions">
+        {activeSimulation && (
+          <button
+            className="button button-primary control-apply-button"
+            disabled={busy || !hasDraftChanges}
+            onClick={() => void applyChanges()}
+          >
+            <SlidersHorizontal size={15} /> Aplicar alterações
+          </button>
+        )}
         {activeSimulation ? (
           <button
             className="button button-danger"
@@ -385,7 +422,6 @@ function validateForm(form: {
   num_servers: number;
   num_clients: number;
   malicious_probability: number;
-  latency_factor: number;
   tick_interval_seconds: number;
   monthly_client_price_usd: number;
   monthly_server_cost_usd: number;
@@ -400,9 +436,6 @@ function validateForm(form: {
   }
   if (!Number.isFinite(form.malicious_probability) || form.malicious_probability < 0 || form.malicious_probability > 1) {
     errors.malicious_probability = "Use um valor entre 0 e 1.";
-  }
-  if (!Number.isFinite(form.latency_factor) || form.latency_factor < 0 || form.latency_factor > 20) {
-    errors.latency_factor = "Use um valor entre 0 e 20.";
   }
   if (!Number.isFinite(form.tick_interval_seconds) || form.tick_interval_seconds < 0.5 || form.tick_interval_seconds > 5) {
     errors.tick_interval_seconds = "Use um intervalo entre 0,5 e 5 segundos.";

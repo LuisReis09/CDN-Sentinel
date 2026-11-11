@@ -1,3 +1,4 @@
+import subprocess
 import unittest
 
 from services.watermark_service import WatermarkService
@@ -10,8 +11,10 @@ from services.capacity_service import capacity_limits, profile_for_tier, service
 from controllers.simulation_controller import SimulationController
 from repositories.in_memory import SimulationRepository
 from services.cdn_http_client import CDNHttpClient
+from services.client_activity_service import ClientActivityService
+from services.stream_service import StreamService
 from models.entities import CDNServer, Client, SimulationState
-from utils.video import get_video_asset, list_video_examples
+from utils.video import generate_visual_variants, get_video_asset, list_video_examples
 from utils.security import watermark_encryption_metadata
 
 
@@ -31,7 +34,41 @@ class SecurityAndNetworkTests(unittest.TestCase):
     def test_haversine_and_latency_are_distance_based(self):
         distance = haversine_km(-23.5505, -46.6333, 51.5072, -0.1276)
         self.assertGreater(distance, 9000)
-        self.assertGreater(propagation_delay_seconds(distance, 2), propagation_delay_seconds(distance, 1))
+        self.assertGreater(propagation_delay_seconds(distance, 1), 0)
+
+    def test_distance_doubles_propagation_delay_without_frontend_factor(self):
+        near = propagation_delay_seconds(1_000, 1)
+        far = propagation_delay_seconds(2_000, 1)
+        self.assertAlmostEqual(far / near, 2.0, delta=0.01)
+
+    def test_client_session_churn_is_bidirectional_after_first_video(self):
+        repository = SimulationRepository()
+        service = ClientActivityService(repository, StreamService(CDNHttpClient()))
+        client = Client("client-1", 0, 0, "Test", online=False)
+        service._maybe_toggle_client(client, 1)
+        self.assertTrue(client.online)
+        client.videos_consumed = 1
+        service.session_transition_probability = 1.0
+        service._maybe_toggle_client(client, 2)
+        self.assertFalse(client.online)
+        service._maybe_toggle_client(client, 3)
+        self.assertTrue(client.online)
+
+    def test_client_process_generates_feedback_from_delivery_latency(self):
+        repository = SimulationRepository()
+        service = StreamService(CDNHttpClient(), repository)
+        client = Client("client-1", 0, 0, "Test")
+        feedback = service.record_delivery_feedback(client, {
+            "video_id": "youtube_clipped_videos",
+            "chunk_number": 1,
+            "server_id": "cdn-01",
+            "latency_ms": 610.0,
+            "liked": None,
+        })
+        self.assertFalse(feedback["liked"])
+        self.assertEqual(feedback["source"], "client_process")
+        self.assertEqual(client.dislikes, 1)
+        self.assertEqual(repository.snapshot().events[-1]["type"], "client_feedback_generated")
 
     def test_city_catalog_is_external_and_global(self):
         cities = load_global_cities()
@@ -97,6 +134,50 @@ class SecurityAndNetworkTests(unittest.TestCase):
         self.assertNotEqual(original.read_bytes(), watermarked.read_bytes())
         self.assertNotEqual(original.read_bytes(), difference.read_bytes())
 
+    def test_generated_difference_is_not_saturated_white(self):
+        generated_id = generate_visual_variants("cdn_sentinel_demo", "watermark-audit-token")
+        difference, _ = get_video_asset("cdn_sentinel_demo", "difference", generated_id)
+        frame = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(difference), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"],
+            check=True,
+            capture_output=True,
+        ).stdout
+        self.assertGreater(len(frame), 0)
+        self.assertLess(sum(frame) / len(frame), 128)
+        self.assertGreater(max(frame), 0)
+        self.assertGreater(len(set(frame)), 1)
+
+    def test_watermark_demo_endpoint_uses_a_valid_default_video(self):
+        from app import create_app
+
+        client = create_app().test_client()
+        response = client.post("/api/security/watermark/demo", json={})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        payload = response.get_json()
+        self.assertTrue(payload["round_trip_verified"])
+        self.assertNotEqual(payload["video_variants"]["difference"], "")
+
+    def test_client_feedback_records_watch_latency_and_updates_the_client(self):
+        from app import create_app
+
+        app = create_app()
+        controller = app.extensions["cdn_controller"]
+        controller.simulation_controller._real_node_process_limit = 0
+        controller.simulation_controller._real_client_process_limit = 0
+        client = app.test_client()
+        initialized = client.post("/api/control/simulation/init", json={"num_servers": 1, "num_clients": 1, "seed": 31})
+        self.assertEqual(initialized.status_code, 201)
+        client_id = initialized.get_json()["clients"][0]["client_id"]
+        state_client = controller.repository.state_ref().clients[client_id]
+        state_client.watch_history.append({"at": 1.0, "video_id": "bigbuckbunny", "chunk_number": 2, "chunk_id": "chunk-test", "server_id": "cdn-01", "latency_ms": 420.0})
+        response = client.post(f"/api/clients/{client_id}/feedback", json={"video_id": "bigbuckbunny", "chunk_number": 2, "liked": False, "rating": 2})
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["client"]["dislikes"], 1)
+        self.assertEqual(payload["client"]["feedback_latency_avg_ms"], 420.0)
+        self.assertTrue(payload["feedback"]["latency_related"])
+        client.post("/api/control/simulation/end")
+
     def test_video_endpoint_returns_mp4_and_supports_range_requests(self):
         from app import create_app
 
@@ -130,6 +211,40 @@ class SecurityAndNetworkTests(unittest.TestCase):
         self.assertEqual(second.status_code, 201)
         second_utilization = client.get("/api/control/simulation/status").get_json()["scalability"]["utilization"]
         self.assertGreater(second_utilization, first_utilization)
+        client.post("/api/control/simulation/end")
+
+    def test_live_configuration_can_be_edited_during_orchestration(self):
+        from app import create_app
+
+        app = create_app()
+        controller = app.extensions["cdn_controller"]
+        controller.simulation_controller._real_node_process_limit = 0
+        controller.simulation_controller._real_client_process_limit = 0
+        client = app.test_client()
+        initialized = client.post("/api/control/simulation/init", json={"num_servers": 1, "num_clients": 1, "seed": 44})
+        self.assertEqual(initialized.status_code, 201)
+        simulation_id = client.get("/api/control/simulation/status").get_json()["simulation_id"]
+        activity_thread = controller.client_activity_service._thread
+        leak_thread = controller.leak_service._thread
+        live_update = client.patch("/api/control/simulation/config", json={"tick_interval_seconds": 1.5, "monthly_client_price_usd": 40, "malicious_probability": 0.1})
+        self.assertEqual(live_update.status_code, 200)
+        self.assertEqual(live_update.get_json()["simulation_id"], simulation_id)
+        self.assertEqual(live_update.get_json()["configuration"]["tick_interval_seconds"], 1.5)
+        self.assertIs(controller.client_activity_service._thread, activity_thread)
+        self.assertIs(controller.leak_service._thread, leak_thread)
+        structural_update = client.patch("/api/control/simulation/config", json={"num_clients": 2})
+        self.assertEqual(structural_update.status_code, 200)
+        self.assertEqual(structural_update.get_json()["simulation_id"], simulation_id)
+        self.assertEqual(structural_update.get_json()["clients_total"], 2)
+        server_update = client.patch("/api/control/simulation/config", json={"num_servers": 2})
+        self.assertEqual(server_update.status_code, 200)
+        self.assertEqual(server_update.get_json()["simulation_id"], simulation_id)
+        self.assertEqual(server_update.get_json()["servers_total"], 2)
+        downsize = client.patch("/api/control/simulation/config", json={"num_clients": 1, "num_servers": 1})
+        self.assertEqual(downsize.status_code, 200)
+        self.assertEqual(downsize.get_json()["simulation_id"], simulation_id)
+        self.assertEqual(downsize.get_json()["clients_total"], 1)
+        self.assertEqual(downsize.get_json()["servers_total"], 1)
         client.post("/api/control/simulation/end")
 
     def test_end_archives_run_for_history_endpoint(self):

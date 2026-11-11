@@ -43,11 +43,7 @@ export function WatermarkLab({
     }
   }
 
-  const videoVariants = demo?.video_variants ?? {
-    original: api.watermarkVideoUrl("cdn_sentinel_demo", "original"),
-    watermarked: api.watermarkVideoUrl("cdn_sentinel_demo", "watermarked"),
-    difference: api.watermarkVideoUrl("cdn_sentinel_demo", "difference"),
-  };
+  const videoVariants = demo?.video_variants;
   const process = demo?.cryptographic_process;
   const claim = demo?.claim_before_encoding ?? {};
 
@@ -77,26 +73,34 @@ export function WatermarkLab({
           <Play size={15} /> {busy ? "Processando…" : "Executar demonstração"}
         </button>
       </div>
-      <div className="noise-preview-grid noise-preview-grid--triple">
-        <NoiseVideoPreview
-          videoUrl={videoVariants.original}
-          variant="original"
-          label="1 · Vídeo original"
-          description="MP4 local versionado; mesmo vídeo de referência"
-        />
-        <NoiseVideoPreview
-          videoUrl={videoVariants.watermarked}
-          variant="watermarked"
-          label="2 · Sinal sutil"
-          description="vídeo entregue ao cliente; sinal de luminância imperceptível"
-        />
-        <NoiseVideoPreview
-          videoUrl={videoVariants.difference}
-          variant="difference"
-          label="3 · Sinal destacado"
-          description="escala de cinza sobre fundo preto; somente o sinal amplificado"
-        />
-      </div>
+      {videoVariants ? (
+        <div className="noise-preview-grid noise-preview-grid--triple">
+          <NoiseVideoPreview
+            videoUrl={videoVariants.original}
+            variant="original"
+            label="1 · Vídeo original"
+            description="MP4 local versionado; mesmo vídeo de referência"
+          />
+          <NoiseVideoPreview
+            videoUrl={videoVariants.watermarked}
+            variant="watermarked"
+            label="2 · Sinal sutil"
+            description="vídeo entregue ao cliente; sinal de luminância imperceptível"
+          />
+          <NoiseVideoPreview
+            videoUrl={videoVariants.difference}
+            variant="difference"
+            label="3 · Sinal destacado"
+            description="escala de cinza sobre fundo preto; somente o sinal amplificado"
+          />
+        </div>
+      ) : (
+        <div className="watermark-empty-state">
+          <Play size={20} />
+          <strong>Nenhuma demonstração executada</strong>
+          <span>Os vídeos aparecerão aqui depois que você iniciar uma demonstração.</span>
+        </div>
+      )}
       {demo && (
         <div className="demo-result">
           <Check size={16} />

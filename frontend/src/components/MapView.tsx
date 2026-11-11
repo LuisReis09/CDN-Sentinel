@@ -31,6 +31,8 @@ interface MapViewProps {
   onMapPick: (latitude: number, longitude: number) => void;
   tickIntervalSeconds: number;
   onNodeSelect: (kind: "server" | "client", id: string) => void;
+  highlightedClientId?: string | null;
+  highlightedServerId?: string | null;
 }
 
 export function MapView({
@@ -42,6 +44,8 @@ export function MapView({
   onMapPick,
   tickIntervalSeconds,
   onNodeSelect,
+  highlightedClientId = null,
+  highlightedServerId = null,
 }: MapViewProps) {
   const visibleClients = clients.slice(0, 1_200);
   const clientsById = new Map(
@@ -69,6 +73,15 @@ export function MapView({
         ]
       : [];
   });
+  const highlightedClient = highlightedClientId
+    ? clientsById.get(highlightedClientId)
+    : undefined;
+  const highlightedServer = highlightedServerId
+    ? serversById.get(highlightedServerId)
+    : undefined;
+  const highlightedRoute = highlightedClient && highlightedServer
+    ? [[highlightedClient.latitude, highlightedClient.longitude], [highlightedServer.latitude, highlightedServer.longitude]] as [[number, number], [number, number]]
+    : null;
   const messageEvents = events.filter(
     (event) =>
       event.type === "server_message" && event.from_server && event.to_server,
@@ -150,6 +163,22 @@ export function MapView({
             }}
           />
         ))}
+        {highlightedRoute && (
+          <Polyline
+            positions={highlightedRoute}
+            pathOptions={{
+              className: "map-selected-route",
+              color: "#ffe06b",
+              weight: 5,
+              opacity: 0.95,
+              dashArray: "10 7",
+            }}
+          >
+            <Tooltip sticky>
+              Entrega selecionada · {highlightedClientId} → {highlightedServerId}
+            </Tooltip>
+          </Polyline>
+        )}
         {servers.map((server) => (
           <ServerMarker
             key={server.server_id}

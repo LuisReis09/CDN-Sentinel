@@ -17,6 +17,12 @@ class Client:
     last_activity_at: float | None = None
     process_id: int | None = None
     process_status: str = "starting"
+    watch_history: List[Dict[str, Any]] = field(default_factory=list)
+    feedback_history: List[Dict[str, Any]] = field(default_factory=list)
+    likes: int = 0
+    dislikes: int = 0
+    feedback_score: float = 0.0
+    feedback_latency_avg_ms: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from services.content_provider import default_content_id
 
 
 MAX_SERVERS = 500
@@ -17,7 +19,7 @@ class SimulationConfig:
     latency_factor: float
     secret_key: str
     base_node_port: int = 5101
-    video_id: str = "bigbuckbunny"
+    video_id: str = field(default_factory=default_content_id)
     tick_interval_seconds: float = 2.5
     base_client_port: int = 6101
     monthly_client_price_usd: float = 25.0
@@ -92,7 +94,7 @@ class SimulationConfig:
             latency_factor=latency_factor,
             secret_key=str(payload.get("secret_key") or os.getenv("CDN_SECRET_KEY", "local-development-secret")),
             base_node_port=base_node_port,
-            video_id=str(payload.get("video_id", "bigbuckbunny")),
+            video_id=str(payload.get("video_id") or default_content_id()),
             tick_interval_seconds=tick_interval_seconds,
             base_client_port=base_client_port,
             monthly_client_price_usd=monthly_client_price_usd,

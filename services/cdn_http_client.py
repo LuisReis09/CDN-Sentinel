@@ -10,6 +10,7 @@ from models.entities import CDNServer
 from utils.crypto import encrypt_payload
 from utils.latency import sleep_for_distance
 from utils.protocol import path_from_url, signed_headers
+from services.content_provider import default_content_id
 
 
 class CDNHttpClient:
@@ -51,11 +52,11 @@ class CDNHttpClient:
         response.raise_for_status()
         return response.json()
 
-    def stream(self, server: CDNServer, client_id: str, chunk_number: int, distance_km: float, latency_factor: float, video_id: str = "bigbuckbunny") -> Dict[str, Any]:
+    def stream(self, server: CDNServer, client_id: str, chunk_number: int, distance_km: float, latency_factor: float, video_id: str | None = None) -> Dict[str, Any]:
         delay = sleep_for_distance(distance_km, latency_factor)
         url = f"{server.url}/internal/stream"
         started = time.monotonic()
-        params = {"client_id": client_id, "chunk": chunk_number, "video_id": video_id}
+        params = {"client_id": client_id, "chunk": chunk_number, "video_id": video_id or default_content_id()}
         response = requests.get(
             url,
             params=params,

@@ -31,6 +31,6 @@ Docker Compose é validado com `make docker-config`. O smoke de containers usa `
 
 ## Watermark Studio
 
-1. Executar a demonstração sem `video_id` e confirmar `video_id=bigbuckbunny`.
+1. Executar a demonstração sem `video_id` e confirmar que ela escolhe um clipe do dataset quando disponível; sem o dataset, confirmar o fallback local.
 2. Reproduzir original, sinal HMAC e diferença; confirmar que as variantes têm origem no MP4 real.
 3. Conferir que cada filtro exibe `bits_correct / bits_total`, confiança igual à razão desses valores e limiar de 90%.

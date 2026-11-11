@@ -15,6 +15,7 @@ import { useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Link, NavLink, Route, Routes } from "react-router-dom";
 import { DashboardPage } from "./pages/DashboardPage";
+import { ManagementPage } from "./pages/ManagementPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { NetworkLabPage } from "./pages/NetworkLabPage";
 import { SecurityPage } from "./pages/SecurityPage";
@@ -25,12 +26,26 @@ export function App() {
   const data = useDashboardData();
   const [notice, setNotice] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [mode, setMode] = useState<"orchestration" | "gamification">(() => {
+    try {
+      return window.localStorage.getItem("cdn-sentinel:mode") === "gamification"
+        ? "gamification"
+        : "orchestration";
+    } catch {
+      return "orchestration";
+    }
+  });
   const onRefresh = async () => {
     await data.refresh();
   };
-  const onAction = async () => {
-    await data.refresh();
-  };
+  function changeMode(nextMode: "orchestration" | "gamification") {
+    setMode(nextMode);
+    try {
+      window.localStorage.setItem("cdn-sentinel:mode", nextMode);
+    } catch {
+      // Local storage is optional; the selector still works for this session.
+    }
+  }
   return (
     <div className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
@@ -97,6 +112,22 @@ export function App() {
             <em>operations</em>
           </Link>
           <div className="topbar-actions">
+            <div className="mode-switch" aria-label="Modo de operação">
+              <button
+                className={mode === "orchestration" ? "mode-switch__active" : ""}
+                aria-pressed={mode === "orchestration"}
+                onClick={() => changeMode("orchestration")}
+              >
+                Orquestração
+              </button>
+              <button
+                className={mode === "gamification" ? "mode-switch__active" : ""}
+                aria-pressed={mode === "gamification"}
+                onClick={() => changeMode("gamification")}
+              >
+                Gamificação
+              </button>
+            </div>
             <span
               className={`connection-chip ${data.freshness.toLowerCase()}`}
               title={data.error ?? "Última atualização da API"}
@@ -116,13 +147,22 @@ export function App() {
           <Route
             path="/"
             element={
-              <DashboardPage
-                overview={data.overview}
-                connected={data.connected}
-                onRefresh={onRefresh}
-                onAction={onAction}
-                onError={setNotice}
-              />
+              mode === "gamification" ? (
+                <ManagementPage
+                  overview={data.overview}
+                  connected={data.connected}
+                  onRefresh={onRefresh}
+                  onError={setNotice}
+                />
+              ) : (
+                <DashboardPage
+                  overview={data.overview}
+                  connected={data.connected}
+                  onRefresh={onRefresh}
+                  onAction={onRefresh}
+                  onError={setNotice}
+                />
+              )
             }
           />
           <Route path="/dashboard" element={<HistoryPage />} />
@@ -180,3 +220,4 @@ function NavItem({
     </NavLink>
   );
 }
+

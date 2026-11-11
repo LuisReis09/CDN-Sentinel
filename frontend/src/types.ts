@@ -57,6 +57,31 @@ export interface Client {
   last_activity_at: number | null;
   process_id: number | null;
   process_status: string;
+  watch_history?: Array<{
+    at: number;
+    video_id: string;
+    chunk_number: number;
+    chunk_id: string;
+    server_id: string;
+    latency_ms: number;
+    network_latency_ms?: number;
+    queue_wait_ms?: number;
+    liked?: boolean | null;
+  }>;
+  feedback_history?: Array<{
+    at: number;
+    video_id: string;
+    chunk_number?: number | null;
+    liked: boolean;
+    rating: number;
+    comment?: string;
+    latency_ms: number;
+    latency_related: boolean;
+  }>;
+  likes?: number;
+  dislikes?: number;
+  feedback_score?: number;
+  feedback_latency_avg_ms?: number;
 }
 
 export interface Traffic {
@@ -152,7 +177,6 @@ export interface SimulationStatus {
     num_servers: number;
     num_clients: number;
     malicious_probability: number;
-    latency_factor: number;
     base_node_port: number;
     video_id: string;
     tick_interval_seconds: number;
@@ -253,6 +277,7 @@ export interface Overview {
   recent_traffic: Traffic[];
   metrics_history: TelemetrySample[];
   monitor: MonitorStatus;
+  management?: ManagementState | null;
 }
 
 export interface TelemetrySample {
@@ -401,3 +426,97 @@ export interface WatermarkDemo {
     survives: boolean;
   }>;
 }
+
+export interface ManagementActionDefinition {
+  action_type: string;
+  label: string;
+  group: string;
+  description: string;
+  investment_usd: number;
+  recurring_monthly_usd: number;
+  lead_days: number;
+  cooldown_days: number;
+  parameters: Array<Record<string, unknown>>;
+  effects: string[];
+  tradeoffs: string[];
+  investment_by_tier?: Record<string, number>;
+}
+
+export interface ManagementActionRecord {
+  action_id: string;
+  action_type: string;
+  parameters: Record<string, unknown>;
+  status: "pending" | "applied" | "failed";
+  submitted_day: number;
+  apply_day: number;
+  investment_usd: number;
+  recurring_delta_usd: number;
+  rationale: string;
+  result?: Record<string, unknown>;
+  error?: string | null;
+}
+
+export interface ManagementState {
+  simulation_id: string;
+  scenario_id: string;
+  seed: number;
+  day: number;
+  paused: boolean;
+  version: number;
+  initial_cash_balance_usd: number;
+  cash_balance_usd: number;
+  monthly_price_per_client_usd: number;
+  fixed_monthly_cost_usd: number;
+  base_paying_clients: number;
+  paying_clients: number;
+  client_population_target: number;
+  arrivals_today: number;
+  departures_today: number;
+  arrivals_total: number;
+  departures_total: number;
+  active_clients: number;
+  churned_clients: number;
+  reputation: number;
+  customer_satisfaction: number;
+  demand_rps: number;
+  served_rps: number;
+  capacity_rps: number;
+  utilization: number;
+  backlog: number;
+  requests_rejected: number;
+  latency_p95_ms: number;
+  availability_pct: number;
+  error_rate_pct: number;
+  sla_compliance_pct: number;
+  daily_revenue_usd: number;
+  daily_opex_usd: number;
+  daily_profit_usd: number;
+  monthly_margin_pct: number;
+  objective: Record<string, unknown>;
+  nodes: Record<
+    string,
+    {
+      server_id: string;
+      tier: string;
+      lifecycle_status: string;
+      health_status: string;
+      cache_level: number;
+      cache_hit_rate: number;
+      monthly_cost_usd: number;
+      metadata_indexed: boolean;
+    }
+  >;
+  pending_actions: ManagementActionRecord[];
+  history: Array<Record<string, number | boolean | string>>;
+  alerts: Array<{ severity: string; message: string }>;
+  events: Array<Record<string, unknown>>;
+  load_balancing_policy: string;
+  metadata_tier: string;
+  metadata_query_rps: number;
+  metadata_lookup_ms: number;
+  metadata_staleness_ms: number;
+  feedback_score: number;
+  feedback_count: number;
+  feedback_latency_avg_ms: number;
+}
+

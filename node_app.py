@@ -12,11 +12,12 @@ from flask import Flask, jsonify, request
 
 from repositories.in_memory import NodeRepository
 from services.capacity_service import profile_for_tier, service_metrics, queue_wait_ms
+from services.content_provider import ContentProvider, HybridContentProvider, default_content_id
 from services.watermark_service import WatermarkService
 from utils.geo import haversine_km
 from utils.latency import sleep_for_distance
 from utils.crypto import decrypt_payload, encrypt_payload, is_encrypted_payload
-from utils.video import encode_payload, get_video_chunk
+from utils.video import encode_payload
 from utils.protocol import signed_headers, verify_headers
 
 
@@ -27,7 +28,7 @@ class CapacityRejected(RuntimeError):
 class CDNNode:
     """State and HTTP handlers for one independent CDN process."""
 
-    def __init__(self, server_id: str, host: str, port: int, latitude: float, longitude: float, city: str, secret_key: str, latency_factor: float, capacity_tier: str = "basic") -> None:
+    def __init__(self, server_id: str, host: str, port: int, latitude: float, longitude: float, city: str, secret_key: str, latency_factor: float, capacity_tier: str = "basic", content_provider: ContentProvider | None = None) -> None:
         self.server_id = server_id
         self.host = host
         self.port = port
@@ -39,6 +40,7 @@ class CDNNode:
         self.capacity_profile = profile_for_tier(capacity_tier)
         self.repository = NodeRepository()
         self.watermark_service = WatermarkService(secret_key)
+        self.content_provider = content_provider or HybridContentProvider()
         self.secret_key = secret_key
         self.peers: list[dict] = []
         self._lock = threading.RLock()
@@ -118,7 +120,8 @@ class CDNNode:
             **metrics,
         }
 
-    def stream(self, client_id: str, chunk_number: int, video_id: str = "bigbuckbunny") -> dict:
+    def stream(self, client_id: str, chunk_number: int, video_id: str | None = None) -> dict:
+        video_id = video_id or default_content_id()
         reservation = None
         failed = False
         try:
@@ -140,7 +143,7 @@ class CDNNode:
             if self.fault["extra_latency_ms"]:
                 time.sleep(self.fault["extra_latency_ms"] / 1000.0)
             token, claim = self.watermark_service.issue(client_id, self.server_id, chunk_number)
-            content, content_type = get_video_chunk(chunk_number, video_id)
+            content, content_type = self.content_provider.get_chunk(video_id, chunk_number)
             watermarked = token.encode("utf-8") + b"\n" + content
             result = {
                 "chunk_id": claim.chunk_id,
@@ -303,7 +306,7 @@ def create_node_app(node: CDNNode) -> Flask:
         """Issue a video chunk with an embedded forensic watermark."""
         client_id = request.args.get("client_id", "")
         try:
-            auth_payload = {"client_id": client_id, "chunk": int(request.args.get("chunk", "0")), "video_id": request.args.get("video_id", "bigbuckbunny")}
+            auth_payload = {"client_id": client_id, "chunk": int(request.args.get("chunk", "0")), "video_id": request.args.get("video_id") or default_content_id()}
         except ValueError:
             return jsonify({"error": "chunk deve ser inteiro"}), 400
         denied = authenticate(auth_payload)
@@ -320,7 +323,7 @@ def create_node_app(node: CDNNode) -> Flask:
             return jsonify({"error": str(exc)}), 403
         except CapacityRejected as exc:
             return jsonify({"error": str(exc)}), 429
-        except RuntimeError as exc:
+        except (FileNotFoundError, RuntimeError) as exc:
             return jsonify({"error": str(exc)}), 503
 
     @app.post("/internal/blacklist")

@@ -7,6 +7,7 @@ import sys
 import time
 import math
 import re
+import random
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -20,7 +21,8 @@ from services.cdn_http_client import CDNHttpClient
 from services.topology_service import TopologyService
 from services.city_lookup_service import CityLookupService
 from services.capacity_service import capacity_limits, profile_for_tier, service_metrics
-from utils.geo import haversine_km
+from services.content_provider import default_content_id
+from utils.geo import city_with_jitter, haversine_km, load_global_cities
 
 
 class SimulationController:
@@ -130,11 +132,21 @@ class SimulationController:
         state = self._repository.state_ref()
         if not state.initialized or state.lifecycle == "ended":
             raise RuntimeError("A simulação ainda não foi inicializada")
-        structural = {key for key in ("num_servers", "num_clients", "base_node_port", "base_client_port", "seed") if key in payload}
         merged = {**state.config, **payload, "secret_key": self._secret_key}
         config = SimulationConfig.from_payload(merged)
-        if structural and any(int(payload[key]) != int(state.config[key]) for key in structural):
+        rebuild_keys = ("base_node_port", "base_client_port", "seed")
+        rebuild_changed = any(
+            key in payload and payload[key] != state.config.get(key)
+            for key in rebuild_keys
+        )
+        if rebuild_changed:
             return self.initialize(merged)
+        # Resize in place so the simulation id, worker threads, traffic
+        # history and live observability stream remain intact.
+        if config.num_servers != len(state.servers):
+            self._resize_servers(config.num_servers, config)
+        if config.num_clients != len(state.clients):
+            self._resize_clients(config.num_clients, config)
         state.config.update(config.to_dict())
         for client in state.clients.values():
             digest = hashlib.sha256(f"{client.client_id}:{config.malicious_probability}".encode()).digest()
@@ -148,6 +160,95 @@ class SimulationController:
         self._repository.update_config(config.to_dict())
         self._repository.append_event({"type": "simulation_config_updated", "at": time.time(), "changes": payload})
         return self.status()
+
+    def _resize_clients(self, target: int, config: SimulationConfig) -> None:
+        state = self._repository.state_ref()
+        target = max(1, min(MAX_CLIENTS, int(target)))
+        rng = random.Random(config.seed + len(state.clients) + target)
+        cities = list(load_global_cities())
+
+        while len(state.clients) < target:
+            sequence = len(state.clients) + 1
+            client_id = f"client-{sequence:04d}"
+            while client_id in state.clients:
+                sequence += 1
+                client_id = f"client-{sequence:04d}"
+            city = cities[(sequence + len(state.servers) + config.seed) % len(cities)]
+            latitude, longitude = city_with_jitter(rng, city)
+            client = Client(
+                client_id=client_id,
+                latitude=latitude,
+                longitude=longitude,
+                city=city.name,
+                malicious=rng.random() < config.malicious_probability,
+            )
+            self._repository.add_client(client)
+            self._start_client(client, len(state.clients) - 1)
+            self._repository.append_event({
+                "type": "client_added",
+                "at": time.time(),
+                "client_id": client_id,
+                "latitude": latitude,
+                "longitude": longitude,
+                "reason": "live_configuration_resize",
+            })
+
+        for client_id in list(state.clients.keys())[target:]:
+            client = state.clients.pop(client_id)
+            self._stop_client_process(client_id)
+            client.active = False
+            client.online = False
+            client.process_status = "stopped"
+            self._repository.append_event({
+                "type": "client_removed",
+                "at": time.time(),
+                "client_id": client_id,
+                "reason": "live_configuration_resize",
+            })
+
+    def _resize_servers(self, target: int, config: SimulationConfig) -> None:
+        state = self._repository.state_ref()
+        target = max(1, min(MAX_SERVERS, int(target)))
+        cities = list(load_global_cities())
+        rng = random.Random(config.seed + len(state.servers) + target)
+
+        for server_id in list(state.servers.keys())[target:]:
+            server = state.servers.get(server_id)
+            if server is None:
+                continue
+            if server.status not in {"stopped", "offline"}:
+                self.retire_server(server_id)
+            else:
+                process = self._processes.pop(server_id, None)
+                if process and process.poll() is None:
+                    process.terminate()
+            state.servers.pop(server_id, None)
+
+        used_ports = {server.port for server in state.servers.values()}
+        while len(state.servers) < target:
+            sequence = len(state.servers) + 1
+            server_id = f"cdn-{sequence:02d}"
+            while server_id in state.servers:
+                sequence += 1
+                server_id = f"cdn-{sequence:02d}"
+            city = cities[(sequence + config.seed) % len(cities)]
+            port = config.base_node_port + sequence - 1
+            while port in used_ports:
+                port += 1
+            latitude = city.latitude + rng.uniform(-0.12, 0.12)
+            longitude = city.longitude + rng.uniform(-0.12, 0.12)
+            self.add_server({
+                "server_id": server_id,
+                "port": port,
+                "latitude": latitude,
+                "longitude": longitude,
+                "city": city.name,
+                "capacity_tier": config.node_tier,
+            })
+            used_ports.add(port)
+
+        self._configure_peers(state)
+        self.refresh_servers()
 
     def pause(self) -> dict:
         state = self._repository.snapshot()
@@ -413,6 +514,59 @@ class SimulationController:
         self._repository.append_event({"type": "client_added", "at": time.time(), "client_id": client_id, "latitude": latitude, "longitude": longitude})
         return client.to_dict()
 
+    def record_client_feedback(self, client_id: str, payload: dict) -> dict:
+        state = self._repository.state_ref()
+        client = state.clients.get(client_id)
+        if client is None:
+            raise KeyError(f"Cliente {client_id} não encontrado")
+        if not isinstance(payload, dict):
+            raise ValueError("feedback deve ser um objeto")
+        liked = payload.get("liked")
+        if not isinstance(liked, bool):
+            raise ValueError("liked deve ser booleano")
+        rating = payload.get("rating", 5 if liked else 2)
+        try:
+            rating = int(rating)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("rating deve ser um inteiro entre 1 e 5") from exc
+        if not 1 <= rating <= 5:
+            raise ValueError("rating deve estar entre 1 e 5")
+        video_id = str(payload.get("video_id") or state.config.get("video_id") or default_content_id())
+        chunk_number = payload.get("chunk_number")
+        latest_watch = next(
+            (
+                item
+                for item in reversed(client.watch_history)
+                if item.get("video_id") == video_id
+                and (chunk_number is None or int(item.get("chunk_number", -1)) == int(chunk_number))
+            ),
+            None,
+        )
+        latency_ms = float((latest_watch or {}).get("latency_ms", 0.0))
+        latency_related = bool(latency_ms >= 250.0 and not liked)
+        feedback = {
+            "at": time.time(),
+            "video_id": video_id,
+            "chunk_number": int(chunk_number) if chunk_number is not None else (latest_watch or {}).get("chunk_number"),
+            "liked": liked,
+            "rating": rating,
+            "comment": str(payload.get("comment", ""))[:280],
+            "latency_ms": round(latency_ms, 3),
+            "latency_related": latency_related,
+        }
+        client.feedback_history.append(feedback)
+        client.feedback_history = client.feedback_history[-100:]
+        client.likes += int(liked)
+        client.dislikes += int(not liked)
+        client.feedback_score = round(sum(item["rating"] for item in client.feedback_history) / len(client.feedback_history) * 20.0, 2)
+        client.feedback_latency_avg_ms = round(sum(float(item.get("latency_ms", 0.0)) for item in client.feedback_history) / len(client.feedback_history), 3)
+        for watch in reversed(client.watch_history):
+            if watch.get("video_id") == video_id and (chunk_number is None or int(watch.get("chunk_number", -1)) == int(chunk_number)):
+                watch["liked"] = liked
+                break
+        self._repository.append_event({"type": "client_feedback", "at": feedback["at"], "client_id": client_id, "video_id": video_id, "liked": liked, "rating": rating, "latency_ms": latency_ms, "latency_related": latency_related})
+        return {"client": client.to_dict(), "feedback": feedback}
+
     def add_server(self, payload: dict) -> dict:
         state = self._repository.state_ref()
         if not state.initialized or state.lifecycle == "ended":
@@ -442,6 +596,7 @@ class SimulationController:
             latitude=latitude,
             longitude=longitude,
             city=str(payload.get("city") or self._city_lookup.lookup(latitude, longitude)),
+            capacity_tier=str(payload.get("capacity_tier") or state.config.get("node_tier", "basic")),
         )
         if len(state.servers) >= self._real_node_process_limit:
             server.process_mode = "virtual"
@@ -453,6 +608,45 @@ class SimulationController:
         self._reconcile_blacklist(state)
         self._repository.update_config({"num_servers": len(state.servers)})
         self._repository.append_event({"type": "server_added", "at": time.time(), "server_id": server_id, "latitude": latitude, "longitude": longitude})
+        return server.to_dict()
+
+    def update_server_capacity(self, server_id: str, tier: str) -> dict:
+        state = self._repository.state_ref()
+        server = state.servers.get(server_id)
+        if server is None:
+            raise KeyError(f"Servidor {server_id} não encontrado")
+        if tier not in {"basic", "standard", "pro", "enterprise"}:
+            raise ValueError("tier inválido")
+        server.lifecycle_status = "recovering"
+        result = self._http_client.configure(server, {"capacity_tier": tier})
+        server.capacity_tier = tier
+        server.lifecycle_status = "running"
+        self.refresh_servers()
+        self._configure_peers(state)
+        self._repository.append_event({"type": "server_capacity_updated", "at": time.time(), "server_id": server_id, "tier": tier, "reason": "ação de gestão com manutenção didática"})
+        return {"server": server.to_dict(), "node": result}
+
+    def retire_server(self, server_id: str) -> dict:
+        state = self._repository.state_ref()
+        server = state.servers.get(server_id)
+        if server is None:
+            raise KeyError(f"Servidor {server_id} não encontrado")
+        active = [item for item in state.servers.values() if item.status not in {"stopped", "offline"}]
+        if len(active) <= 1:
+            raise ValueError("não é permitido retirar o último nó operacional")
+        server.lifecycle_status = "draining"
+        process = self._processes.pop(server_id, None)
+        if process and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        server.lifecycle_status = "stopped"
+        server.status = "stopped"
+        server.health_status = "offline"
+        self._configure_peers(state)
+        self._repository.append_event({"type": "server_retired", "at": time.time(), "server_id": server_id, "reason": "descomissionamento seguro por gestão"})
         return server.to_dict()
 
     def _start_node(self, server: CDNServer, config: SimulationConfig) -> None:
@@ -527,6 +721,15 @@ class SimulationController:
         client.process_id = process.pid
         client.process_status = "online" if process.poll() is None else "offline"
         self._client_processes[client.client_id] = process
+
+    def _stop_client_process(self, client_id: str) -> None:
+        process = self._client_processes.pop(client_id, None)
+        if process and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
 
     def _refresh_client_processes(self) -> None:
         state = self._repository.state_ref()
@@ -779,4 +982,5 @@ class SimulationController:
                 except subprocess.TimeoutExpired:
                     process.kill()
         self._client_processes.clear()
+
 

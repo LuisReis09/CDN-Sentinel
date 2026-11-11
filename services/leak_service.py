@@ -36,6 +36,10 @@ class LeakService:
             self._thread.join(timeout=1.0)
         self._thread = None
 
+    def configure_tick_interval(self, tick_interval_seconds: float) -> None:
+        """Change the cadence without interrupting the leak worker."""
+        self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
+
     def _run(self) -> None:
         while not self._stop_event.wait(self._tick_interval_seconds * 2):
             state = self._repository.state_ref()

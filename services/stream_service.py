@@ -6,6 +6,7 @@ import requests
 
 from models.entities import Client, SimulationState, VideoChunk
 from services.cdn_http_client import CDNHttpClient
+from services.content_provider import default_content_id
 from utils.geo import haversine_km, rank_servers
 from utils.latency import sleep_for_distance
 
@@ -22,6 +23,66 @@ class StreamService:
     def __init__(self, http_client: CDNHttpClient, repository=None) -> None:
         self._http_client = http_client
         self._repository = repository
+
+    def record_delivery_feedback(self, client: Client, watch_record: dict, source: str = "client_process") -> dict:
+        """Let the simulated client rate a delivered service automatically.
+
+        Feedback is derived from the observed end-to-end delivery time. The
+        browser only reads this history; it is never the actor that submits it.
+        """
+        latency_ms = float(watch_record.get("latency_ms", 0.0))
+        if latency_ms <= 120:
+            rating = 5
+        elif latency_ms <= 250:
+            rating = 4
+        elif latency_ms <= 450:
+            rating = 3
+        elif latency_ms <= 700:
+            rating = 2
+        else:
+            rating = 1
+        liked = rating >= 4
+        feedback = {
+            "at": time.time(),
+            "video_id": watch_record.get("video_id") or "unknown",
+            "chunk_number": watch_record.get("chunk_number"),
+            "liked": liked,
+            "rating": rating,
+            "comment": "feedback automático do processo cliente",
+            "latency_ms": round(latency_ms, 3),
+            "latency_related": latency_ms >= 250.0,
+            "source": source,
+            "automatic": True,
+        }
+        client.feedback_history.append(feedback)
+        client.feedback_history = client.feedback_history[-100:]
+        client.likes += int(liked)
+        client.dislikes += int(not liked)
+        client.feedback_score = round(
+            sum(item["rating"] for item in client.feedback_history)
+            / len(client.feedback_history)
+            * 20.0,
+            2,
+        )
+        client.feedback_latency_avg_ms = round(
+            sum(float(item.get("latency_ms", 0.0)) for item in client.feedback_history)
+            / len(client.feedback_history),
+            3,
+        )
+        watch_record["liked"] = liked
+        if self._repository:
+            self._repository.append_event({
+                "type": "client_feedback_generated",
+                "at": feedback["at"],
+                "client_id": client.client_id,
+                "server_id": watch_record.get("server_id"),
+                "video_id": feedback["video_id"],
+                "liked": liked,
+                "rating": rating,
+                "latency_ms": feedback["latency_ms"],
+                "source": source,
+            })
+        return feedback
 
     def stream(self, client: Client, state: SimulationState, chunk_number: int = 0, request_id: str | None = None) -> VideoChunk:
         if state.paused:
@@ -50,7 +111,7 @@ class StreamService:
             candidate_details[index]["selected"] = True
             candidate_details[index]["attempted"] = True
             try:
-                result = self._http_client.stream(candidate, client.client_id, chunk_number, distance, float(state.config["latency_factor"]), str(state.config.get("video_id", "bigbuckbunny")))
+                result = self._http_client.stream(candidate, client.client_id, chunk_number, distance, float(state.config["latency_factor"]), str(state.config.get("video_id") or default_content_id()))
                 selected_server = candidate
                 selected_distance = distance
                 candidate_details[index]["reason"] = "selecionado; resposta HTTP válida"
@@ -93,6 +154,20 @@ class StreamService:
         http_rtt_ms = float(result.get("http_rtt_ms", 0.0))
         queue_wait_ms = float(result.get("queue_wait_ms", 0.0))
         end_to_end_ms = (time.monotonic() - started) * 1000
+        watch_record = {
+            "at": time.time(),
+            "video_id": state.config.get("video_id") or default_content_id(),
+            "chunk_number": chunk_number,
+            "chunk_id": result["chunk_id"],
+            "server_id": server.server_id,
+            "latency_ms": round(end_to_end_ms, 3),
+            "network_latency_ms": round(artificial_latency_ms, 3),
+            "queue_wait_ms": round(queue_wait_ms, 3),
+            "liked": None,
+        }
+        client.watch_history.append(watch_record)
+        client.watch_history = client.watch_history[-100:]
+        self.record_delivery_feedback(client, watch_record)
         if self._repository:
             self._repository.append_traffic({
                 "at": time.time(),
@@ -126,8 +201,8 @@ class StreamService:
                 "routing": "Haversine / nearest healthy CDN",
                 "watermark_algorithm": "AES-256-GCM + HMAC-SHA256",
                 "chunk_id": result["chunk_id"],
-                "content_id": state.config.get("video_id", "bigbuckbunny"),
-                "content_title": state.config.get("video_id", "bigbuckbunny"),
+                "content_id": state.config.get("video_id") or default_content_id(),
+                "content_title": state.config.get("video_id") or default_content_id(),
                 "routing_candidates": candidate_details,
                 "routing_reason": routing_reason,
             })
@@ -161,8 +236,8 @@ class StreamService:
                     "message_id": f"content-{uuid.uuid4().hex[:10]}",
                     "message_type": "CONTENT_PLAYBACK_TELEMETRY",
                     "communication_kind": "update",
-                    "content_id": state.config.get("video_id", "bigbuckbunny"),
-                    "content_title": state.config.get("video_id", "bigbuckbunny"),
+                    "content_id": state.config.get("video_id") or default_content_id(),
+                    "content_title": state.config.get("video_id") or default_content_id(),
                     "chunk_id": result["chunk_id"],
                     "region": server.city,
                     "viewer_count_delta": 1,

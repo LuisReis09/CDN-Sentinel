@@ -73,6 +73,19 @@ class MonitorService:
     def configure_tick_interval(self, tick_interval_seconds: float) -> None:
         self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
 
+    def remove_server(self, server_id: str) -> None:
+        """Stop only the monitor owned by a server removed during live resize."""
+        server_id = str(server_id)
+        with self._lifecycle_lock:
+            stop_event = self._stop_events.pop(server_id, None)
+            thread = self._threads.pop(server_id, None)
+            self._locks.pop(server_id, None)
+            self._last_results.pop(server_id, None)
+        if stop_event:
+            stop_event.set()
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+
     def _run(self, server_id: str, stop_event: threading.Event) -> None:
         while not stop_event.wait(self._tick_interval_seconds):
             try:

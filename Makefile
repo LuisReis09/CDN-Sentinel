@@ -65,7 +65,7 @@ docker-smoke:
 	curl --fail --silent http://127.0.0.1:$${BACKEND_PORT:-5000}/health; \
 	curl --fail --silent --show-error \
 		-H 'Content-Type: application/json' \
-		-d '{"video_id":"bigbuckbunny","chunk":0}' \
+		-d '{"chunk":0}' \
 		http://127.0.0.1:$${BACKEND_PORT:-5000}/api/security/watermark/demo >/dev/null; \
 	curl --fail --silent http://127.0.0.1:$${FRONTEND_PORT:-8080}/ >/dev/null; \
 	$(COMPOSE) ps

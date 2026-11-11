@@ -24,6 +24,7 @@ class ApiController:
         watermark_service,
         watermark_demo_service: WatermarkDemoService,
         client_activity_service: ClientActivityService,
+        management_engine=None,
     ) -> None:
         self.repository = repository
         self.simulation_controller = simulation_controller
@@ -33,12 +34,15 @@ class ApiController:
         self.watermark_service = watermark_service
         self.watermark_demo_service = watermark_demo_service
         self.client_activity_service = client_activity_service
+        self.management_engine = management_engine
 
     def initialize(self, payload: dict) -> dict:
         self.leak_service.stop()
         self.client_activity_service.stop()
         self.monitor_service.stop()
         result = self.simulation_controller.initialize(payload)
+        if self.management_engine:
+            self.management_engine.reset(seed=result["configuration"].get("seed", 2026))
         self.watermark_service.configure(self.simulation_controller.secret_key)
         tick_interval = result["configuration"].get("tick_interval_seconds", 2.5)
         self.leak_service.start(tick_interval)
@@ -48,46 +52,101 @@ class ApiController:
 
     def update_simulation(self, payload: dict) -> dict:
         current = self.repository.snapshot_without_clients()
-        structural = {key for key in ("num_servers", "num_clients", "base_node_port", "base_client_port", "seed") if key in payload and payload[key] != current.config.get(key)}
-        if structural:
+        rebuild_keys = ("base_node_port", "base_client_port", "seed")
+        rebuild = any(
+            key in payload and payload[key] != current.config.get(key)
+            for key in rebuild_keys
+        )
+        if rebuild:
             self.leak_service.stop()
             self.client_activity_service.stop()
             self.monitor_service.stop()
         try:
             result = self.simulation_controller.update(payload)
         except Exception:
-            if structural and current.initialized:
+            if rebuild and current.initialized:
                 tick_interval = current.config.get("tick_interval_seconds", 2.5)
                 self.leak_service.start(tick_interval)
                 self.client_activity_service.start(tick_interval)
                 self.monitor_service.start([server.to_dict() for server in current.servers.values()], tick_interval)
             raise
         tick_interval = result["configuration"].get("tick_interval_seconds", 2.5)
-        self.leak_service.start(tick_interval)
-        self.client_activity_service.start(tick_interval)
-        if result.get("servers"):
-            self.monitor_service.start(result.get("servers", []), tick_interval)
+        if rebuild:
+            self.leak_service.start(tick_interval)
+            self.client_activity_service.start(tick_interval)
+            self.monitor_service.start([server.to_dict() for server in self.repository.snapshot_without_clients().servers.values()], tick_interval)
         else:
+            # Configuration edits, including live population resizing, only
+            # adjust worker cadence and monitor membership; no worker restarts.
+            self.leak_service.configure_tick_interval(tick_interval)
+            self.client_activity_service.configure_tick_interval(tick_interval)
             self.monitor_service.configure_tick_interval(tick_interval)
+            updated = self.repository.snapshot_without_clients()
+            removed_server_ids = set(current.servers) - set(updated.servers)
+            for server_id in removed_server_ids:
+                self.monitor_service.remove_server(server_id)
+            for server in updated.servers.values():
+                self.monitor_service.add_server(
+                    server.to_dict(),
+                    tick_interval_seconds=tick_interval,
+                    start_thread=server.status != "offline",
+                )
         return result
 
     def pause(self) -> dict:
-        return self.simulation_controller.pause()
+        result = self.simulation_controller.pause()
+        if self.management_engine:
+            self.management_engine.pause(True)
+        return result
 
     def resume(self) -> dict:
-        return self.simulation_controller.resume()
+        result = self.simulation_controller.resume()
+        if self.management_engine:
+            self.management_engine.pause(False)
+        return result
 
     def end(self) -> dict:
         self.leak_service.stop()
         self.client_activity_service.stop()
         self.monitor_service.stop()
-        return self.simulation_controller.end()
+        result = self.simulation_controller.end()
+        if self.management_engine:
+            self.management_engine.pause(True)
+        return result
+
+    def management_state(self) -> dict:
+        if not self.management_engine:
+            raise RuntimeError("motor de gestão não configurado")
+        return self.management_engine.snapshot()
+
+    def management_actions(self) -> list[dict]:
+        return self.management_engine.action_definitions()
+
+    def management_scenarios(self) -> list[dict]:
+        return self.management_engine.scenarios()
+
+    def management_apply_action(self, payload: dict) -> dict:
+        return self.management_engine.apply_action(payload)
+
+    def management_start_scenario(self, payload: dict) -> dict:
+        if not self.repository.snapshot().initialized or self.repository.snapshot().lifecycle == "ended":
+            self.initialize({"num_servers": 3, "num_clients": 16, "seed": int(payload.get("seed", 2026)), "tick_interval_seconds": 2.5})
+        return self.management_engine.reset(str(payload.get("scenario_id", "free")), payload.get("seed"))
+
+    def management_reset(self) -> dict:
+        return self.management_engine.reset("free")
+
+    def management_history(self) -> list[dict]:
+        return self.management_engine.history()
 
     def status(self) -> dict:
         return self.simulation_controller.status()
 
     def create_client(self, payload: dict) -> dict:
         return self.simulation_controller.add_client(payload)
+
+    def client_feedback(self, client_id: str, payload: dict) -> dict:
+        return self.simulation_controller.record_client_feedback(client_id, payload)
 
     def create_server(self, payload: dict) -> dict:
         result = self.simulation_controller.add_server(payload)
@@ -169,6 +228,7 @@ class ApiController:
             "recent_traffic": self.traffic()[-25:],
             "metrics_history": list(state.metrics_history),
             "monitor": self.monitor_status(),
+            "management": self.management_engine.snapshot() if self.management_engine else None,
         }
 
     def verify_watermark(self, token: str) -> dict:
@@ -184,4 +244,5 @@ class ApiController:
 
     def watermark_demo(self, payload: dict) -> dict:
         return self.watermark_demo_service.run(payload)
+
 
