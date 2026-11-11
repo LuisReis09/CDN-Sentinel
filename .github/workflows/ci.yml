@@ -18,7 +18,7 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile Python sources
-        run: python -m compileall -q app.py client_app.py node_app.py controllers models repositories routes services tests utils
+        run: python -m compileall -q app.py client_app.py node_app.py controllers media models repositories routes services tests tools utils watermark
       - name: Run backend tests
         run: python -m unittest discover -s tests -v
 

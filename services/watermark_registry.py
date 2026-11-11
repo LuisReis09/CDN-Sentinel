@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import json
 import os
 import sqlite3
+import time
 from contextlib import closing
 from pathlib import Path
 from threading import RLock
@@ -59,6 +62,60 @@ class WatermarkRegistry:
                 connection.execute(
                     "CREATE INDEX IF NOT EXISTS watermark_registry_token_idx ON watermark_registry(key_id, token)"
                 )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS forensic_claims (
+                        watermark_id TEXT PRIMARY KEY,
+                        key_id TEXT NOT NULL,
+                        marker TEXT NOT NULL,
+                        claim_token TEXT NOT NULL,
+                        claim_json TEXT NOT NULL,
+                        claim_hash TEXT NOT NULL,
+                        created_at REAL NOT NULL,
+                        UNIQUE(key_id, marker)
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS forensic_events (
+                        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        key_id TEXT,
+                        watermark_id TEXT,
+                        event_type TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        payload_hash TEXT NOT NULL,
+                        previous_hash TEXT,
+                        created_at REAL NOT NULL
+                    )
+                    """
+                )
+                try:
+                    connection.execute("ALTER TABLE forensic_events ADD COLUMN key_id TEXT")
+                except sqlite3.OperationalError:
+                    pass
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS forensic_events_watermark_idx ON forensic_events(watermark_id, created_at)"
+                )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS forensic_events_key_idx ON forensic_events(key_id, event_id)"
+                )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ab_sessions (
+                        session_id TEXT PRIMARY KEY,
+                        client_id TEXT NOT NULL,
+                        content_id TEXT NOT NULL,
+                        watermark_id TEXT NOT NULL,
+                        cache_id TEXT NOT NULL,
+                        fingerprint TEXT NOT NULL,
+                        record_mac TEXT NOT NULL,
+                        created_at REAL NOT NULL,
+                        UNIQUE(content_id, fingerprint)
+                    )
+                    """
+                )
+                connection.execute("CREATE INDEX IF NOT EXISTS ab_sessions_content_idx ON ab_sessions(content_id, fingerprint)")
 
     def put(self, secret_key: str, marker: str, token: str, created_at: float) -> None:
         with self._lock, closing(self._connect()) as connection:
@@ -89,4 +146,136 @@ class WatermarkRegistry:
                 (self.key_id(secret_key),),
             ).fetchall()
         return {str(marker): str(token) for marker, token in rows}
+
+    def put_claim(self, secret_key: str, marker: str, token: str, claim: dict) -> None:
+        """Persist a versioned claim and its exact marker atomically."""
+        watermark_id = str(claim.get("watermark_id") or "")
+        if not watermark_id:
+            raise ValueError("claim sem watermark_id")
+        canonical = json.dumps(claim, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        claim_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        key_id = self.key_id(secret_key)
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                existing = connection.execute(
+                    "SELECT claim_hash FROM forensic_claims WHERE watermark_id = ?", (watermark_id,)
+                ).fetchone()
+                if existing and str(existing[0]) != claim_hash:
+                    raise WatermarkRegistryCollision("watermark_id já associado a claim diferente")
+                existing_marker = connection.execute(
+                    "SELECT token FROM watermark_registry WHERE key_id = ? AND marker = ?", (key_id, marker)
+                ).fetchone()
+                if existing_marker and str(existing_marker[0]) != token:
+                    raise WatermarkRegistryCollision("colisão de marcador visual: dois tokens autenticados usam o mesmo marcador")
+                connection.execute(
+                    """
+                    INSERT INTO watermark_registry(key_id, marker, token, created_at, algorithm_version)
+                    VALUES (?, ?, ?, ?, 'CDNWM4-SECDED48')
+                    ON CONFLICT(key_id, marker) DO UPDATE SET token=excluded.token, created_at=excluded.created_at,
+                        algorithm_version=excluded.algorithm_version
+                    """,
+                    (key_id, marker, token, float(claim.get("issued_at", time.time()))),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO forensic_claims(watermark_id, key_id, marker, claim_token, claim_json, claim_hash, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(watermark_id) DO UPDATE SET marker=excluded.marker, claim_token=excluded.claim_token,
+                        claim_json=excluded.claim_json, claim_hash=excluded.claim_hash
+                    """,
+                    (watermark_id, key_id, marker, token, canonical, claim_hash, time.time()),
+                )
+
+    def claim_for_marker(self, secret_key: str, marker: str) -> dict | None:
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT watermark_id, claim_token, claim_json, claim_hash FROM forensic_claims WHERE key_id = ? AND marker = ?",
+                (self.key_id(secret_key), marker),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(str(row[2]))
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != str(row[3]):
+            raise ValueError("integridade do claim no ledger inválida")
+        return {"watermark_id": str(row[0]), "claim_token": str(row[1]), "claim": payload, "claim_hash": str(row[3])}
+
+    def append_forensic_event(self, secret_key: str, event_type: str, payload: dict, watermark_id: str | None = None) -> dict:
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        key_id = self.key_id(secret_key)
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                previous = connection.execute(
+                    "SELECT payload_hash FROM forensic_events WHERE key_id = ? ORDER BY event_id DESC LIMIT 1",
+                    (key_id,),
+                ).fetchone()
+                previous_hash = str(previous[0]) if previous else None
+                signed = json.dumps([event_type, watermark_id, previous_hash, canonical], separators=(",", ":"), ensure_ascii=False)
+                payload_hash = hmac.new(secret_key.encode("utf-8"), signed.encode("utf-8"), hashlib.sha256).hexdigest()
+                connection.execute(
+                    "INSERT INTO forensic_events(key_id, watermark_id, event_type, payload_json, payload_hash, previous_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (key_id, watermark_id, event_type, canonical, payload_hash, previous_hash, time.time()),
+                )
+        return {"event_type": event_type, "watermark_id": watermark_id, "payload_hash": payload_hash, "previous_hash": previous_hash}
+
+    def forensic_events(self, secret_key: str, watermark_id: str | None = None) -> list[dict]:
+        query = "SELECT event_id, watermark_id, event_type, payload_json, payload_hash, previous_hash, created_at FROM forensic_events WHERE key_id = ?"
+        args: tuple = (self.key_id(secret_key),)
+        if watermark_id:
+            query += " AND watermark_id = ?"
+            args = (self.key_id(secret_key), watermark_id)
+        query += " ORDER BY event_id"
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(query, args).fetchall()
+        return [{"event_id": row[0], "watermark_id": row[1], "event_type": row[2], "payload": json.loads(row[3]), "payload_hash": row[4], "previous_hash": row[5], "created_at": row[6]} for row in rows]
+
+    def verify_forensic_events(self, secret_key: str) -> bool:
+        with self._lock, closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT watermark_id, event_type, payload_json, payload_hash, previous_hash FROM forensic_events WHERE key_id = ? ORDER BY event_id",
+                (self.key_id(secret_key),),
+            ).fetchall()
+        previous_hash = None
+        for watermark_id, event_type, canonical, stored_hash, linked_hash in rows:
+            if linked_hash != previous_hash:
+                return False
+            signed = json.dumps([event_type, watermark_id, previous_hash, canonical], separators=(",", ":"), ensure_ascii=False)
+            expected = hmac.new(secret_key.encode("utf-8"), signed.encode("utf-8"), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(str(stored_hash), expected):
+                return False
+            previous_hash = stored_hash
+        return True
+
+    def ab_pattern_exists(self, content_id: str, fingerprint: str) -> bool:
+        with self._lock, closing(self._connect()) as connection:
+            return connection.execute(
+                "SELECT 1 FROM ab_sessions WHERE content_id = ? AND fingerprint = ?", (content_id, fingerprint)
+            ).fetchone() is not None
+
+    def put_ab_session(self, secret_key: str, session_id: str, client_id: str, content_id: str, watermark_id: str, cache_id: str, fingerprint: str) -> None:
+        if not fingerprint or set(fingerprint) - {"A", "B"}:
+            raise ValueError("fingerprint A/B inválido")
+        fields = [session_id, client_id, content_id, watermark_id, cache_id, fingerprint]
+        canonical = json.dumps(fields, separators=(",", ":"), ensure_ascii=False)
+        mac = hmac.new(secret_key.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+        with self._lock, closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    "INSERT INTO ab_sessions(session_id, client_id, content_id, watermark_id, cache_id, fingerprint, record_mac, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (*fields, mac, time.time()),
+                )
+
+    def ab_session(self, secret_key: str, session_id: str) -> dict | None:
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT session_id, client_id, content_id, watermark_id, cache_id, fingerprint, record_mac FROM ab_sessions WHERE session_id = ?", (session_id,)
+            ).fetchone()
+        if not row:
+            return None
+        canonical = json.dumps(list(row[:6]), separators=(",", ":"), ensure_ascii=False)
+        expected = hmac.new(secret_key.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(str(row[6]), expected):
+            raise ValueError("integridade da sessão A/B inválida")
+        return dict(zip(("session_id", "client_id", "content_id", "watermark_id", "cache_id", "fingerprint"), row[:6]))
 

@@ -28,6 +28,8 @@ def register_api_routes(api, controller: ApiController) -> None:
             raise ValueError("vídeo excede o limite de 180 segundos")
         if limits["width"] * limits["height"] > 3840 * 2160:
             raise ValueError("resolução excede o limite de 3840x2160")
+        if limits["fps"] > 60 or limits["fps"] <= 0:
+            raise ValueError("framerate fora do limite de 1 a 60 fps")
 
     control = api.namespace("control", path="/api/control", description="Simulation lifecycle and configuration")
     topology = api.namespace("topology", path="/api/topology", description="Global CDN topology")
@@ -86,7 +88,8 @@ def register_api_routes(api, controller: ApiController) -> None:
             "chunk_id": fields.String,
             "content_type": fields.String,
             "payload": fields.String(description="Bytes do chunk em Base64; o MP4 contém a marca visual nos frames e o token é metadado separado"),
-            "watermark_token": fields.String,
+            # The transport token stays inside the CDN/controller boundary;
+            # public data-plane responses expose only playable bytes.
             "server_id": fields.String,
             "client_id": fields.String,
             "issued_at": fields.Float,
@@ -117,6 +120,14 @@ def register_api_routes(api, controller: ApiController) -> None:
             "chunk": fields.Integer(description="Número do chunk, opcional", default=0, min=0),
             "video_id": fields.String(description="Exemplo real específico, opcional"),
             "exclude_video_id": fields.String(description="Evita repetir o exemplo anterior"),
+        },
+    )
+    review_model = api.model(
+        "InvestigationReview",
+        {
+            "decision": fields.String(required=True, enum=["ACCEPT", "REJECT", "INCONCLUSIVE"]),
+            "reviewer": fields.String(required=True, min_length=1, max_length=160),
+            "notes": fields.String(max_length=2000),
         },
     )
     client_create_model = api.model(
@@ -300,7 +311,9 @@ def register_api_routes(api, controller: ApiController) -> None:
                 chunk_number = int(request.args.get("chunk", "0"))
                 if chunk_number < 0:
                     raise ValueError("chunk deve ser maior ou igual a zero")
-                return controller.stream(client_id, chunk_number, request.headers.get("X-Request-ID"))
+                result = controller.stream(client_id, chunk_number, request.headers.get("X-Request-ID"))
+                result.pop("watermark_token", None)
+                return result
             except SimulationPausedError as exc:
                 return {"error": str(exc)}, 409
             except ClientOfflineError as exc:
@@ -331,8 +344,6 @@ def register_api_routes(api, controller: ApiController) -> None:
                     request.headers.get("X-Request-ID"),
                 )
                 response = Response(media, mimetype=metadata.get("content_type", "video/mp4"))
-                response.headers["X-Watermark-Token"] = metadata.get("watermark_token", "")
-                response.headers["X-Watermark-Chunk"] = metadata.get("chunk_id", "")
                 response.headers["X-CDN-Server"] = metadata.get("server_id", "")
                 response.headers["X-Watermark-Visual"] = "embedded-in-video-frames"
                 return response
@@ -348,6 +359,37 @@ def register_api_routes(api, controller: ApiController) -> None:
                 return {"error": str(exc)}, 503
             except Exception:
                 return {"error": "Falha temporária ao entregar a mídia"}, 502
+
+    @clients.route("/<string:client_id>/hls/sessions")
+    class ClientHLSSessionResource(Resource):
+        @clients.doc(description="Cria uma playlist HLS por sessão a partir de segmentos A/B pré-codificados.")
+        def post(self, client_id: str):
+            try:
+                return controller.create_hls_session(client_id), 201
+            except KeyError as exc:
+                return {"error": str(exc)}, 404
+            except PermissionError as exc:
+                return {"error": str(exc)}, 403
+            except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as exc:
+                return {"error": str(exc)}, 503
+
+    @clients.route("/<string:client_id>/hls/<string:session_id>/index.m3u8")
+    class ClientHLSManifestResource(Resource):
+        def get(self, client_id: str, session_id: str):
+            try:
+                manifest = controller.hls_ab_service.manifest(session_id, client_id)
+                return Response(manifest, mimetype="application/vnd.apple.mpegurl", headers={"Cache-Control": "private, no-store"})
+            except (KeyError, ValueError):
+                return {"error": "sessão HLS não encontrada"}, 404
+
+    @clients.route("/<string:client_id>/hls/<string:session_id>/<int:index>.ts")
+    class ClientHLSSegmentResource(Resource):
+        def get(self, client_id: str, session_id: str, index: int):
+            try:
+                path = controller.hls_ab_service.segment(session_id, client_id, index)
+                return send_file(path, mimetype="video/mp2t", conditional=True, etag=True)
+            except (KeyError, ValueError, IndexError, FileNotFoundError):
+                return {"error": "segmento HLS não encontrado"}, 404
 
     @security.route("/blacklist")
     class BlacklistResource(Resource):
@@ -411,7 +453,7 @@ def register_api_routes(api, controller: ApiController) -> None:
                     temporary_path = Path(temporary.name)
                 validate_uploaded_video(temporary_path)
                 return controller.detect_watermark_video(temporary_path)
-            except (UnidentifiedImageError, OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+            except (UnidentifiedImageError, OSError, ValueError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                 return {"status": "INCONCLUSIVE", "error": str(exc)}, 400
             finally:
                 if temporary_path and temporary_path.exists():
@@ -457,6 +499,43 @@ def register_api_routes(api, controller: ApiController) -> None:
                 return controller.scan(request.args.get("server_id"))
             except RuntimeError as exc:
                 return {"error": str(exc)}, 503
+
+    @monitor.route("/investigations")
+    class ForensicInvestigationResource(Resource):
+        @monitor.doc(description="Recebe mídia autorizada e gera evidência forense sem blacklist automática.")
+        def post(self):
+            uploaded = request.files.get("file")
+            if not uploaded:
+                return {"error": "envie a mídia em multipart no campo file"}, 400
+            maximum_bytes = 64 * 1024 * 1024
+            temporary_path: Path | None = None
+            try:
+                raw = uploaded.read(maximum_bytes + 1)
+                if len(raw) > maximum_bytes:
+                    return {"error": "mídia excede o limite de 64 MiB"}, 413
+                suffix = Path(uploaded.filename or ".mp4").suffix.lower() or ".mp4"
+                if suffix not in {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}:
+                    return {"error": "envie um contêiner de vídeo suportado"}, 415
+                with tempfile.NamedTemporaryFile(prefix="cdn-investigation-", suffix=suffix, delete=False) as temporary:
+                    temporary.write(raw)
+                    temporary_path = Path(temporary.name)
+                validate_uploaded_video(temporary_path)
+                body = request.form
+                return controller.investigate_video(temporary_path, source=body.get("source", "authorized-upload"), algorithm=body.get("algorithm", "auto")), 201
+            except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                return {"status": "INCONCLUSIVE", "error": str(exc)}, 400
+            finally:
+                if temporary_path and temporary_path.exists():
+                    temporary_path.unlink()
+
+    @monitor.route("/investigations/<string:investigation_id>/review")
+    class ForensicReviewResource(Resource):
+        @monitor.expect(review_model, validate=True)
+        def post(self, investigation_id: str):
+            try:
+                return controller.review_investigation(investigation_id, request.get_json(silent=True) or {})
+            except (ValueError, RuntimeError) as exc:
+                return {"error": str(exc)}, 400
 
     @monitor.route("/status")
     class MonitorStatusResource(Resource):

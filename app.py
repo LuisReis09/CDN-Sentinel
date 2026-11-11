@@ -19,7 +19,9 @@ from services.stream_service import StreamService
 from services.watermark_service import WatermarkService
 from services.watermark_demo_service import WatermarkDemoService
 from services.client_activity_service import ClientActivityService
+from services.forensic_investigation_service import ForensicInvestigationService
 from management.engine import ManagementEngine
+from media.hls_ab import HLSABService
 
 
 def create_app() -> Flask:
@@ -54,11 +56,13 @@ def create_app() -> Flask:
     client_activity_service = ClientActivityService(repository, stream_service)
     blacklist_service = BlacklistService(repository, http_client, watermark_service)
     monitor_service = MonitorService(repository, watermark_service, blacklist_service)
+    forensic_investigation_service = ForensicInvestigationService(watermark_service)
+    hls_ab_service = HLSABService(watermark_service)
     leak_service = LeakService(repository, stream_service)
     watermark_demo_service = WatermarkDemoService(watermark_service)
     management_engine = ManagementEngine(repository, simulation_controller)
     client_activity_service.set_on_tick(management_engine.tick)
-    controller = ApiController(repository, simulation_controller, stream_service, monitor_service, leak_service, watermark_service, watermark_demo_service, client_activity_service, management_engine)
+    controller = ApiController(repository, simulation_controller, stream_service, monitor_service, leak_service, watermark_service, watermark_demo_service, client_activity_service, forensic_investigation_service, hls_ab_service, management_engine)
     register_api_routes(api, controller)
 
     @app.get("/")

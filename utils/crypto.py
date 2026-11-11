@@ -10,6 +10,8 @@ from typing import Any
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 
 def _b64url_encode(value: bytes) -> str:
@@ -22,9 +24,22 @@ def _b64url_decode(value: str) -> bytes:
 
 
 def derive_key(secret: str, context: str) -> bytes:
-    """Derive an independent 256-bit key for each protocol context."""
+    """Legacy derivation retained for CDNWM1..3/internal compatibility."""
 
     return hashlib.sha256(f"CDN-Sentinel/{context}\x00{secret}".encode("utf-8")).digest()
+
+
+def derive_key_hkdf(secret: str, context: str) -> bytes:
+    """Derive an independent 256-bit key for new versioned protocols."""
+
+    if not isinstance(secret, str) or len(secret) < 16:
+        raise ValueError("segredo deve ter pelo menos 128 bits em sua representação")
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=f"CDN-Sentinel/{context}".encode("utf-8"),
+    ).derive(secret.encode("utf-8"))
 
 
 def encrypt_bytes(plaintext: bytes, secret: str, *, aad: str = "", context: str = "internal") -> tuple[bytes, bytes]:

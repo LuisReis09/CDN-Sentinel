@@ -5,8 +5,10 @@ import base64
 import hashlib
 import os
 import random
+import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -15,14 +17,15 @@ from flask import Flask, Response, jsonify, request
 
 from repositories.in_memory import NodeRepository
 from services.capacity_service import profile_for_tier, service_metrics, queue_wait_ms
-from services.content_provider import ContentProvider, HybridContentProvider, default_content_id
+from services.content_provider import ContentProvider, DatasetContentProvider, HybridContentProvider, DATASET_CONTENT_ID, default_content_id
 from services.watermark_service import WatermarkService
 from utils.geo import haversine_km
 from utils.latency import sleep_for_distance
 from utils.crypto import decrypt_payload, encrypt_payload, is_encrypted_payload
 from utils.video import encode_payload
 from utils.protocol import signed_headers, verify_headers
-from utils.video_watermark import VIDEO_STRENGTH, embed_video
+from utils.video_watermark import VIDEO_STRENGTH, embed_video, probe_video_limits
+from utils.qim_watermark import QIM_STEP
 
 
 class CapacityRejected(RuntimeError):
@@ -124,7 +127,7 @@ class CDNNode:
             **metrics,
         }
 
-    def _watermarked_media(self, video_id: str, chunk_number: int, token: str, content: bytes, content_type: str) -> bytes:
+    def _watermarked_media(self, video_id: str, chunk_number: int, token: str, content: bytes, content_type: str, algorithm: str = "adaptive-spread") -> bytes:
         """Return a playable media payload with the visual marker in its frames.
 
         The token is deliberately kept as response metadata. It is never
@@ -156,7 +159,7 @@ class CDNNode:
             cache_key = hashlib.sha256(
                 f"CDNWM6:{source_path.resolve()}:{source_stat.st_mtime_ns}:{source_stat.st_size}:"
                 f"{hashlib.sha256(self.secret_key.encode('utf-8')).hexdigest()}:{token}:"
-                f"{VIDEO_STRENGTH}:adaptive-spread".encode("utf-8")
+                f"{QIM_STEP if algorithm == 'qim2' else VIDEO_STRENGTH}:{algorithm}".encode("utf-8")
             ).hexdigest()[:32]
             destination = cache_root / f"{cache_key}.mp4"
             if not destination.is_file() or destination.stat().st_size == 0:
@@ -166,10 +169,10 @@ class CDNNode:
                         source_path,
                         partial,
                         token,
-                        self.secret_key,
-                        strength=VIDEO_STRENGTH,
+                        self.watermark_service.visual_secret_for_token(token),
+                        strength=QIM_STEP if algorithm == "qim2" else VIDEO_STRENGTH,
                         adaptive=True,
-                        algorithm="adaptive-spread",
+                        algorithm=algorithm,
                     )
                     partial.replace(destination)
                 finally:
@@ -203,11 +206,38 @@ class CDNNode:
                 time.sleep(reservation["queue_wait_ms"] / 1000.0)
             if self.fault["extra_latency_ms"]:
                 time.sleep(self.fault["extra_latency_ms"] / 1000.0)
-            token, claim = self.watermark_service.issue(client_id, self.server_id, chunk_number, video_id)
             content, content_type = self.content_provider.get_chunk(video_id, chunk_number)
-            watermarked = self._watermarked_media(video_id, chunk_number, token, content, content_type)
+            claim_content_id = video_id
+            algorithm = "adaptive-spread"
+            resolver = getattr(self.content_provider, "resolve_asset", None)
+            if resolver is not None:
+                try:
+                    source_path, _source_type = resolver(video_id, chunk_number)
+                    limits = probe_video_limits(source_path)
+                    if limits["width"] >= 640 and limits["height"] >= 360:
+                        algorithm = "qim2"
+                    if video_id == DATASET_CONTENT_ID:
+                        dataset = DatasetContentProvider()
+                        claim_content_id = dataset._content_id(source_path.resolve())
+                except (OSError, ValueError, FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                    pass
+            if os.getenv("CDN_FORENSIC_CLAIMS", "1").strip().lower() in {"1", "true", "yes", "on"}:
+                token, claim = self.watermark_service.issue_forensic_claim(
+                    client_id=client_id,
+                    server_id=self.server_id,
+                    content_id=claim_content_id,
+                    session_id=f"sess-{uuid.uuid4().hex}",
+                    segment_range=f"{chunk_number}-{chunk_number}",
+                    algorithm_id="dct-qim-v2" if algorithm == "qim2" else "adaptive-spread-v5",
+                )
+                chunk_id = claim.segment_range
+            else:
+                token, claim = self.watermark_service.issue(client_id, self.server_id, chunk_number, claim_content_id)
+                chunk_id = claim.chunk_id
+                algorithm = "adaptive-spread"
+            watermarked = self._watermarked_media(video_id, chunk_number, token, content, content_type, algorithm)
             result = {
-                "chunk_id": claim.chunk_id,
+                "chunk_id": chunk_id,
                 "content_type": content_type,
                 "payload": encode_payload(watermarked),
                 "watermark_token": token,
@@ -408,8 +438,6 @@ def create_node_app(node: CDNNode) -> Flask:
             result = node.stream(client_id, auth_payload["chunk"], auth_payload["video_id"])
             raw = base64.b64decode(result["payload"], validate=True)
             response = Response(raw, mimetype=result["content_type"])
-            response.headers["X-Watermark-Token"] = result["watermark_token"]
-            response.headers["X-Watermark-Chunk"] = result["chunk_id"]
             response.headers["X-CDN-Server"] = result["server_id"]
             response.headers["X-Queue-Wait-Ms"] = str(result.get("queue_wait_ms", 0.0))
             return response

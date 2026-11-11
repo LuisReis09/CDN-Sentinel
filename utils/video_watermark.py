@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
 from utils.dct_watermark import _decode_scores as _decode_dct_scores, detect_image_dct, embed_image_dct
+from utils.qim_watermark import QIM_STEP, _decode_score_vector as _decode_qim_score_vector, detect_image_qim, embed_image_qim
 from utils.image_watermark import (
     ImageWatermarkUnsupported,
     _decode_score_vector,
@@ -37,6 +39,7 @@ def transcode_video(source: Path, destination: Path, crf: int = 24, preset: str 
         ],
         check=True,
         capture_output=True,
+        timeout=180,
     )
     return {"crf": crf, "preset": preset}
 
@@ -51,10 +54,22 @@ def _probe(path: Path) -> tuple[int, int, float]:
         check=True,
         capture_output=True,
         text=True,
+        timeout=15,
     )
-    width, height, rate = result.stdout.strip().split(",", 2)
-    numerator, denominator = rate.split("/", 1)
-    return int(width), int(height), float(numerator) / float(denominator)
+    # MPEG-TS can report the same video stream more than once.  Parse a
+    # complete stream row instead of treating all stdout as one CSV record.
+    for line in result.stdout.splitlines():
+        fields = line.strip().split(",")
+        if len(fields) != 3 or "/" not in fields[2]:
+            continue
+        try:
+            width, height = int(fields[0]), int(fields[1])
+            numerator, denominator = (int(value) for value in fields[2].split("/", 1))
+        except ValueError:
+            continue
+        if width > 0 and height > 0 and numerator > 0 and denominator > 0:
+            return width, height, numerator / denominator
+    raise ValueError("metadados de vídeo inválidos")
 
 
 def probe_video_limits(path: Path) -> dict:
@@ -68,6 +83,7 @@ def probe_video_limits(path: Path) -> dict:
         check=True,
         capture_output=True,
         text=True,
+        timeout=15,
     )
     try:
         duration = float(result.stdout.strip())
@@ -85,6 +101,7 @@ def _frame_count(path: Path, fps: float) -> int:
         check=True,
         capture_output=True,
         text=True,
+        timeout=30,
     )
     values = [value.strip() for value in result.stdout.splitlines() if value.strip()]
     fields = {
@@ -153,14 +170,14 @@ def embed_video(
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
         processed = 0
         try:
             decoder = subprocess.Popen(
                 _frame_command(source, width, height, fps),
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
             )
             assert decoder.stdout is not None
             assert encoder.stdin is not None
@@ -171,6 +188,8 @@ def embed_video(
                 frame = Image.frombytes("RGB", (width, height), raw)
                 if algorithm == "dct":
                     marked, _metadata = embed_image_dct(frame, token, secret, step=strength)
+                elif algorithm == "qim2":
+                    marked, _metadata = embed_image_qim(frame, token, secret, step=strength)
                 elif algorithm == "adaptive-spread":
                     marked, _metadata = embed_image(frame, token, secret, strength=strength, adaptive=adaptive)
                 else:
@@ -181,15 +200,10 @@ def embed_video(
             decoder_result = decoder.wait(timeout=30)
             if decoder_result:
                 raise RuntimeError("ffmpeg não conseguiu decodificar o vídeo de origem")
-            if decoder.stderr:
-                decoder.stderr.close()
             encoder.stdin.close()
             encoder_result = encoder.wait(timeout=120)
             if encoder_result:
-                error = (encoder.stderr.read() if encoder.stderr else b"").decode("utf-8", "replace")
-                raise RuntimeError(f"ffmpeg não conseguiu codificar a watermark: {error[-500:]}")
-            if encoder.stderr:
-                encoder.stderr.close()
+                raise RuntimeError("ffmpeg não conseguiu codificar a watermark")
             if processed == 0:
                 raise RuntimeError("o vídeo não contém frames visuais válidos")
             subprocess.run(
@@ -200,6 +214,7 @@ def embed_video(
                 ],
                 check=True,
                 capture_output=True,
+                timeout=180,
             )
         finally:
             if encoder.poll() is None:
@@ -214,6 +229,7 @@ def detect_video(
     adaptive: bool = True,
     algorithm: str = "adaptive-spread",
     dct_step: float = 10.0,
+    qim_step: float = QIM_STEP,
 ) -> dict:
     """Sample the whole video and aggregate independent frame evidence.
 
@@ -238,7 +254,10 @@ def detect_video(
         "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
     ]
     frame_size = detection_width * detection_height * 3
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    watchdog = threading.Timer(120.0, process.kill)
+    watchdog.daemon = True
+    watchdog.start()
     evidences: list[dict] = []
     score_vectors: list[list[float]] = []
     aggregate_layout = None
@@ -252,6 +271,13 @@ def detect_video(
             try:
                 if algorithm == "dct":
                     raw_evidence = _decode_dct_scores(frame, secret, step=dct_step)
+                elif algorithm == "qim2":
+                    raw_evidence = detect_image_qim(frame, secret, step=qim_step)
+                    evidences.append({key: value for key, value in raw_evidence.items() if key != "scores"})
+                    if raw_evidence.get("supported"):
+                        score_vectors.append(raw_evidence["scores"])
+                        aggregate_layout = True
+                    continue
                 else:
                     raw_evidence = _decode_scores(frame, secret, adaptive=adaptive)
                 evidences.append(classify_image_evidence(raw_evidence))
@@ -265,11 +291,9 @@ def detect_video(
         process.stdout.close()
         result = process.wait(timeout=60)
         if result:
-            error = (process.stderr.read() if process.stderr else b"").decode("utf-8", "replace")
-            raise RuntimeError(f"ffmpeg não conseguiu amostrar o vídeo: {error[-500:]}")
-        if process.stderr:
-            process.stderr.close()
+            raise RuntimeError("ffmpeg não conseguiu amostrar o vídeo")
     finally:
+        watchdog.cancel()
         if process.poll() is None:
             process.kill()
     supported = [item for item in evidences if item.get("supported")]
@@ -282,12 +306,8 @@ def detect_video(
         if len(weights) != len(score_vectors):
             weights = np.ones(len(score_vectors), dtype=np.float64)
         weights /= max(float(weights.sum()), 1e-9)
-        aggregate = classify_image_evidence(
-            _decode_score_vector(
-                np.average(np.asarray(score_vectors, dtype=np.float64), axis=0, weights=weights),
-                aggregate_layout,
-            )
-        )
+        averaged_scores = np.average(np.asarray(score_vectors, dtype=np.float64), axis=0, weights=weights)
+        aggregate = _decode_qim_score_vector(averaged_scores) if algorithm == "qim2" else classify_image_evidence(_decode_score_vector(averaged_scores, aggregate_layout))
         # Compression can corrupt different coded bits in different frames,
         # making a score-vector average less reliable than a consensus of the
         # independently decoded frame markers. Keep the aggregate metrics, but
