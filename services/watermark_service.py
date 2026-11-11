@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 import uuid
@@ -107,6 +108,32 @@ class WatermarkService:
         if key_id not in self._forensic_keys:
             raise ValueError("kid desconhecido")
         claim_secret = self._forensic_keys[key_id]
+        def existing_session_claim() -> tuple[str, ForensicClaim] | None:
+            if session_id is None:
+                return None
+            record = self._registry_store.claim_for_session(
+                claim_secret, session_id, content_id, segment_range, algorithm_id, server_id,
+            )
+            if record is None:
+                return None
+            try:
+                existing_claim = verify_claim_token(record["claim_token"], claim_secret)
+            except ClaimError as exc:
+                raise ValueError(f"claim da sessão não pode ser reutilizado: {exc}") from exc
+            if existing_claim.to_dict() != record["claim"]:
+                raise ValueError("claim da sessão diverge do token autenticado")
+            if (
+                existing_claim.client_id != client_id or existing_claim.server_id != server_id
+                or existing_claim.fingerprint_scheme != fingerprint_scheme
+            ):
+                raise ValueError("sessão já vinculada a outra entrega")
+            with self._registry_lock:
+                self._registry[visual_marker(record["claim_token"])] = record["claim_token"]
+            return record["claim_token"], existing_claim
+
+        reused = existing_session_claim()
+        if reused is not None:
+            return reused
         watermark_id = uuid.uuid4().hex
         claim = ForensicClaim(
             version="CDNWM4", watermark_id=watermark_id,
@@ -118,7 +145,13 @@ class WatermarkService:
         )
         token = create_claim_token(claim, claim_secret)
         marker = visual_marker(token)
-        self._registry_store.put_claim(claim_secret, marker, token, claim.to_dict())
+        try:
+            self._registry_store.put_claim(claim_secret, marker, token, claim.to_dict())
+        except sqlite3.IntegrityError:
+            reused = existing_session_claim()
+            if reused is None:
+                raise
+            return reused
         with self._registry_lock:
             self._registry[marker] = token
         return token, claim

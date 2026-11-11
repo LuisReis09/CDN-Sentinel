@@ -85,7 +85,7 @@ class StreamService:
             })
         return feedback
 
-    def stream(self, client: Client, state: SimulationState, chunk_number: int = 0, request_id: str | None = None) -> VideoChunk:
+    def stream(self, client: Client, state: SimulationState, chunk_number: int = 0, request_id: str | None = None, *, viewer_session_id: str | None = None) -> VideoChunk:
         if state.paused:
             raise SimulationPausedError("A simulação está pausada")
         if not client.online:
@@ -112,7 +112,8 @@ class StreamService:
             candidate_details[index]["selected"] = True
             candidate_details[index]["attempted"] = True
             try:
-                result = self._http_client.stream(candidate, client.client_id, chunk_number, distance, float(state.config["latency_factor"]), str(state.config.get("video_id") or default_content_id()))
+                stream_args = (candidate, client.client_id, chunk_number, distance, float(state.config["latency_factor"]), str(state.config.get("video_id") or default_content_id()))
+                result = self._http_client.stream(*stream_args, viewer_session_id=viewer_session_id) if viewer_session_id else self._http_client.stream(*stream_args)
                 if self._watermark_service and result.get("watermark_token"):
                     self._watermark_service.register_token(str(result["watermark_token"]))
                 selected_server = candidate

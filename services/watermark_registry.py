@@ -72,9 +72,23 @@ class WatermarkRegistry:
                         claim_json TEXT NOT NULL,
                         claim_hash TEXT NOT NULL,
                         created_at REAL NOT NULL,
+                        session_id TEXT,
+                        content_id TEXT,
+                        segment_range TEXT,
+                        algorithm_id TEXT,
+                        server_id TEXT,
                         UNIQUE(key_id, marker)
                     )
                     """
+                )
+                for column in ("session_id", "content_id", "segment_range", "algorithm_id", "server_id"):
+                    try:
+                        connection.execute(f"ALTER TABLE forensic_claims ADD COLUMN {column} TEXT")
+                    except sqlite3.OperationalError:
+                        pass
+                connection.execute("DROP INDEX IF EXISTS forensic_claims_session_idx")
+                connection.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS forensic_claims_session_node_idx ON forensic_claims(key_id, session_id, content_id, segment_range, algorithm_id, server_id) WHERE session_id IS NOT NULL"
                 )
                 connection.execute(
                     """
@@ -178,13 +192,31 @@ class WatermarkRegistry:
                 )
                 connection.execute(
                     """
-                    INSERT INTO forensic_claims(watermark_id, key_id, marker, claim_token, claim_json, claim_hash, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO forensic_claims(watermark_id, key_id, marker, claim_token, claim_json, claim_hash, created_at, session_id, content_id, segment_range, algorithm_id, server_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(watermark_id) DO UPDATE SET marker=excluded.marker, claim_token=excluded.claim_token,
-                        claim_json=excluded.claim_json, claim_hash=excluded.claim_hash
+                        claim_json=excluded.claim_json, claim_hash=excluded.claim_hash,
+                        session_id=excluded.session_id, content_id=excluded.content_id,
+                        segment_range=excluded.segment_range, algorithm_id=excluded.algorithm_id,
+                        server_id=excluded.server_id
                     """,
-                    (watermark_id, key_id, marker, token, canonical, claim_hash, time.time()),
+                    (watermark_id, key_id, marker, token, canonical, claim_hash, time.time(),
+                     claim.get("session_id"), claim.get("content_id"), claim.get("segment_range"), claim.get("algorithm_id"), claim.get("server_id")),
                 )
+
+    def claim_for_session(self, secret_key: str, session_id: str, content_id: str, segment_range: str, algorithm_id: str, server_id: str) -> dict | None:
+        with self._lock, closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT claim_token, claim_json, claim_hash FROM forensic_claims WHERE key_id = ? AND session_id = ? AND content_id = ? AND segment_range = ? AND algorithm_id = ? AND server_id = ?",
+                (self.key_id(secret_key), session_id, content_id, segment_range, algorithm_id, server_id),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(str(row[1]))
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != str(row[2]):
+            raise ValueError("integridade do claim da sessão inválida")
+        return {"claim_token": str(row[0]), "claim": payload}
 
     def claim_for_marker(self, secret_key: str, marker: str) -> dict | None:
         with self._lock, closing(self._connect()) as connection:

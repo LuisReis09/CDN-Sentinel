@@ -316,7 +316,7 @@ export interface SimulationHistory {
 
 export interface LeakRecord {
   leak_id: string;
-  client_id: string;
+  client_id?: string;
   server_id: string;
   origin_server_id?: string;
   platform: string;
@@ -325,6 +325,12 @@ export interface LeakRecord {
   external_url?: string;
   created_at: number;
   processed: boolean;
+  analyzed?: boolean;
+  attributed?: boolean;
+  needs_reanalysis?: boolean;
+  analysis_count?: number;
+  next_analysis_at?: number;
+  review_status?: string;
   detected_at?: number;
   detected_by_server_id?: string;
   error?: string;

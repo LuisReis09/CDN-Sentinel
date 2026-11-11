@@ -6,6 +6,7 @@
 4. O `content_id` do claim é resolvido no catálogo local. `watermark/content_match.py` compara hashes ordenados de 1 fps, médias de luminância e contraste, com deslocamento inteiro, para impedir transplante simples para outro vídeo. Essa etapa ocorre **depois** da recuperação do marcador; não identifica um título arbitrário de maneira independente. Títulos ausentes, clipes com menos de três frames úteis e comparações fracas ficam inconclusivos.
 5. Se as três provas concordam, a resposta contém `PENDING_REVIEW` e `AUTHENTICATED_SESSION`, junto a hashes, IDs, claim verificado e métricas de comparação. Caso contrário, a resposta contém `INCONCLUSIVE` ou `NO_WATERMARK`, sem atribuição. `NO_WATERMARK` não prova ausência de marca em ataques fora do alcance do detector.
 6. O ledger grava `INVESTIGATION_COMPLETED` em cadeia HMAC. A rota `POST /api/monitor/investigations/{id}/review` aceita `ACCEPT`, `REJECT` ou `INCONCLUSIVE` e grava `INVESTIGATION_REVIEWED`. `ACCEPT` só é aceito após `PENDING_REVIEW`, não pode ser repetido e não modifica blacklist. O frontend Security Observatory oferece upload e revisão.
+7. Vazamentos simulados inconclusivos recebem `analyzed=true`, `attributed=false`, `needs_reanalysis=true` e continuam `processed=false`. A varredura automática espera cinco minutos antes de tentar de novo; uma varredura manual pode reanalisar imediatamente. O resumo público omite o `client_id` que o simulador conhecia antes da investigação.
 
 Exemplo local (PowerShell):
 

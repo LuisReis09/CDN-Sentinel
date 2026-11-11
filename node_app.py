@@ -184,7 +184,7 @@ class CDNNode:
             # is intentionally retained as a bounded runtime cache.
             del temporary_source
 
-    def stream(self, client_id: str, chunk_number: int, video_id: str | None = None) -> dict:
+    def stream(self, client_id: str, chunk_number: int, video_id: str | None = None, viewer_session_id: str | None = None) -> dict:
         video_id = video_id or default_content_id()
         reservation = None
         failed = False
@@ -226,7 +226,7 @@ class CDNNode:
                     client_id=client_id,
                     server_id=self.server_id,
                     content_id=claim_content_id,
-                    session_id=f"sess-{uuid.uuid4().hex}",
+                    session_id=viewer_session_id or f"sess-{uuid.uuid4().hex}",
                     segment_range=f"{chunk_number}-{chunk_number}",
                     algorithm_id="dct-qim-v2" if algorithm == "qim2" else "adaptive-spread-v5",
                 )
@@ -398,6 +398,8 @@ def create_node_app(node: CDNNode) -> Flask:
         client_id = request.args.get("client_id", "")
         try:
             auth_payload = {"client_id": client_id, "chunk": int(request.args.get("chunk", "0")), "video_id": request.args.get("video_id") or default_content_id()}
+            if request.args.get("viewer_session_id"):
+                auth_payload["viewer_session_id"] = request.args["viewer_session_id"]
         except ValueError:
             return jsonify({"error": "chunk deve ser inteiro"}), 400
         denied = authenticate(auth_payload)
@@ -409,7 +411,7 @@ def create_node_app(node: CDNNode) -> Flask:
         if not client_id:
             return jsonify({"error": "client_id é obrigatório"}), 400
         try:
-            return jsonify(node.stream(client_id, chunk_number, auth_payload["video_id"]))
+            return jsonify(node.stream(client_id, chunk_number, auth_payload["video_id"], auth_payload.get("viewer_session_id")))
         except PermissionError as exc:
             return jsonify({"error": str(exc)}), 403
         except CapacityRejected as exc:
@@ -427,6 +429,8 @@ def create_node_app(node: CDNNode) -> Flask:
                 "chunk": int(request.args.get("chunk", "0")),
                 "video_id": request.args.get("video_id") or default_content_id(),
             }
+            if request.args.get("viewer_session_id"):
+                auth_payload["viewer_session_id"] = request.args["viewer_session_id"]
         except ValueError:
             return jsonify({"error": "chunk deve ser inteiro"}), 400
         denied = authenticate(auth_payload)
@@ -435,7 +439,7 @@ def create_node_app(node: CDNNode) -> Flask:
         if auth_payload["chunk"] < 0 or not client_id:
             return jsonify({"error": "client_id e chunk válidos são obrigatórios"}), 400
         try:
-            result = node.stream(client_id, auth_payload["chunk"], auth_payload["video_id"])
+            result = node.stream(client_id, auth_payload["chunk"], auth_payload["video_id"], auth_payload.get("viewer_session_id"))
             raw = base64.b64decode(result["payload"], validate=True)
             response = Response(raw, mimetype=result["content_type"])
             response.headers["X-CDN-Server"] = result["server_id"]

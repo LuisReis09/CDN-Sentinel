@@ -20,6 +20,7 @@ from services.watermark_service import WatermarkService
 from services.watermark_demo_service import WatermarkDemoService
 from services.client_activity_service import ClientActivityService
 from services.forensic_investigation_service import ForensicInvestigationService
+from services.viewer_session_service import ViewerSessionService
 from management.engine import ManagementEngine
 from media.hls_ab import HLSABService
 
@@ -29,13 +30,21 @@ def create_app() -> Flask:
     configured_origins = os.getenv("CDN_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
     CORS(app, resources={r"/api/*": {"origins": [origin.strip() for origin in configured_origins if origin.strip()]}})
     control_token = os.getenv("CDN_CONTROL_TOKEN", "").strip()
+    viewer_auth_required = os.getenv("CDN_REQUIRE_VIEWER_AUTH", "0").strip().lower() in {"1", "true", "yes", "on"}
+    if viewer_auth_required and not control_token:
+        raise ValueError("CDN_CONTROL_TOKEN é obrigatório quando CDN_REQUIRE_VIEWER_AUTH=1")
+    viewer_sessions = ViewerSessionService(os.getenv("CDN_VIEWER_SESSION_SECRET", "")) if viewer_auth_required else None
 
     @app.before_request
     def protect_control_plane():
         """Protect control mutations when a local operator token is configured."""
         if not control_token or not request.path.startswith("/api/"):
             return None
-        protected = request.path.startswith("/api/control") or request.method in {"POST", "PATCH", "PUT", "DELETE"}
+        viewer_hls_post = (
+            viewer_auth_required and request.method == "POST"
+            and request.path.startswith("/api/clients/") and request.path.endswith("/hls/sessions")
+        )
+        protected = request.path.startswith("/api/control") or (request.method in {"POST", "PATCH", "PUT", "DELETE"} and not viewer_hls_post)
         if not protected:
             return None
         if request.headers.get("X-CDN-Control-Token", "") != control_token:
@@ -63,6 +72,8 @@ def create_app() -> Flask:
     management_engine = ManagementEngine(repository, simulation_controller)
     client_activity_service.set_on_tick(management_engine.tick)
     controller = ApiController(repository, simulation_controller, stream_service, monitor_service, leak_service, watermark_service, watermark_demo_service, client_activity_service, forensic_investigation_service, hls_ab_service, management_engine)
+    controller.viewer_sessions = viewer_sessions
+    controller.viewer_auth_required = viewer_auth_required
     register_api_routes(api, controller)
 
     @app.get("/")
@@ -76,7 +87,7 @@ def create_app() -> Flask:
         return jsonify({"ok": True, "initialized": repository.snapshot_without_clients().initialized})
 
     app.extensions["cdn_controller"] = controller
-    app.extensions["cdn_control_auth"] = {"configured": bool(control_token), "cors_origins": configured_origins}
+    app.extensions["cdn_control_auth"] = {"configured": bool(control_token), "viewer_auth_required": viewer_auth_required, "cors_origins": configured_origins}
     atexit.register(leak_service.stop)
     atexit.register(client_activity_service.stop)
     atexit.register(monitor_service.stop)

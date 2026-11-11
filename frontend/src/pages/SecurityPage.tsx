@@ -23,7 +23,7 @@ export function SecurityPage({
   const monitor = overview.monitor;
   const monitorRows = Object.values(monitor.per_server ?? {});
   const platforms = new Set(overview.leaks.map((leak) => leak.platform)).size;
-  const processedLeaks = overview.leaks.filter((leak) => leak.processed).length;
+  const processedLeaks = overview.leaks.filter((leak) => leak.analyzed).length;
   const [detection, setDetection] = useState<WatermarkDetection | null>(null);
   const [detectionBusy, setDetectionBusy] = useState(false);
   const [investigation, setInvestigation] = useState<ForensicInvestigation | null>(null);
@@ -276,7 +276,7 @@ function ExternalLeakPanel({
       <div className="panel-heading">
         <div>
           <p className="eyebrow">EXTERNAL PLATFORM EXPOSURE</p>
-          <h2>O cliente que vaza aparece fora da CDN</h2>
+          <h2>Cópias suspeitas aparecem fora da CDN</h2>
           <p className="panel-subtitle">
             O LeakService simula a cópia de um chunk watermarkado para
             plataformas externas. A prova mantém a origem da CDN mesmo depois da
@@ -301,7 +301,7 @@ function ExternalLeakPanel({
       </div>
       <div className="external-leak-flow">
         <span className="external-flow-step">
-          <ShieldAlert size={15} /> cliente malicioso
+          <ShieldAlert size={15} /> cópia suspeita
         </span>
         <span>→</span>
         <span className="external-flow-step">
@@ -327,7 +327,7 @@ function ExternalLeakPanel({
               </span>
               <div>
                 <strong>
-                  {leak.client_id} · {leak.platform}
+                  {leak.client_id ?? "origem não atribuída"} · {leak.platform}
                 </strong>
                 <small>
                   {leak.platform_kind ?? "plataforma externa"} · origem{" "}
@@ -336,9 +336,9 @@ function ExternalLeakPanel({
                 </small>
               </div>
               <span
-                className={`leak-state ${leak.processed ? "leak-state-processed" : ""}`}
+                className={`leak-state ${leak.attributed ? "leak-state-processed" : ""}`}
               >
-                {leak.processed ? "prova processada" : "pendente"}
+                {leak.attributed ? "associação em revisão" : leak.needs_reanalysis ? "reanálise pendente" : leak.analyzed ? "analisado" : "pendente"}
               </span>
             </div>
           ))}

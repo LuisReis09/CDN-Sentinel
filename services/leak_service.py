@@ -90,6 +90,10 @@ class LeakService:
                         "content": None,
                         "created_at": time.time(),
                         "processed": False,
+                        "analyzed": False,
+                        "attributed": False,
+                        "needs_reanalysis": False,
+                        "analysis_count": 0,
                     })
                 except (PermissionError, RuntimeError, OSError):
                     continue

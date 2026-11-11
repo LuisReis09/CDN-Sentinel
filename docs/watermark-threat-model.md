@@ -7,6 +7,7 @@ Ativos: mídia original, segredo de emissão, ledger com tokens/claims e dados d
 | Ameaça | Controle implementado | Limite restante |
 |---|---|---|
 | Recuperação de identidade pelo data plane | MP4/JSON sem token e sem claim; marcador pseudônimo | API didática de verificação e segredo demo exigem deployment isolado e controle de acesso |
+| Uso de `client_id` alheio no caminho da mídia | Modo opcional com bearer HMAC emitido pelo operador, vinculado a cliente, conteúdo, execução e sessão do claim | Identidade da conta é verificada fora do simulador; bearer roubado pode ser usado até expirar; requer HTTPS |
 | Falsificação de claim | CDNWM4 AES-GCM + HMAC com subchaves HKDF, `kid`, nonce aleatório | Chaves em configuração/processo, sem KMS ou rotação distribuída |
 | Colisão de marcador | Unicidade SQLite e rejeição de colisão | 48 bits insuficientes para grande escala; probabilidades de aniversário crescem rapidamente |
 | Transplante do sinal para outro título | Comparação ordenada com título alegado antes de `PENDING_REVIEW` | Matcher simples de 1 fps, sem identificação independente do catálogo ou limiares calibrados |
@@ -16,6 +17,7 @@ Ativos: mídia original, segredo de emissão, ledger com tokens/claims e dados d
 | Falsa atribuição por candidato visual | Exige marcador exato, registro, claim válido e conteúdo compatível | Há risco residual de coincidência, erro de matcher e acesso indevido ao ledger |
 | Alteração do ledger | Hash do claim, HMAC de sessão e cadeia HMAC de eventos | Administrador com banco e chave pode reescrever a história; sem âncora externa imutável |
 | Acesso indevido ao upload e revisão | `CDN_CONTROL_TOKEN` protege POST quando configurado; upload limitado; revisão não bane | Sem RBAC, rate limiting, retenção e política de privacidade; sem token o modo é demo local |
+| Vazamento inconclusivo descartado | Estado `analyzed`/`attributed`/`needs_reanalysis`, reanálise manual e cooldown automático | Estado do monitor é local e em memória; não há fila distribuída |
 
 O watermark vincula uma cópia a uma **entrega**, não prova que o titular da conta publicou o vídeo. O relatório mostra `AUTHENTICATED_SESSION` somente quando marcador, claim e conteúdo alegado concordam. Uma revisão `ACCEPT` apenas registra decisão; ações punitivas exigem processo externo explícito. A palavra “autenticado” não afirma certeza estatística universal do detector visual ou da comparação de conteúdo.
 

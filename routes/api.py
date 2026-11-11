@@ -20,6 +20,10 @@ from utils.video import get_video_asset
 from utils.video_watermark import probe_video_limits
 
 
+class ViewerAuthenticationError(PermissionError):
+    """The viewer grant is missing, expired, or belongs to another account."""
+
+
 def register_api_routes(api, controller: ApiController) -> None:
     """Register routes grouped by control plane, data plane and observability domain."""
     def validate_uploaded_video(path: Path) -> None:
@@ -30,6 +34,22 @@ def register_api_routes(api, controller: ApiController) -> None:
             raise ValueError("resolução excede o limite de 3840x2160")
         if limits["fps"] > 60 or limits["fps"] <= 0:
             raise ValueError("framerate fora do limite de 1 a 60 fps")
+
+    def viewer_context(client_id: str) -> str | None:
+        if not controller.viewer_auth_required:
+            return None
+        state = controller.repository.state_ref()
+        if not state.initialized or state.lifecycle == "ended" or client_id not in state.clients:
+            raise ViewerAuthenticationError("cliente ou simulação indisponível")
+        authorization = request.headers.get("Authorization", "")
+        token = authorization[7:] if authorization.startswith("Bearer ") else ""
+        try:
+            claim = controller.viewer_sessions.verify(
+                token, client_id, str(state.config.get("video_id")), state.simulation_id,
+            )
+        except PermissionError as exc:
+            raise ViewerAuthenticationError(str(exc)) from exc
+        return claim["session_id"]
 
     control = api.namespace("control", path="/api/control", description="Simulation lifecycle and configuration")
     topology = api.namespace("topology", path="/api/topology", description="Global CDN topology")
@@ -299,6 +319,25 @@ def register_api_routes(api, controller: ApiController) -> None:
             except ValueError as exc:
                 return {"error": str(exc)}, 400
 
+    @clients.route("/<string:client_id>/viewer-sessions")
+    class ClientViewerSessionResource(Resource):
+        @clients.doc(description="Emite autorização temporária de espectador após autenticação da conta pelo operador externo.")
+        def post(self, client_id: str):
+            if not controller.viewer_auth_required:
+                return {"error": "autenticação de espectador desativada no modo demo"}, 409
+            state = controller.repository.state_ref()
+            if not state.initialized or state.lifecycle == "ended" or client_id not in state.clients:
+                return {"error": "cliente ou simulação indisponível"}, 404
+            try:
+                ttl = int((request.get_json(silent=True) or {}).get("ttl_seconds", 900))
+                grant = controller.viewer_sessions.issue(
+                    client_id, str(state.config.get("video_id")), state.simulation_id,
+                    ttl_seconds=ttl,
+                )
+                return grant, 201, {"Cache-Control": "no-store"}
+            except (ValueError, TypeError) as exc:
+                return {"error": str(exc)}, 400
+
     @clients.route("/<string:client_id>/stream")
     @clients.param("client_id", "ID do cliente cadastrado")
     class ClientStreamResource(Resource):
@@ -311,9 +350,11 @@ def register_api_routes(api, controller: ApiController) -> None:
                 chunk_number = int(request.args.get("chunk", "0"))
                 if chunk_number < 0:
                     raise ValueError("chunk deve ser maior ou igual a zero")
-                result = controller.stream(client_id, chunk_number, request.headers.get("X-Request-ID"))
+                result = controller.stream(client_id, chunk_number, request.headers.get("X-Request-ID"), viewer_context(client_id))
                 result.pop("watermark_token", None)
                 return result
+            except ViewerAuthenticationError as exc:
+                return {"error": str(exc)}, 401
             except SimulationPausedError as exc:
                 return {"error": str(exc)}, 409
             except ClientOfflineError as exc:
@@ -342,11 +383,14 @@ def register_api_routes(api, controller: ApiController) -> None:
                     client_id,
                     chunk_number,
                     request.headers.get("X-Request-ID"),
+                    viewer_context(client_id),
                 )
                 response = Response(media, mimetype=metadata.get("content_type", "video/mp4"))
                 response.headers["X-CDN-Server"] = metadata.get("server_id", "")
                 response.headers["X-Watermark-Visual"] = "embedded-in-video-frames"
                 return response
+            except ViewerAuthenticationError as exc:
+                return {"error": str(exc)}, 401
             except SimulationPausedError as exc:
                 return {"error": str(exc)}, 409
             except ClientOfflineError as exc:
@@ -365,7 +409,9 @@ def register_api_routes(api, controller: ApiController) -> None:
         @clients.doc(description="Cria uma playlist HLS por sessão a partir de segmentos A/B pré-codificados.")
         def post(self, client_id: str):
             try:
-                return controller.create_hls_session(client_id), 201
+                return controller.create_hls_session(client_id, viewer_context(client_id)), 201
+            except ViewerAuthenticationError as exc:
+                return {"error": str(exc)}, 401
             except KeyError as exc:
                 return {"error": str(exc)}, 404
             except PermissionError as exc:
@@ -377,8 +423,12 @@ def register_api_routes(api, controller: ApiController) -> None:
     class ClientHLSManifestResource(Resource):
         def get(self, client_id: str, session_id: str):
             try:
+                if controller.viewer_auth_required and viewer_context(client_id) != session_id:
+                    raise ViewerAuthenticationError("sessão de espectador incompatível")
                 manifest = controller.hls_ab_service.manifest(session_id, client_id)
                 return Response(manifest, mimetype="application/vnd.apple.mpegurl", headers={"Cache-Control": "private, no-store"})
+            except ViewerAuthenticationError as exc:
+                return {"error": str(exc)}, 401
             except (KeyError, ValueError):
                 return {"error": "sessão HLS não encontrada"}, 404
 
@@ -386,8 +436,12 @@ def register_api_routes(api, controller: ApiController) -> None:
     class ClientHLSSegmentResource(Resource):
         def get(self, client_id: str, session_id: str, index: int):
             try:
+                if controller.viewer_auth_required and viewer_context(client_id) != session_id:
+                    raise ViewerAuthenticationError("sessão de espectador incompatível")
                 path = controller.hls_ab_service.segment(session_id, client_id, index)
                 return send_file(path, mimetype="video/mp2t", conditional=True, etag=True)
+            except ViewerAuthenticationError as exc:
+                return {"error": str(exc)}, 401
             except (KeyError, ValueError, IndexError, FileNotFoundError):
                 return {"error": "segmento HLS não encontrado"}, 404
 

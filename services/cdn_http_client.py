@@ -52,11 +52,13 @@ class CDNHttpClient:
         response.raise_for_status()
         return response.json()
 
-    def stream(self, server: CDNServer, client_id: str, chunk_number: int, distance_km: float, latency_factor: float, video_id: str | None = None) -> Dict[str, Any]:
+    def stream(self, server: CDNServer, client_id: str, chunk_number: int, distance_km: float, latency_factor: float, video_id: str | None = None, *, viewer_session_id: str | None = None) -> Dict[str, Any]:
         delay = sleep_for_distance(distance_km, latency_factor)
         url = f"{server.url}/internal/stream"
         started = time.monotonic()
         params = {"client_id": client_id, "chunk": chunk_number, "video_id": video_id or default_content_id()}
+        if viewer_session_id:
+            params["viewer_session_id"] = viewer_session_id
         response = requests.get(
             url,
             params=params,

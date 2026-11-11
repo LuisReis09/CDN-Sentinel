@@ -40,3 +40,11 @@ O contrato novo de investigação é `POST /api/monitor/investigations` → `PEN
 6. A licença dos clipes `youtube_clipped_videos` não foi confirmada. O catálogo é apenas comparado após extrair um claim; identificação independente de conteúdo em grande escala está pendente.
 
 **Veredito:** protótipo acadêmico com fluxo forense mais seguro e resultados reproduzíveis. Ainda não aprovado para atribuição punitiva, alegação de invisibilidade humana ou operação de CDN em escala.
+
+## Revisão do checklist crítico recebido depois da primeira entrega
+
+O checklist consultou `feat/watermark-e2e-forensics` no commit `761e64a`; os três commits da primeira reengenharia estão na branch local `codex/forensic-watermark-reengineering`. A consulta à branch remota antiga não cobre esse código. A branch local ainda precisa ser publicada para aparecer no GitHub; não há merge ou deploy nesta entrega.
+
+As críticas que ainda se aplicavam levaram a mudanças adicionais: autorização temporária de espectador vinculada a cliente/conteúdo/execução e sessão no claim; reanálise de vazamentos inconclusivos sem marcar `processed`; omissão da identidade conhecida pelo simulador até atribuição confirmada; reutilização do claim/cache em requisições repetidas da mesma sessão; vinculação da playlist HLS à sessão autorizada. A autenticação depende de um operador externo que confirme a conta antes de emitir o bearer. Ela não é um serviço de login completo.
+
+Continuam pendentes, com prioridade alta: recuperação confiável sob blur/crop/rotação em diferentes fontes, estudo perceptual cego com pessoas, VideoSeal/PixelSeal efetivamente executados no mesmo protocolo, estatística de falsas atribuições em escala, colusão real e uso de HLS como entrega principal com extração A/B validada. A rota MP4 ainda codifica uma vez para **cada nova sessão**; o novo cache elimina a recodificação apenas em requisições repetidas da mesma sessão. Isso não conclui a meta de escalabilidade da CDN.

@@ -35,6 +35,33 @@ class ForensicClaimTests(unittest.TestCase):
             reopened.rotate_key("secondary", "secondary-secret-with-entropy-2026")
             self.assertEqual(reopened.verify(new_token).client_id, "client-b")
             self.assertIsNotNone(reopened._registry_store.claim_for_marker("primary-secret-with-entropy-2026", __import__("utils.image_watermark", fromlist=["visual_marker"]).visual_marker(old_token)))
+            session_token, session_claim = service.issue_forensic_claim(
+                client_id="client-a", server_id="edge-a", content_id="bigbuckbunny",
+                session_id="view-repeated-session-2026", segment_range="0-0", algorithm_id="dct-qim-v2",
+            )
+            repeated_token, repeated_claim = service.issue_forensic_claim(
+                client_id="client-a", server_id="edge-a", content_id="bigbuckbunny",
+                session_id="view-repeated-session-2026", segment_range="0-0", algorithm_id="dct-qim-v2",
+            )
+            self.assertEqual(repeated_token, session_token)
+            self.assertEqual(repeated_claim.watermark_id, session_claim.watermark_id)
+            reopened_token, _ = reopened.issue_forensic_claim(
+                client_id="client-a", server_id="edge-a", content_id="bigbuckbunny",
+                session_id="view-repeated-session-2026", segment_range="0-0", algorithm_id="dct-qim-v2",
+                key_id="secondary",
+            )
+            self.assertEqual(reopened_token, session_token)
+            failover_token, failover_claim = service.issue_forensic_claim(
+                client_id="client-a", server_id="edge-b", content_id="bigbuckbunny",
+                session_id="view-repeated-session-2026", segment_range="0-0", algorithm_id="dct-qim-v2",
+            )
+            self.assertNotEqual(failover_token, session_token)
+            self.assertEqual(failover_claim.session_id, session_claim.session_id)
+            with self.assertRaises(ValueError):
+                service.issue_forensic_claim(
+                    client_id="client-b", server_id="edge-a", content_id="bigbuckbunny",
+                    session_id="view-repeated-session-2026", segment_range="0-0", algorithm_id="dct-qim-v2",
+                )
 
     def test_ledger_collision_and_event_integrity(self):
         with tempfile.TemporaryDirectory() as temporary:

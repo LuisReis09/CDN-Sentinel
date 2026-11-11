@@ -167,6 +167,7 @@ Endpoints principais:
 | Controle | `POST /api/control/simulation/end` | encerra processos/workers e arquiva a simulacao |
 | Dados | `GET /api/clients/{id}/stream?chunk=0` | roteia, faz failover e entrega o MP4 Base64 com marca visual nos frames |
 | Dados | `GET /api/clients/{id}/media?chunk=0` | entrega o MP4 watermarkado como mídia binária reproduzível |
+| Dados | `POST /api/clients/{id}/viewer-sessions` | operador emite autorização temporária de espectador quando o modo autenticado está ativo |
 | Dados | `POST /api/clients/{id}/hls/sessions` | prepara ou reutiliza variantes A/B e cria playlist por sessão; extração A/B ainda experimental |
 | Dados | `POST /api/clients/{id}/feedback` | registra like/nota e relaciona a percepção à latência observada |
 | Topologia | `GET/POST /api/topology/servers` | observa/adiciona nós |
@@ -214,6 +215,10 @@ O smoke E2E local inicia processos CDN e verifica inicialização, stream e over
 ## Reengenharia forense experimental
 
 Requisitos: Python 3.12, FFmpeg/FFprobe no `PATH`, Node 20 para a interface. Instale o backend com `python -m pip install -r requirements.txt`, execute `python app.py` e o frontend com `cd frontend; npm ci; npm run dev`. O HLS A/B é preparado sob `data/runtime/hls-ab` na primeira sessão. Configure `CDN_SECRET_KEY` com material aleatório e `CDN_CONTROL_TOKEN` para proteger mutações quando sair do demo local. O token de controle do frontend pode ser fornecido por `VITE_CONTROL_TOKEN` apenas no laboratório local; não publique uma build contendo segredo de operador.
+
+Para exigir autorização de espectador, configure também `CDN_REQUIRE_VIEWER_AUTH=1` e `CDN_VIEWER_SESSION_SECRET` com material aleatório distinto. O backend recusa iniciar esse modo sem `CDN_CONTROL_TOKEN`. Após autenticar a conta em um sistema externo, o operador chama `POST /api/clients/{id}/viewer-sessions` com `X-CDN-Control-Token`; a resposta contém um bearer curto. O espectador envia `Authorization: Bearer <token>` em `/media`, `/stream` e nas rotas HLS. O token vincula cliente, conteúdo e execução atual. Esse mecanismo **não é um provedor de identidade**, exige HTTPS fora do localhost e não substitui autenticação real da conta. Players HLS que não enviam headers precisam de uma integração de autenticação própria. No modo demo padrão, as rotas de mídia continuam abertas.
+
+Requisições repetidas da mesma sessão autenticada, conteúdo, segmento e nó reutilizam o claim e o MP4 em cache. Uma nova sessão ainda exige codificação integral na rota MP4; a preparação HLS A/B é o caminho segmentado experimental. Vazamentos inconclusivos permanecem disponíveis para reanálise manual e não aparecem como atribuídos no resumo público.
 
 Documentos desta rodada: [arquitetura](docs/watermark-architecture.md), [comparação de algoritmos](docs/watermark-algorithm-comparison.md), [ameaças](docs/watermark-threat-model.md), [resultados e comandos](docs/watermark-benchmark-results.md), [fluxo de investigação](docs/watermark-forensic-workflow.md) e [relatório de implementação](docs/watermark-implementation-report.md). A auditoria histórica permanece em [watermark-security-validation.md](docs/watermark-security-validation.md).
 

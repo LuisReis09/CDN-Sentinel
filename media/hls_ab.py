@@ -112,12 +112,25 @@ class HLSABService:
                 staged.rename(root)
             return {"cache_id": cache_id, "segments": len(sources), "root": root, "cache_hit": False}
 
-    def create_session(self, client_id: str, server_id: str, content_id: str) -> dict:
+    def create_session(self, client_id: str, server_id: str, content_id: str, *, viewer_session_id: str | None = None) -> dict:
         prepared = self.prepare(content_id)
         count = prepared["segments"]
         with self._lock:
+            if viewer_session_id:
+                existing = self.registry.ab_session(self.watermark_service.secret_key, viewer_session_id)
+                if existing:
+                    if existing["client_id"] != client_id or existing["content_id"] != content_id:
+                        raise PermissionError("sessão de espectador pertence a outra entrega")
+                    return {
+                        "session_id": viewer_session_id, "content_id": content_id,
+                        "segments": len(existing["fingerprint"]), "cache_hit": True,
+                        "fingerprint_bits": len(existing["fingerprint"]),
+                        "attribution_ready": False,
+                        "manifest_url": f"/api/clients/{client_id}/hls/{viewer_session_id}/index.m3u8",
+                        "algorithm_id": "hls-ab-v1",
+                    }
             for _ in range(32):
-                session_id = f"hls-{uuid.uuid4().hex}"
+                session_id = viewer_session_id or f"hls-{uuid.uuid4().hex}"
                 pattern = "".join(
                     "B" if hmac.digest(self.watermark_service.secret_key.encode(), f"{session_id}|{content_id}|{index}".encode(), "sha256")[0] & 1 else "A"
                     for index in range(count)
