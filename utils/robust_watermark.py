@@ -1,3 +1,10 @@
+"""Legacy byte-level watermark test helper.
+
+The live image/video path uses ``utils.image_watermark`` and
+``utils.video_watermark``. This module remains for compatibility with the
+original byte-transform unit tests and is not used by Watermark Studio.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -17,7 +24,7 @@ def marker_bits(marker: str) -> list[int]:
 
 
 def signal_rects(width: int, height: int) -> list[tuple[int, int, int, int]]:
-    """Return the 8x8 frame regions used by the visual HMAC signal."""
+    """Return the 8x8 regions used by the legacy byte-transform signal."""
     margin_x = max(4, int(width * 0.04))
     margin_y = max(4, int(height * 0.04))
     step_x = (width - 2 * margin_x) / 8

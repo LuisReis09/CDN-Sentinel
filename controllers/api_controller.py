@@ -242,6 +242,12 @@ class ApiController:
         })
         return claim
 
+    def detect_watermark_image(self, image) -> dict:
+        return self.watermark_service.detect_image(image)
+
+    def detect_watermark_video(self, path) -> dict:
+        return self.watermark_service.detect_video(path)
+
     def watermark_demo(self, payload: dict) -> dict:
         return self.watermark_demo_service.run(payload)
 

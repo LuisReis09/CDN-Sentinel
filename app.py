@@ -50,7 +50,7 @@ def create_app() -> Flask:
     http_client = CDNHttpClient()
     simulation_controller = SimulationController(repository, http_client)
     watermark_service = WatermarkService(os.getenv("CDN_SECRET_KEY", "local-development-secret"))
-    stream_service = StreamService(http_client, repository)
+    stream_service = StreamService(http_client, repository, watermark_service)
     client_activity_service = ClientActivityService(repository, stream_service)
     blacklist_service = BlacklistService(repository, http_client, watermark_service)
     monitor_service = MonitorService(repository, watermark_service, blacklist_service)

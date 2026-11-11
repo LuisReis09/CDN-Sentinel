@@ -427,6 +427,24 @@ export interface WatermarkDemo {
   }>;
 }
 
+export interface WatermarkDetection {
+  status: "VALID" | "NOT_FOUND" | "INCONCLUSIVE" | "INVALID";
+  marker?: string | null;
+  confidence?: number;
+  sync_confidence?: number;
+  repetition_consistency?: number;
+  frame_support?: number;
+  frames_sampled?: number;
+  reason?: string;
+  error?: string;
+  claim?: Record<string, unknown>;
+  client_id?: string;
+  server_id?: string;
+  content_id?: string;
+  visual_hamming_distance?: number;
+  verification?: string;
+}
+
 export interface ManagementActionDefinition {
   action_type: string;
   label: string;

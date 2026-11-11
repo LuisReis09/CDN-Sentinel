@@ -10,12 +10,12 @@ from pathlib import Path
 from typing import Tuple
 
 from services.content_provider import DatasetContentProvider, default_content_id
-from utils.robust_watermark import marker_bits, signal_rects
+from utils.video_watermark import embed_video
 
 
 MEDIA_ROOT = Path(__file__).resolve().parents[1] / "data" / "media"
 GENERATED_ROOT = MEDIA_ROOT / "generated"
-VISUAL_WATERMARK_VERSION = "subtle-v5-validated-gray-difference"
+VISUAL_WATERMARK_VERSION = "independent-v7-keyed-spread-spectrum-48bit"
 VIDEO_CATALOG = (
     ("bigbuckbunny", "Big Buck Bunny · clipe real", "bigbuckbunny.mp4"),
     ("cdn_sentinel_demo", "CDN-Sentinel demo · original", "cdn-sentinel-demo-original.mp4"),
@@ -184,8 +184,8 @@ def _difference_is_valid(path: Path) -> bool:
     return average < 128 and max(frame) - min(frame) >= 8
 
 
-def generate_visual_variants(video_id: str, token: str) -> str:
-    """Create cached MP4 variants with the HMAC-derived signal embedded in frames."""
+def generate_visual_variants(video_id: str, token: str, secret_key: str | None = None) -> str:
+    """Create cached MP4 variants with the keyed visual marker embedded in frames."""
     source, _ = get_video_asset(video_id, "original")
     generated_id = hashlib.sha256(
         f"{VISUAL_WATERMARK_VERSION}:{source}:{source.stat().st_mtime_ns}:{token}".encode()
@@ -195,34 +195,17 @@ def generate_visual_variants(video_id: str, token: str) -> str:
     if watermarked.is_file() and difference.is_file() and _difference_is_valid(difference):
         return generated_id
 
-    width, height = _probe_dimensions(source)
-    bits = marker_bits(hashlib.sha256(token.encode("utf-8")).hexdigest()[:16])
-    filters = []
-    for bit, (x, y, block_width, block_height) in zip(bits, signal_rects(width, height)):
-        # Keep the client-facing signal below the level where the 8x8 grid
-        # becomes visually distracting; the forensic difference view remains
-        # amplified separately below.
-        color = "white@0.015" if bit else "black@0.015"
-        filters.append(f"drawbox=x={x}:y={y}:w={block_width}:h={block_height}:color={color}:t=fill")
-    watermark_filter = ",".join(filters + ["format=yuv420p"])
-    signal_filters = ["format=gray", "lut=y=0"]
-    for bit, (x, y, block_width, block_height) in zip(bits, signal_rects(width, height)):
-        color = "white" if bit else "black"
-        signal_filters.append(
-            f"drawbox=x={x}:y={y}:w={block_width}:h={block_height}:color={color}:t=fill"
-        )
-    difference_filter = ",".join(signal_filters + ["format=yuv420p"])
     GENERATED_ROOT.mkdir(parents=True, exist_ok=True)
     partial_watermarked = watermarked.with_suffix(".part.mp4")
     partial_difference = difference.with_suffix(".part.mp4")
     try:
+        embed_video(source, partial_watermarked, token, secret_key or os.getenv("CDN_SECRET_KEY", "local-development-secret"))
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-vf", watermark_filter, "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-c:a", "aac", "-movflags", "+faststart", str(partial_watermarked)],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-vf", difference_filter, "-map", "0:v:0", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(partial_difference)],
+            [
+                "ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-i", str(partial_watermarked),
+                "-filter_complex", "[1:v][0:v]blend=all_mode=difference,eq=contrast=10:brightness=0.5",
+                "-map", "0:v:0", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(partial_difference),
+            ],
             check=True,
             capture_output=True,
         )
@@ -252,6 +235,6 @@ def extract_watermark_token(encoded_payload: str) -> str:
     """Extract the forensic prefix from a Base64 encoded leaked chunk."""
     raw = base64.b64decode(encoded_payload.encode("ascii"), validate=True)
     token = raw.split(b"\n", 1)[0].decode("utf-8")
-    if not token.startswith(("CDNWM1.", "CDNWM2.")):
+    if not token.startswith(("CDNWM1.", "CDNWM2.", "CDNWM3.")):
         raise ValueError("chunk não contém prefixo de watermark")
     return token

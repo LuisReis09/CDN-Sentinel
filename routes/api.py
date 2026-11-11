@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import base64
+import binascii
+import io
+import tempfile
 import time
+from pathlib import Path
 
 from flask import Response, request, send_file, stream_with_context
 from flask_restx import Namespace, Resource, fields
+from PIL import Image, UnidentifiedImageError
 
 from controllers.api_controller import ApiController
 from services.content_provider import default_content_id
@@ -87,6 +93,13 @@ def register_api_routes(api, controller: ApiController) -> None:
         },
     )
     verify_model = api.model("WatermarkVerify", {"token": fields.String(required=True)})
+    detect_model = api.model(
+        "WatermarkDetect",
+        {
+            "media_base64": fields.String(description="Imagem ou vídeo em Base64, opcional quando há multipart file"),
+            "media_type": fields.String(description="image ou video quando media_base64 for usado", enum=["image", "video"]),
+        },
+    )
     demo_model = api.model(
         "WatermarkDemo",
         {
@@ -309,6 +322,54 @@ def register_api_routes(api, controller: ApiController) -> None:
                 return {"valid": True, "claim": controller.verify_watermark((request.get_json() or {}).get("token", ""))}
             except (ValueError, TypeError, KeyError) as exc:
                 return {"valid": False, "error": str(exc)}, 400
+
+    @security.route("/watermark/detect")
+    class WatermarkDetectResource(Resource):
+        @security.doc(description="Detecta e verifica watermark visual sem imagem original nem token esperado.")
+        @security.expect(detect_model)
+        def post(self):
+            """Detect a visual watermark in an uploaded image or video."""
+            maximum_bytes = 64 * 1024 * 1024
+            uploaded = request.files.get("file")
+            temporary_path: Path | None = None
+            try:
+                if uploaded:
+                    raw = uploaded.read(maximum_bytes + 1)
+                    if len(raw) > maximum_bytes:
+                        return {"error": "mídia excede o limite de 64 MiB"}, 413
+                    content_type = (uploaded.mimetype or "").lower()
+                    if content_type.startswith("image/"):
+                        with Image.open(io.BytesIO(raw)) as image:
+                            return controller.detect_watermark_image(image.convert("RGBA"))
+                    if content_type.startswith("video/") or Path(uploaded.filename or "").suffix.lower() in {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v"}:
+                        with tempfile.NamedTemporaryFile(prefix="cdn-detect-", suffix=Path(uploaded.filename or ".mp4").suffix or ".mp4", delete=False) as temporary:
+                            temporary.write(raw)
+                            temporary_path = Path(temporary.name)
+                        return controller.detect_watermark_video(temporary_path)
+                    return {"error": "tipo de mídia não suportado; envie uma imagem ou vídeo"}, 415
+
+                body = request.get_json(silent=True) or {}
+                encoded = body.get("media_base64")
+                if not isinstance(encoded, str) or not encoded:
+                    return {"error": "envie multipart file ou media_base64"}, 400
+                try:
+                    raw = base64.b64decode(encoded, validate=True)
+                except (ValueError, binascii.Error) as exc:
+                    return {"error": f"media_base64 inválido: {exc}"}, 400
+                if len(raw) > maximum_bytes:
+                    return {"error": "mídia excede o limite de 64 MiB"}, 413
+                if body.get("media_type", "image") == "image":
+                    with Image.open(io.BytesIO(raw)) as image:
+                        return controller.detect_watermark_image(image.convert("RGBA"))
+                with tempfile.NamedTemporaryFile(prefix="cdn-detect-", suffix=".mp4", delete=False) as temporary:
+                    temporary.write(raw)
+                    temporary_path = Path(temporary.name)
+                return controller.detect_watermark_video(temporary_path)
+            except (UnidentifiedImageError, OSError, ValueError, RuntimeError) as exc:
+                return {"status": "INCONCLUSIVE", "error": str(exc)}, 400
+            finally:
+                if temporary_path and temporary_path.exists():
+                    temporary_path.unlink()
 
     @security.route("/watermark/demo")
     class WatermarkDemoResource(Resource):

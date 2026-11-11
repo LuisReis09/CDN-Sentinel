@@ -6,6 +6,7 @@ import type {
   SimulationStatus,
   VideoChunk,
   WatermarkDemo,
+  WatermarkDetection,
 } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").replace(
@@ -108,6 +109,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ token }),
     }),
+  detectWatermark: async (file: File): Promise<WatermarkDetection> => {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(`${API_BASE}/security/watermark/detect`, {
+      method: "POST",
+      headers: CONTROL_TOKEN ? { "X-CDN-Control-Token": CONTROL_TOKEN } : undefined,
+      body: form,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok && !body.status) {
+      throw new Error(body.error ?? `HTTP ${response.status}.`);
+    }
+    return body as WatermarkDetection;
+  },
   watermarkDemo: (payload: Record<string, unknown> = {}) =>
     request<WatermarkDemo>("/security/watermark/demo", {
       method: "POST",

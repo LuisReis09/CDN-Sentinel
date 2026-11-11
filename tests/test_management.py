@@ -71,6 +71,13 @@ class ManagementSimulationTests(unittest.TestCase):
         self.assertGreater(next_day["paying_clients"], initial["paying_clients"])
         self.assertGreater(next_day["arrivals_today"], 0)
 
+    def test_slo_alert_explains_which_target_was_missed(self):
+        self.repository.update_config({"slo_p95_ms": 100.0, "slo_success_rate_pct": 99.0})
+        state = self.engine.reset("free", 11)
+        alert = next(item for item in state["alerts"] if item["severity"] == "critical")
+        self.assertIn("meta ≤ 100 ms", alert["message"])
+        self.assertIn("5% de entregas mais lentas", alert["message"])
+
     def test_metadata_index_is_a_real_distinct_in_memory_workload(self):
         catalog = MetadataCatalog()
         linear = catalog.workload(20, "linear")

@@ -20,9 +20,10 @@ class ClientOfflineError(RuntimeError):
 
 
 class StreamService:
-    def __init__(self, http_client: CDNHttpClient, repository=None) -> None:
+    def __init__(self, http_client: CDNHttpClient, repository=None, watermark_service=None) -> None:
         self._http_client = http_client
         self._repository = repository
+        self._watermark_service = watermark_service
 
     def record_delivery_feedback(self, client: Client, watch_record: dict, source: str = "client_process") -> dict:
         """Let the simulated client rate a delivered service automatically.
@@ -112,6 +113,8 @@ class StreamService:
             candidate_details[index]["attempted"] = True
             try:
                 result = self._http_client.stream(candidate, client.client_id, chunk_number, distance, float(state.config["latency_factor"]), str(state.config.get("video_id") or default_content_id()))
+                if self._watermark_service and result.get("watermark_token"):
+                    self._watermark_service.register_token(str(result["watermark_token"]))
                 selected_server = candidate
                 selected_distance = distance
                 candidate_details[index]["reason"] = "selecionado; resposta HTTP válida"

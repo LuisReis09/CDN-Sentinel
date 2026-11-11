@@ -100,6 +100,8 @@ class WatermarkClaim:
     issued_at: float
     chunk_id: str
     signature: str
+    content_id: str | None = None
+    version: str = "CDNWM2"
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

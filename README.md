@@ -144,7 +144,7 @@ Após uma mutação no mapa, o console faz uma leitura nova do control plane mes
 - Endpoints de controle/mutação aceitam `X-CDN-Control-Token` quando `CDN_CONTROL_TOKEN` está configurado. Com a variável vazia, o comportamento é explicitamente **demo local**; CORS continua limitado a `CDN_CORS_ORIGINS` (por padrão, localhost nas portas 5173).
 - Mensagens internas usam envelope AES-256-GCM e HMAC sobre o ciphertext, método e path, com timestamp, nonce e TTL de 30 segundos. Nonces já usados são rejeitados; payloads POST internos sem envelope cifrado são recusados.
 - Uma blacklist só é aceita por um nó quando o token HMAC da prova corresponde a `client_id`, servidor emissor e assinatura. Mensagens sem credencial/prova são rejeitadas.
-- O claim do watermark usa AES-256-GCM para confidencialidade e HMAC-SHA256 para a assinatura do envelope; o sinal visual de 64 bits é derivado do digest e aplicado com FFmpeg nos frames reais. O estúdio gera amostras MP4 H.264 de 1s com blur, ruído, resize e diferentes CRFs, depois mede os bits recuperados pelo detector. Isso é uma demonstração didática, não uma garantia de robustez de produção. O anti-replay implementado é do protocolo interno, com nonce/TTL/estado local.
+- O claim do watermark usa AES-256-GCM para confidencialidade e HMAC-SHA256 para a assinatura do envelope; o sinal visual de 48 bits é derivado do digest e aplicado com uma portadora de baixa frequência nos frames reais. O estúdio gera amostras MP4 H.264 com blur, ruído, resize e diferentes CRFs, depois mede os bits recuperados pelo detector independente. Isso é uma demonstração didática, não uma garantia de robustez de produção. O anti-replay implementado é do protocolo interno, com nonce/TTL/estado local.
 
 ## Fluxo rápido da API
 
@@ -205,7 +205,7 @@ O smoke E2E local inicia processos CDN e verifica inicialização, stream e over
 - Clientes pequenos podem ter processos locais observaveis; populacoes grandes usam clientes virtuais e lotes de telemetria, evitando milhares de processos ociosos.
 - Custos mensais, capacidade por nó e latência de fila são cenários didáticos estimados, nunca fatos de produção.
 - O monitor é separado por escopo de nó, mas continua coordenado pelo controller no mesmo aplicativo Flask.
-- O watermark visual é um canal experimental derivado do HMAC e aplicado com FFmpeg sobre frames reais; o prefixo nos bytes carrega o claim AES-GCM/HMAC cifrado. A série `metrics_history` é limitada a 500 amostras e fica em memória junto com o restante da simulação.
+- O watermark visual é um canal experimental keyed de 48 bits, derivado do digest do token e aplicado com portadora de baixa frequência sobre frames reais; o prefixo nos bytes carrega o claim AES-GCM/HMAC cifrado. A série `metrics_history` é limitada a 500 amostras e fica em memória junto com o restante da simulação.
 
 Checklist, C4, ADR, padrões, plano de testes e pendência de equipe:
 

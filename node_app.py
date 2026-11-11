@@ -142,7 +142,7 @@ class CDNNode:
                 time.sleep(reservation["queue_wait_ms"] / 1000.0)
             if self.fault["extra_latency_ms"]:
                 time.sleep(self.fault["extra_latency_ms"] / 1000.0)
-            token, claim = self.watermark_service.issue(client_id, self.server_id, chunk_number)
+            token, claim = self.watermark_service.issue(client_id, self.server_id, chunk_number, video_id)
             content, content_type = self.content_provider.get_chunk(video_id, chunk_number)
             watermarked = token.encode("utf-8") + b"\n" + content
             result = {

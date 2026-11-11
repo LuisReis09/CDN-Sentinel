@@ -5,4 +5,5 @@ requests==2.32.3
 scikit-video==1.1.11
 cryptography>=42,<47
 huggingface-hub>=0.27,<2
+Pillow>=10,<12
 

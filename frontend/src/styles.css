@@ -2125,6 +2125,45 @@ label {
   max-width: 360px;
   font-size: 10px;
 }
+.watermark-detection-panel {
+  margin-top: 18px;
+}
+.watermark-file-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.watermark-file-input input {
+  max-width: 220px;
+}
+.watermark-detection-result {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(8, 17, 31, 0.55);
+}
+.watermark-detection-result--valid {
+  border-color: rgba(101, 216, 155, 0.55);
+}
+.watermark-detection-result--invalid {
+  border-color: rgba(255, 97, 119, 0.55);
+}
+.watermark-detection-result--inconclusive {
+  border-color: rgba(255, 205, 91, 0.55);
+}
+.watermark-detection-result code {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
 .crypto-overview {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

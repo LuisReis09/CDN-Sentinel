@@ -8,10 +8,13 @@ import {
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
-import type { LeakRecord, Overview } from "../types";
+import { useState } from "react";
+import { api } from "../api";
+import type { LeakRecord, Overview, WatermarkDetection } from "../types";
 
 export function SecurityPage({
   overview,
+  onError,
 }: {
   overview: Overview;
   onRefresh: () => Promise<void>;
@@ -21,6 +24,20 @@ export function SecurityPage({
   const monitorRows = Object.values(monitor.per_server ?? {});
   const platforms = new Set(overview.leaks.map((leak) => leak.platform)).size;
   const processedLeaks = overview.leaks.filter((leak) => leak.processed).length;
+  const [detection, setDetection] = useState<WatermarkDetection | null>(null);
+  const [detectionBusy, setDetectionBusy] = useState(false);
+
+  async function detect(file: File | undefined) {
+    if (!file) return;
+    setDetectionBusy(true);
+    try {
+      setDetection(await api.detectWatermark(file));
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : "Falha ao detectar watermark");
+    } finally {
+      setDetectionBusy(false);
+    }
+  }
 
   return (
     <main className="page-content">
@@ -151,6 +168,31 @@ export function SecurityPage({
             </div>
           </div>
         </div>
+      </section>
+      <section className="panel watermark-detection-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">INDEPENDENT WATERMARK DETECTOR</p>
+            <h2>Investigar imagem ou vídeo suspeito</h2>
+            <p className="panel-subtitle">
+              A análise não precisa do original nem do token esperado. A marca visual é recuperada primeiro; a autenticação só é confirmada contra um claim registrado na CDN.
+            </p>
+          </div>
+          <Fingerprint size={18} className="accent" />
+        </div>
+        <label className="watermark-file-input">
+          <span>{detectionBusy ? "Analisando mídia…" : "Selecionar imagem ou vídeo"}</span>
+          <input type="file" accept="image/*,video/*" disabled={detectionBusy} onChange={(event) => void detect(event.target.files?.[0])} />
+        </label>
+        {detection && (
+          <div className={`watermark-detection-result watermark-detection-result--${detection.status.toLowerCase()}`}>
+            <strong>{detection.status}</strong>
+            <span>{detection.reason ?? detection.error ?? detection.verification ?? "Nenhuma evidência adicional."}</span>
+            {detection.marker && <code>marker: {detection.marker}</code>}
+            {detection.claim && <code>{JSON.stringify(detection.claim)}</code>}
+            {typeof detection.confidence === "number" && <small>confiança do sinal: {(detection.confidence * 100).toFixed(1)}%</small>}
+          </div>
+        )}
       </section>
       <ExternalLeakPanel
         leaks={overview.leaks}

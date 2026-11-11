@@ -283,11 +283,11 @@ function RobustnessTable({
         <span>amostras MP4 H.264 + detector visual</span>
       </div>
       <p>
-        O HMAC/AES continua sendo a prova criptográfica do payload. A métrica
-        abaixo é calculada pelo detector visual: bits do marcador recuperados
-        corretamente em cada bloco 8×8, depois que amostras MP4 reais recebem
-        blur, ruído, resize e re-encode em diferentes intensidades. O limite
-        didático de aprovação é 90%.
+        HMAC/AES continua sendo a prova criptográfica do payload. A métrica
+        abaixo é calculada pelo detector visual: bits do localizador recuperados
+        corretamente nas células da grade 16×16, depois que amostras MP4 reais
+        recebem blur, ruído, resize e reencode. O limite didático de aprovação é
+        90%.
       </p>
       <div className="robustness-table">
         {checks.map((check) => (
