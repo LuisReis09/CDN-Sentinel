@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import time
 from typing import Any
 
@@ -167,6 +168,15 @@ class ApiController:
             raise KeyError(f"Cliente {client_id} não encontrado")
         return self.stream_service.stream(client, state, chunk_number, request_id).to_dict()
 
+    def stream_media(self, client_id: str, chunk_number: int, request_id: str | None = None) -> tuple[bytes, dict]:
+        """Return the playable bytes while retaining the JSON route for compatibility."""
+        result = self.stream(client_id, chunk_number, request_id)
+        try:
+            media = base64.b64decode(result["payload"], validate=True)
+        except (KeyError, ValueError) as exc:
+            raise RuntimeError("payload de mídia watermarkado inválido") from exc
+        return media, result
+
     def reset_metrics(self) -> dict:
         return self.simulation_controller.reset_metrics()
 
@@ -195,7 +205,7 @@ class ApiController:
         return list(self.repository.snapshot().leaks)
 
     def leak_summaries(self) -> list[dict]:
-        fields = ("leak_id", "client_id", "server_id", "origin_server_id", "platform", "platform_id", "platform_kind", "external_url", "created_at", "processed", "detected_at", "detected_by_server_id", "trace_id", "request_id", "error")
+        fields = ("leak_id", "client_id", "server_id", "origin_server_id", "platform", "platform_id", "platform_kind", "external_url", "created_at", "processed", "detected_at", "detected_by_server_id", "trace_id", "request_id", "error", "forensic_status", "forensic_source", "media_sha256")
         return [{key: leak.get(key) for key in fields if key in leak} for leak in self.repository.snapshot().leaks]
 
     def events(self) -> list[dict]:

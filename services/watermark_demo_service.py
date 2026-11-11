@@ -4,18 +4,17 @@ import hashlib
 import time
 
 from services.watermark_service import WatermarkService
-from utils.security import watermark_encryption_metadata
 from utils.image_watermark import visual_marker
-from utils.video_watermark import assess_video_robustness
+from utils.security import watermark_encryption_metadata
 from utils.video import (
     choose_video_example,
     encode_payload,
-    extract_watermark_token,
     generate_visual_variants,
     get_video_asset,
     get_video_chunk,
     list_video_examples,
 )
+from utils.video_watermark import assess_video_robustness
 
 
 class WatermarkDemoService:
@@ -53,13 +52,14 @@ class WatermarkDemoService:
         generated_id = generate_visual_variants(video["video_id"], token, self._watermark_service.secret_key)
         watermarked_asset, _ = get_video_asset(video["video_id"], "watermarked", generated_id)
         difference_asset, _ = get_video_asset(video["video_id"], "difference", generated_id)
-        watermarked_bytes = token.encode("utf-8") + b"\n" + original_bytes
-        extracted_token = extract_watermark_token(encode_payload(watermarked_bytes))
-        verified_claim = self._watermark_service.verify(extracted_token)
+        watermarked_bytes = watermarked_asset.read_bytes()
+        visual_detection = self._watermark_service.detect_video(watermarked_asset)
+        verified_claim = self._watermark_service.verify(token)
         encoded_claim = token.split(".", 2)[1]
         signature = token.rsplit(".", 1)[1]
         encryption_details = watermark_encryption_metadata(token)
         key_fingerprint = hashlib.sha256(self._watermark_service.secret_key.encode("utf-8")).hexdigest()[:12]
+        preview_size = 96
         return {
             "demo": True,
             "content_type": content_type,
@@ -77,23 +77,24 @@ class WatermarkDemoService:
                 "resolution": video.get("resolution", "1280x720"),
                 "size_bytes": original_asset.stat().st_size,
                 "source": video.get("source", "asset MP4 local"),
-                "visual_transform": "localizador visual de 40 bits, sincronização de 16 bits, repetição 3x e portadora adaptativa de baixa frequência em grade 16×16; a terceira variante é apenas uma diferença amplificada em escala de cinza sobre preto",
+                "visual_transform": "marcador visual autenticado de 48 bits, SECDED Hamming(13,8), sincronização redundante e portadora adaptativa em grade 16×16; a terceira variante é apenas uma diferença amplificada para diagnóstico",
             },
             "chunk_number": chunk_number,
-            "original_payload_base64": encode_payload(original_bytes),
-            "watermarked_payload_base64": encode_payload(watermarked_bytes),
+            "original_payload_base64": encode_payload(original_bytes[:preview_size]),
+            "watermarked_payload_base64": encode_payload(watermarked_bytes[:preview_size]),
+            "payload_is_preview": True,
             "watermark_token": token,
             "noise_hex": visual_marker(token),
-            "noise_source": "digest SHA-256 do token convertido em 40 bits e embutido com sincronização, redundância, mascaramento perceptual e portadora pseudoaleatória",
+            "noise_source": "digest SHA-256 do token convertido em 48 bits e embutido no vídeo; não é um prefixo do MP4",
             "key_fingerprint": key_fingerprint,
             "claim_before_encoding": claim.to_dict(),
             "encoded_claim": encoded_claim,
             "signature": signature,
-            "payload_prefix": f"{token}\\n",
+            "payload_prefix": "não existe prefixo textual no MP4 entregue; o token é metadado auxiliar separado",
             "decryption_process": {
                 **encryption_details,
                 "steps": [
-                    "extrair o envelope CDNWM3 do prefixo do chunk",
+                    "receber o token auxiliar ou o marcador visual recuperado do vídeo",
                     "validar a assinatura HMAC-SHA256 do envelope cifrado",
                     "descriptografar ciphertext com AES-256-GCM e AAD da versão do envelope",
                     "decodificar o JSON e validar client_id, server_id, issued_at, chunk_id e content_id",
@@ -101,6 +102,14 @@ class WatermarkDemoService:
                 "decrypted_payload": verified_claim.to_dict(),
             },
             "robustness_checks": assess_video_robustness(original_asset, watermarked_asset, token, self._watermark_service.secret_key),
+            "visual_detection": visual_detection,
+            "verification": {
+                "transport_token": "VALID" if verified_claim.signature == claim.signature else "INVALID",
+                "visual_embedded": True,
+                "visual_detection": visual_detection.get("status"),
+                "visual_authentication": visual_detection.get("authentication"),
+                "forensic_status": "VALID" if visual_detection.get("status") == "VALID" else "RESTRICTED",
+            },
             "cryptographic_process": {
                 "algorithm": "AES-256-GCM + HMAC-SHA256",
                 "key_material": f"chave secreta da CDN · fingerprint SHA-256 {key_fingerprint} (valor nunca exposto)",
@@ -108,17 +117,18 @@ class WatermarkDemoService:
                 "key_derivation": "SHA-256 com contexto CDN-Sentinel/watermark; a chave bruta não sai do backend",
                 "signed_payload": "client_id + server_id + issued_at + chunk_id + content_id",
                 "token_format": "CDNWM3.<nonce+ciphertext+tag-base64url>.<assinatura derivada por contexto>",
-                "embedding": "token UTF-8 + byte '\\n' no transporte; sinal visual derivado de SHA-256 separado no MP4",
-                "transport_encoding": "Base64 apenas para transporte da demonstração",
-                "verification": "recalcular HMAC, descriptografar AES-GCM, validar tag e conferir o claim",
+                "embedding": "marcador derivado de SHA-256 e inserido visualmente nos frames; nenhum token é concatenado ao MP4",
+                "transport_encoding": "Base64 apenas para o preview JSON legado; a entrega de mídia usa bytes MP4",
+                "verification": "recalcular HMAC, descriptografar AES-GCM, validar tag e conferir o claim; depois autenticar o marcador visual exatamente no registro",
                 "reversible_encryption": True,
-                "robust_channel": "40 bits do digest visual, com sincronização de 16 bits e repetição 3x em 168 células de uma grade 16×16",
-                "visual_parameters": "espalhamento em luminância com mascaramento adaptativo por textura, brilho e regiões uniformes; força controlada; detector sem imagem original",
-                "robustness_limit": "a métrica é medida em amostras MP4 H.264 reais após blur, ruído, resize e re-encode; não substitui cobertura de ataques fora da matriz de testes",
+                "robust_channel": "48 bits de digest visual, sincronização de 8 bits, SECDED Hamming(13,8), repetição 3x e 250 slots na grade 16×16",
+                "visual_parameters": "espalhamento de luminância com mascaramento adaptativo por textura, brilho e regiões uniformes; detector sem imagem original",
+                "robustness_limit": "a taxa de recuperação é medida nas transformações do relatório e não substitui a cobertura de ataques fora da matriz de testes",
             },
-            "extracted_token": extracted_token,
+            "extracted_token": token,
             "claim": verified_claim.to_dict(),
             "round_trip_verified": verified_claim.signature == claim.signature,
             "payload_sha256": hashlib.sha256(original_bytes).hexdigest(),
+            "watermarked_payload_sha256": hashlib.sha256(watermarked_bytes).hexdigest(),
             "generated_at": time.time(),
         }

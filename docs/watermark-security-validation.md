@@ -1,7 +1,10 @@
 # Auditoria e validação do núcleo de watermarking
 
 Data da auditoria: 2026-11-11  
-Branch de trabalho: `feat/watermark-security-core`
+Branch histórica da primeira auditoria: `feat/watermark-security-core`
+Branch desta rodada: `feat/watermark-e2e-forensics`
+
+> As tabelas anteriores a “Rodada E2E forensic” são resultados históricos e foram preservadas para comparação. Não devem ser lidas como a especificação do algoritmo atual.
 
 ## Resultado executivo
 
@@ -188,3 +191,51 @@ Estes itens não foram tratados como concluídos sem sua aprovação:
 ## Limitações declaradas
 
 Este resultado valida o núcleo e os cenários testados; não é uma certificação de robustez contra todos os ataques. O detector depende do segredo backend, o registro é volátil, imagens menores que 128×128 são inconclusivas e ataques geométricos fortes ainda precisam do item 3 da lista de melhorias. O canal visual serve para localizar e associar evidência; a autenticidade continua dependendo do envelope criptográfico.
+
+## Rodada E2E forensic — branch `feat/watermark-e2e-forensics`
+
+Esta rodada corrige três problemas críticos encontrados após a auditoria histórica acima. Os resultados históricos foram preservados; os números desta seção foram medidos novamente no código atual.
+
+### O que mudou
+
+- O caminho real do nó não concatena mais `token + "\\n"` antes do conteúdo. O payload continua disponível no endpoint JSON legado, mas agora contém apenas o MP4 válido em Base64. O endpoint `GET /api/clients/{id}/media` entrega os bytes MP4 reproduzíveis e deixa o token somente em cabeçalhos auxiliares.
+- A marca visual é inserida quadro a quadro por `embed_video`, com cache em disco versionado por asset, `mtime`, token, segredo, algoritmo e força. O cache não reutiliza variantes de algoritmo antigo.
+- O marcador atual é de 48 bits, codificado por SECDED Hamming(13,8), com sincronização e redundância. `WatermarkService` não escolhe mais o registro de menor distância Hamming: somente um marcador exatamente registrado pode ser `VALID`.
+- O registro marcador→token agora é SQLite persistente, particionado pelo fingerprint da chave, com versão do algoritmo e detecção de colisão. Depois de restart, a associação exata continua disponível.
+- O monitor prioriza `media_path` e chama o detector visual sobre os bytes vazados. Leaks candidatos, inconclusivos ou não registrados são auditados sem blacklist automática. A antiga leitura de prefixo ficou isolada apenas para compatibilidade com fixtures legadas.
+- O detector não reduz mais unilateralmente o vídeo para 640 px. A portadora é normalizada por célula e a amostragem é distribuída por todo o vídeo; isso permite medir 320×180, 640×360, 1280×720, 1920×1080 e versões redimensionadas sem misturar a escala de codificação com a escala de detecção.
+
+### Validação executada
+
+Comandos principais:
+
+```powershell
+python -m compileall -q node_app.py services routes controllers utils
+pytest -q
+cd frontend; npm.cmd run build
+```
+
+Resultado: suíte Python `46 passed` (inclui persistência do registro, teste anti-associação por proximidade e E2E com nó HTTP real); build TypeScript/Vite concluído. O teste E2E manual foi executado com um nó HTTP real, um cliente virtual e o dataset local:
+
+1. `GET /api/clients/client-0001/media?chunk=0` retornou `200`, cabeçalho `X-Watermark-Visual: embedded-in-video-frames` e bytes iniciando por `00 00 00 20 66 74 79 70` (`ftyp`), portanto o container não contém prefixo textual.
+2. O mesmo arquivo foi enviado a `POST /api/security/watermark/detect` e retornou `VALID`, com `client_id`, `server_id` e `content_id` exatos.
+3. Uma cópia foi recodificada com H.264 CRF 24, sem áudio e com `-map_metadata -1`. O detector recuperou o marcador exato e a associação criptográfica retornou `VALID` no experimento `strength24new-recode.mp4`.
+4. Para a comparação de qualidade, original e marcado foram codificados com `libx264`, `veryfast`, CRF 24 e `yuv420p`. No clipe do dataset `tmp008xheyw.mp4` (640×360, 181 frames), a configuração adaptativa atual com força 24 mediu PSNR médio de `34,99 dB`, SSIM global FFmpeg `0,963978`; MS-SSIM/LPIPS não estavam disponíveis neste ambiente. A medição foi feita contra o controle reencodado, com o mesmo número de frames.
+5. A mesma marca foi testada no arquivo original 640×360 e em cópias redimensionadas para 320×180, 1280×720 e 1920×1080. Todos os quatro ensaios recuperaram o marcador exato como `CANDIDATE`; com o registro persistente do token, o resultado de segurança foi `VALID`. O detector normaliza todos os frames para uma geometria canônica 640×360 antes da correlação, sem confundir a resolução de entrega com a resolução de detecção. O protótipo DCT foi executado como comparação, mas não foi promovido ao caminho de entrega por sua recuperação inconsistente.
+
+### Decisão e trade-off
+
+O critério de segurança foi corrigido: um candidato visual próximo, sem registro exato, permanece `CANDIDATE` e não bloqueia cliente. A entrega normal é um MP4 válido com marca visual independente do token no payload, e o caso de reencode H.264 CRF 24 foi autenticado no ensaio realizado.
+
+A meta SSIM inicial de `≥0,98` não foi atingida por essa configuração na medição codec-aligned do clipe 640×360 (`0,963978`). Portanto ela não é declarada aprovada sem restrições como “imperceptível” segundo a meta numérica, mesmo que o resultado seja visualmente muito menos agressivo que o baseline legado. O próximo ajuste deve reduzir a energia estrutural da portadora sem perder a recuperação autenticada; não se deve aumentar força automaticamente nem aceitar associação aproximada para compensar a diferença.
+
+O ensaio DCT continua registrado como alternativa experimental: sua qualidade numérica histórica foi melhor, mas sua detecção sob H.264/blur/resize não foi consistente o bastante para substituir o spread adaptativo. O vídeo de diferença do Studio é diagnóstico amplificado e nunca é usado no endpoint `/media` ou no leak monitor.
+
+Os comparativos reais desta rodada foram gerados em `data/media/generated/perceptual-experiments/`: `v10-control-crf24.mp4`, `v10-adaptive-spread-strength24.mp4` e `v10-difference-amplified.mp4`. O último passou pela validação de não saturação e é somente diagnóstico.
+
+### Limitações ainda abertas
+
+- O endpoint de mídia ainda usa o objeto `VideoChunk` internamente para manter compatibilidade com o plano de controle; a próxima etapa pode trocar a travessia Base64 interna por streaming/range direto do arquivo cacheado.
+- A matriz atual cobre H.264, blur, ruído, resize e grayscale, mas não é uma garantia contra crop, overlay, gravação de tela, H.265 ou perda de frames.
+- SSIM global não é suficiente para declarar invisibilidade. Faltam MS-SSIM/LPIPS/VMAF instaláveis no ambiente e inspeção humana cega por cena.
+- O registry persistente resolve restart e colisões explícitas, mas ainda precisa de política de retenção, rotação de chave (`kid`) e auditoria assinada para produção.

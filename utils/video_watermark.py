@@ -23,6 +23,7 @@ from utils.image_watermark import (
 
 
 VIDEO_STRENGTH = 24.0
+DETECTION_WIDTH = 640
 
 
 def transcode_video(source: Path, destination: Path, crf: int = 24, preset: str = "veryfast") -> dict:
@@ -56,10 +57,75 @@ def _probe(path: Path) -> tuple[int, int, float]:
     return int(width), int(height), float(numerator) / float(denominator)
 
 
+def probe_video_limits(path: Path) -> dict:
+    """Return bounded media metadata for API resource validation."""
+    width, height, fps = _probe(path)
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=nw=1:nk=1", str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        duration = float(result.stdout.strip())
+    except ValueError:
+        duration = 0.0
+    return {"width": width, "height": height, "fps": fps, "duration_seconds": duration}
+
+
+def _frame_count(path: Path, fps: float) -> int:
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+            "-show_entries", "stream=nb_read_frames,duration", "-of", "default=nw=1", str(path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    values = [value.strip() for value in result.stdout.splitlines() if value.strip()]
+    fields = {
+        key: value
+        for line in values
+        if "=" in line
+        for key, value in [line.split("=", 1)]
+    }
+    try:
+        count = int(float(fields.get("nb_read_frames", "0")))
+    except ValueError:
+        count = 0
+    if count > 0:
+        return count
+    for value in values:
+        try:
+            count = int(float(value))
+        except ValueError:
+            continue
+        if count > 0:
+            return count
+    for value in values:
+        try:
+            duration = float(value)
+        except ValueError:
+            continue
+        if duration > 0:
+            return max(1, round(duration * fps))
+    try:
+        duration = float(fields.get("duration", "0"))
+    except ValueError:
+        duration = 0.0
+    if duration > 0:
+        return max(1, round(duration * fps))
+    return 1
+
+
 def _frame_command(path: Path, width: int, height: int, fps: float) -> list[str]:
     return [
         "ffmpeg", "-v", "error", "-i", str(path),
-        "-f", "rawvideo", "-pix_fmt", "rgb24", "-r", f"{fps:.6f}", "-",
+        "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
     ]
 
 
@@ -130,7 +196,7 @@ def embed_video(
                 [
                     "ffmpeg", "-y", "-v", "error", "-i", str(silent), "-i", str(source),
                     "-map", "0:v:0", "-map", "1:a?", "-c:v", "copy", "-c:a", "aac",
-                    "-shortest", str(destination),
+                    str(destination),
                 ],
                 check=True,
                 capture_output=True,
@@ -149,22 +215,29 @@ def detect_video(
     algorithm: str = "adaptive-spread",
     dct_step: float = 10.0,
 ) -> dict:
-    """Sample a video and aggregate independent frame evidence."""
+    """Sample the whole video and aggregate independent frame evidence.
+
+    Detection uses one canonical 640px-wide geometry. Embedding can happen at
+    320p, 720p or 1080p, but both the received frame and the keyed carrier are
+    compared after the same deterministic normalization. The frame indices are
+    distributed over the complete duration, which avoids making a decision
+    from only the opening seconds of a long asset.
+    """
     width, height, fps = _probe(path)
-    # Temporal redundancy is intentional: sample the complete short clip when
-    # possible instead of looking at only a few widely spaced frames. Averaging
-    # independent frame evidence lets the delivered amplitude stay low while
-    # the detector benefits from more observations.
-    sample_fps = max(1.0, min(float(fps), max_frames / 2.0))
-    scaled_width = min(width, 640)
-    scaled_height = max(2, round(height * scaled_width / width))
-    if scaled_height % 2:
-        scaled_height += 1
+    total_frames = _frame_count(path, fps)
+    sample_count = min(max_frames, total_frames)
+    indices = np.linspace(0, max(0, total_frames - 1), sample_count, dtype=np.int64).tolist()
+    select_expression = "+".join(f"eq(n,{int(index)})" for index in indices) or "eq(n,0)"
+    detection_width = DETECTION_WIDTH
+    detection_height = max(2, round(height * detection_width / width))
+    if detection_height % 2:
+        detection_height += 1
     command = [
-        "ffmpeg", "-v", "error", "-i", str(path), "-vf", f"fps={sample_fps:.6f},scale={scaled_width}:{scaled_height}",
-        "-frames:v", str(max_frames), "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        "ffmpeg", "-v", "error", "-i", str(path),
+        "-vf", f"select='{select_expression}',scale={detection_width}:{detection_height}",
+        "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
     ]
-    frame_size = scaled_width * scaled_height * 3
+    frame_size = detection_width * detection_height * 3
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     evidences: list[dict] = []
     score_vectors: list[list[float]] = []
@@ -175,7 +248,7 @@ def detect_video(
             raw = process.stdout.read(frame_size)
             if len(raw) < frame_size:
                 break
-            frame = Image.frombytes("RGB", (scaled_width, scaled_height), raw)
+            frame = Image.frombytes("RGB", (detection_width, detection_height), raw)
             try:
                 if algorithm == "dct":
                     raw_evidence = _decode_dct_scores(frame, secret, step=dct_step)
@@ -202,9 +275,38 @@ def detect_video(
     supported = [item for item in evidences if item.get("supported")]
     candidates = [item for item in supported if item.get("status") == "CANDIDATE" and item.get("marker")]
     if score_vectors and aggregate_layout is not None:
-        aggregate = classify_image_evidence(
-            _decode_score_vector(np.mean(np.asarray(score_vectors, dtype=np.float64), axis=0), aggregate_layout)
+        weights = np.asarray(
+            [max(0.25, float(item.get("confidence", 0.0))) for item in evidences[:len(score_vectors)]],
+            dtype=np.float64,
         )
+        if len(weights) != len(score_vectors):
+            weights = np.ones(len(score_vectors), dtype=np.float64)
+        weights /= max(float(weights.sum()), 1e-9)
+        aggregate = classify_image_evidence(
+            _decode_score_vector(
+                np.average(np.asarray(score_vectors, dtype=np.float64), axis=0, weights=weights),
+                aggregate_layout,
+            )
+        )
+        # Compression can corrupt different coded bits in different frames,
+        # making a score-vector average less reliable than a consensus of the
+        # independently decoded frame markers. Keep the aggregate metrics, but
+        # use a supported marker consensus when at least two frames agree.
+        if candidates and aggregate["status"] != "CANDIDATE":
+            counts: dict[str, list[dict]] = {}
+            for item in candidates:
+                counts.setdefault(str(item["marker"]), []).append(item)
+            consensus_marker, consensus_items = max(
+                counts.items(),
+                key=lambda pair: (len(pair[1]), max(float(item.get("confidence", 0.0)) for item in pair[1])),
+            )
+            if len(consensus_items) >= 2:
+                aggregate["status"] = "CANDIDATE"
+                aggregate["marker"] = consensus_marker
+                aggregate["confidence"] = round(
+                    sum(float(item.get("confidence", 0.0)) for item in consensus_items) / len(consensus_items),
+                    4,
+                )
         return {
             "status": aggregate["status"],
             "marker": aggregate.get("marker"),
@@ -216,11 +318,26 @@ def detect_video(
             "width": width,
             "height": height,
             "fps": fps,
+            "detection_width": detection_width,
+            "detection_height": detection_height,
+            "temporal_sampling": "uniform-over-full-video",
+            "sampled_frame_indices": indices,
             "frames": evidences,
         }
     if not candidates:
         status = "INCONCLUSIVE" if any(item.get("status") == "INCONCLUSIVE" for item in supported) else "NOT_FOUND"
-        return {"status": status, "frames_sampled": len(evidences), "width": width, "height": height, "fps": fps, "frames": evidences}
+        return {
+            "status": status,
+            "frames_sampled": len(evidences),
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "detection_width": detection_width,
+            "detection_height": detection_height,
+            "temporal_sampling": "uniform-over-full-video",
+            "sampled_frame_indices": indices,
+            "frames": evidences,
+        }
     counts: dict[str, list[dict]] = {}
     for item in candidates:
         counts.setdefault(str(item["marker"]), []).append(item)
@@ -234,6 +351,10 @@ def detect_video(
         "width": width,
         "height": height,
         "fps": fps,
+        "detection_width": detection_width,
+        "detection_height": detection_height,
+        "temporal_sampling": "uniform-over-full-video",
+        "sampled_frame_indices": indices,
         "frames": evidences,
     }
 

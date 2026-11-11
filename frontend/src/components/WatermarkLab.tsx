@@ -9,12 +9,14 @@ import {
   Fingerprint,
   KeyRound,
   LockKeyhole,
+  Pause,
   Play,
+  RotateCcw,
   ScanSearch,
   ShieldCheck,
   UnlockKeyhole,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { NoiseVideoPreview } from "./NoiseVideoPreview";
 import type { WatermarkDemo } from "../types";
@@ -26,6 +28,40 @@ export function WatermarkLab({
 }) {
   const [demo, setDemo] = useState<WatermarkDemo | null>(null);
   const [busy, setBusy] = useState(false);
+  const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const [duration, setDuration] = useState(1);
+
+  function eachVideo(callback: (video: HTMLVideoElement) => void) {
+    Object.values(videoRefs.current).forEach((video) => {
+      if (video) callback(video);
+    });
+  }
+
+  function playAll() {
+    eachVideo((video) => {
+      video.currentTime = playbackTime;
+      void video.play().catch(() => undefined);
+    });
+  }
+
+  function pauseAll() {
+    eachVideo((video) => video.pause());
+  }
+
+  function restartAll() {
+    eachVideo((video) => {
+      video.currentTime = 0;
+    });
+    setPlaybackTime(0);
+  }
+
+  function seekAll(value: number) {
+    eachVideo((video) => {
+      if (Number.isFinite(video.duration)) video.currentTime = value;
+    });
+    setPlaybackTime(value);
+  }
 
   async function simulate() {
     setBusy(true);
@@ -74,26 +110,61 @@ export function WatermarkLab({
         </button>
       </div>
       {videoVariants ? (
-        <div className="noise-preview-grid noise-preview-grid--triple">
+        <>
+          <div className="watermark-sync-toolbar" aria-label="Controles sincronizados dos vídeos">
+            <button className="button button-secondary" type="button" onClick={playAll}>
+              <Play size={14} /> Reproduzir os três
+            </button>
+            <button className="button button-secondary" type="button" onClick={pauseAll}>
+              <Pause size={14} /> Pausar
+            </button>
+            <button className="button button-secondary" type="button" onClick={restartAll}>
+              <RotateCcw size={14} /> Reiniciar
+            </button>
+            <label>
+              <span>posição sincronizada {playbackTime.toFixed(1)}s</span>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(1, duration)}
+                step={0.1}
+                value={playbackTime}
+                onChange={(event) => seekAll(Number(event.target.value))}
+              />
+            </label>
+          </div>
+          <div className="noise-preview-grid noise-preview-grid--triple">
           <NoiseVideoPreview
             videoUrl={videoVariants.original}
             variant="original"
+            videoRef={(node) => {
+              videoRefs.current.original = node;
+            }}
+            onTimeUpdate={setPlaybackTime}
+            onLoadedMetadata={(value) => setDuration(Number.isFinite(value) ? value : 1)}
             label="1 · Vídeo original"
             description="MP4 local versionado; mesmo vídeo de referência"
           />
           <NoiseVideoPreview
             videoUrl={videoVariants.watermarked}
             variant="watermarked"
+            videoRef={(node) => {
+              videoRefs.current.watermarked = node;
+            }}
             label="2 · Sinal sutil"
             description="vídeo entregue ao cliente; sinal de luminância imperceptível"
           />
           <NoiseVideoPreview
             videoUrl={videoVariants.difference}
             variant="difference"
+            videoRef={(node) => {
+              videoRefs.current.difference = node;
+            }}
             label="3 · Sinal destacado"
             description="diferença amplificada para auditoria; não é o vídeo entregue ao cliente"
           />
-        </div>
+          </div>
+        </>
       ) : (
         <div className="watermark-empty-state">
           <Play size={20} />
@@ -105,14 +176,19 @@ export function WatermarkLab({
         <div className="demo-result">
           <Check size={16} />
           <strong>
-            {demo.round_trip_verified
-              ? "Extração e validação confirmadas"
-              : "Validação pendente"}
+            {demo.verification?.forensic_status === "VALID"
+              ? "Watermark visual recuperada e autenticada"
+              : "Watermark visual pendente ou inconclusiva"}
           </strong>
           <span>
             {demo.video_label} · chunk {demo.chunk_number} · SHA-256{" "}
             {demo.payload_sha256.slice(0, 18)}…
           </span>
+          <small>
+            Token de transporte: {demo.verification?.transport_token ?? "—"} ·{" "}
+            inserção visual: {demo.verification?.visual_embedded ? "confirmada" : "pendente"} ·{" "}
+            detecção: {demo.verification?.visual_detection ?? "—"}
+          </small>
         </div>
       )}
 
@@ -154,8 +230,9 @@ export function WatermarkLab({
           tone="green"
         >
           <p>
-            Extrai o prefixo, valida HMAC e tag GCM, descriptografa o claim e só
-            então atribui cliente, servidor e horário.
+            Valida o token auxiliar com HMAC e GCM e, separadamente, recupera o
+            marcador visual do vídeo. Só uma associação exata no registro atribui
+            cliente, servidor e horário.
           </p>
           <code>compare_digest + AESGCM.decrypt</code>
           <small>
@@ -182,8 +259,8 @@ export function WatermarkLab({
             <ArrowRight className="flow-arrow" size={17} />
             <Step
               icon={<Eye size={17} />}
-              title="3. Inserir no chunk"
-              value={`${demo.watermarked_payload_base64.length} chars Base64`}
+              title="3. Inserir visualmente no vídeo"
+              value={`${demo.noise_hex.length * 4} bits no MP4`}
             />
             <ArrowRight className="flow-arrow" size={17} />
             <Step
@@ -198,7 +275,7 @@ export function WatermarkLab({
             <code>{demo.encoded_claim}</code>
             <span>assinatura HMAC</span>
             <code>{demo.signature}</code>
-            <span>prefixo físico</span>
+            <span>transporte físico</span>
             <code>{demo.payload_prefix}</code>
             <span>chave usada</span>
             <code>secreta · fingerprint SHA-256 {demo.key_fingerprint}</code>

@@ -4,6 +4,7 @@ import json
 import base64
 import binascii
 import io
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -16,10 +17,18 @@ from controllers.api_controller import ApiController
 from services.content_provider import default_content_id
 from services.stream_service import ClientOfflineError, SimulationPausedError
 from utils.video import get_video_asset
+from utils.video_watermark import probe_video_limits
 
 
 def register_api_routes(api, controller: ApiController) -> None:
     """Register routes grouped by control plane, data plane and observability domain."""
+    def validate_uploaded_video(path: Path) -> None:
+        limits = probe_video_limits(path)
+        if limits["duration_seconds"] > 180:
+            raise ValueError("vídeo excede o limite de 180 segundos")
+        if limits["width"] * limits["height"] > 3840 * 2160:
+            raise ValueError("resolução excede o limite de 3840x2160")
+
     control = api.namespace("control", path="/api/control", description="Simulation lifecycle and configuration")
     topology = api.namespace("topology", path="/api/topology", description="Global CDN topology")
     clients = api.namespace("clients", path="/api/clients", description="Client data plane")
@@ -76,7 +85,7 @@ def register_api_routes(api, controller: ApiController) -> None:
         {
             "chunk_id": fields.String,
             "content_type": fields.String,
-            "payload": fields.String(description="Bytes do chunk em Base64, precedidos pela watermark"),
+            "payload": fields.String(description="Bytes do chunk em Base64; o MP4 contém a marca visual nos frames e o token é metadado separado"),
             "watermark_token": fields.String,
             "server_id": fields.String,
             "client_id": fields.String,
@@ -305,6 +314,41 @@ def register_api_routes(api, controller: ApiController) -> None:
             except Exception as exc:
                 return {"error": "Falha temporária ao solicitar stream"}, 502
 
+    @clients.route("/<string:client_id>/media")
+    @clients.param("client_id", "ID do cliente cadastrado")
+    class ClientMediaResource(Resource):
+        @clients.doc(description="Entrega o vídeo MP4 efetivamente marcado nos frames, sem prefixo textual no container.")
+        @clients.param("chunk", "Número do chunk", _in="query", type="integer", default=0)
+        def get(self, client_id: str):
+            """Expose the data-plane media as playable binary content."""
+            try:
+                chunk_number = int(request.args.get("chunk", "0"))
+                if chunk_number < 0:
+                    raise ValueError("chunk deve ser maior ou igual a zero")
+                media, metadata = controller.stream_media(
+                    client_id,
+                    chunk_number,
+                    request.headers.get("X-Request-ID"),
+                )
+                response = Response(media, mimetype=metadata.get("content_type", "video/mp4"))
+                response.headers["X-Watermark-Token"] = metadata.get("watermark_token", "")
+                response.headers["X-Watermark-Chunk"] = metadata.get("chunk_id", "")
+                response.headers["X-CDN-Server"] = metadata.get("server_id", "")
+                response.headers["X-Watermark-Visual"] = "embedded-in-video-frames"
+                return response
+            except SimulationPausedError as exc:
+                return {"error": str(exc)}, 409
+            except ClientOfflineError as exc:
+                return {"error": str(exc)}, 409
+            except PermissionError as exc:
+                return {"error": str(exc)}, 403
+            except (KeyError, ValueError) as exc:
+                return {"error": str(exc)}, 404 if isinstance(exc, KeyError) else 400
+            except RuntimeError as exc:
+                return {"error": str(exc)}, 503
+            except Exception:
+                return {"error": "Falha temporária ao entregar a mídia"}, 502
+
     @security.route("/blacklist")
     class BlacklistResource(Resource):
         @security.doc(description="Retorna clientes banidos após propagação HTTP entre nós CDN.")
@@ -345,6 +389,7 @@ def register_api_routes(api, controller: ApiController) -> None:
                         with tempfile.NamedTemporaryFile(prefix="cdn-detect-", suffix=Path(uploaded.filename or ".mp4").suffix or ".mp4", delete=False) as temporary:
                             temporary.write(raw)
                             temporary_path = Path(temporary.name)
+                        validate_uploaded_video(temporary_path)
                         return controller.detect_watermark_video(temporary_path)
                     return {"error": "tipo de mídia não suportado; envie uma imagem ou vídeo"}, 415
 
@@ -364,8 +409,9 @@ def register_api_routes(api, controller: ApiController) -> None:
                 with tempfile.NamedTemporaryFile(prefix="cdn-detect-", suffix=".mp4", delete=False) as temporary:
                     temporary.write(raw)
                     temporary_path = Path(temporary.name)
+                validate_uploaded_video(temporary_path)
                 return controller.detect_watermark_video(temporary_path)
-            except (UnidentifiedImageError, OSError, ValueError, RuntimeError) as exc:
+            except (UnidentifiedImageError, OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
                 return {"status": "INCONCLUSIVE", "error": str(exc)}, 400
             finally:
                 if temporary_path and temporary_path.exists():

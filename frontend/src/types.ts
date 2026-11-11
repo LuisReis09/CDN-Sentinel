@@ -372,6 +372,7 @@ export interface WatermarkDemo {
   chunk_number: number;
   original_payload_base64: string;
   watermarked_payload_base64: string;
+  payload_is_preview?: boolean;
   watermark_token: string;
   noise_hex: string;
   noise_source: string;
@@ -393,6 +394,21 @@ export interface WatermarkDemo {
   extracted_token: string;
   claim: Record<string, unknown>;
   round_trip_verified: boolean;
+  verification?: {
+    transport_token: string;
+    visual_embedded: boolean;
+    visual_detection?: string;
+    visual_authentication?: string;
+    forensic_status: string;
+  };
+  visual_detection?: {
+    status?: string;
+    confidence?: number;
+    frame_support?: number;
+    frames_sampled?: number;
+    authentication?: string;
+    reason?: string;
+  };
   payload_sha256: string;
   generated_at: number;
   key_fingerprint: string;

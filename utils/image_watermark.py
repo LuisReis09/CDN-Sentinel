@@ -15,17 +15,20 @@ from PIL import Image
 
 
 GRID_SIZE = 16
-DATA_BITS = 40
-SYNC_BITS = 16
+DATA_BITS = 48
+SYNC_BITS = 8
 REPETITIONS = 3
-SYNC_REPETITIONS = 3
+SYNC_REPETITIONS = 2
 DATA_REPETITIONS = 3
-TOTAL_SLOTS = SYNC_BITS * SYNC_REPETITIONS + DATA_BITS * DATA_REPETITIONS
+HAMMING_CODE_BITS = 13
+CODED_DATA_BITS = (DATA_BITS // 8) * HAMMING_CODE_BITS
+TOTAL_SLOTS = SYNC_BITS * SYNC_REPETITIONS + CODED_DATA_BITS * DATA_REPETITIONS
 MIN_CELL_SIZE = 8
 DEFAULT_STRENGTH = 12.0
-CARRIER_BLOCK = 6
+CARRIER_BLOCK = 6  # historical cache field; active carrier is normalized below
+CARRIER_CANONICAL_SIZE = 8
 ADAPTIVE_MASK_FLOOR = 0.05
-SYNC_MARKER = hashlib.sha256(b"CDN-Sentinel/image-watermark/sync-v3").hexdigest()[:4]
+SYNC_MARKER = hashlib.sha256(b"CDN-Sentinel/image-watermark/sync-v4").hexdigest()[:2]
 
 
 class ImageWatermarkUnsupported(ValueError):
@@ -42,8 +45,8 @@ class ImageWatermarkLayout:
 
 
 def visual_marker(token: str) -> str:
-    """Return the 40-bit visual identifier derived from an authenticated token."""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:10]
+    """Return the 48-bit visual identifier derived from an authenticated token."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
 
 
 def marker_bits(marker: str, width: int = DATA_BITS) -> list[int]:
@@ -81,13 +84,16 @@ def _carrier(secret: str, slot: int, shape: tuple[int, int]) -> np.ndarray:
         "big",
     )
     rng = np.random.default_rng(seed)
-    # Use a low-frequency keyed pattern instead of independent pixel noise.
-    # That keeps the signal measurable after a light blur or a resize/re-encode
-    # while remaining visually noise-like without the secret key.
-    coarse_height = max(1, min(height, int(np.ceil(height / CARRIER_BLOCK))))
-    coarse_width = max(1, min(width, int(np.ceil(width / CARRIER_BLOCK))))
-    coarse = rng.choice(np.array([-1.0, 1.0], dtype=np.float32), size=(coarse_height, coarse_width))
-    carrier = np.repeat(np.repeat(coarse, CARRIER_BLOCK, axis=0), CARRIER_BLOCK, axis=1)[:height, :width]
+    # Generate a fixed normalized carrier. The previous implementation chose
+    # a different random matrix for every tile resolution, which made detection
+    # disagree with the encoder after a resize. A fixed 8x8 keyed pattern is
+    # expanded to the tile dimensions, so 320p, 720p and resized copies share
+    # the same spatial code while retaining a low-frequency visual signal.
+    canonical_size = CARRIER_CANONICAL_SIZE
+    canonical = rng.choice(np.array([-1.0, 1.0], dtype=np.float32), size=(canonical_size, canonical_size))
+    row_index = np.minimum((np.arange(height) * canonical_size) // max(1, height), canonical_size - 1)
+    col_index = np.minimum((np.arange(width) * canonical_size) // max(1, width), canonical_size - 1)
+    carrier = canonical[row_index[:, None], col_index[None, :]]
     carrier -= float(carrier.mean())
     return carrier
 
@@ -169,13 +175,60 @@ def _cell_bounds(layout: ImageWatermarkLayout, cell_index: int) -> tuple[int, in
     return x0, y0, x1, y1
 
 
-def _bits_for_payload(marker: str) -> list[int]:
-    return marker_bits(SYNC_MARKER, SYNC_BITS) + marker_bits(marker, DATA_BITS)
+def _hamming128_encode(byte_bits: list[int]) -> list[int]:
+    """Encode one byte as SECDED Hamming(13,8), LSB-first."""
+    data_positions = (3, 5, 6, 7, 9, 10, 11, 12)
+    codeword = [0] * 13
+    for position, bit in zip(data_positions, byte_bits):
+        codeword[position - 1] = int(bit)
+    for parity_position in (1, 2, 4, 8):
+        parity = 0
+        for position in range(1, 13):
+            if position & parity_position and position != parity_position:
+                parity ^= codeword[position - 1]
+        codeword[parity_position - 1] = parity
+    codeword[12] = sum(codeword[:12]) % 2
+    return codeword
+
+
+def _hamming128_decode(bits: list[int]) -> tuple[list[int], int, int]:
+    """Decode SECDED Hamming(13,8), rejecting detected double-bit errors."""
+    data_positions = (3, 5, 6, 7, 9, 10, 11, 12)
+    decoded: list[int] = []
+    corrected = 0
+    uncorrectable = 0
+    for offset in range(0, len(bits), HAMMING_CODE_BITS):
+        codeword = list(bits[offset:offset + HAMMING_CODE_BITS])
+        if len(codeword) < HAMMING_CODE_BITS:
+            uncorrectable += 1
+            continue
+        syndrome = 0
+        for parity_position in (1, 2, 4, 8):
+            parity = 0
+            for position in range(1, 13):
+                if position & parity_position:
+                    parity ^= codeword[position - 1]
+            if parity:
+                syndrome |= parity_position
+        overall_error = sum(codeword) % 2
+        if overall_error and syndrome == 0:
+            codeword[12] ^= 1
+            corrected += 1
+        elif overall_error and 1 <= syndrome <= 12:
+            codeword[syndrome - 1] ^= 1
+            corrected += 1
+        elif not overall_error and syndrome:
+            uncorrectable += 1
+        decoded.extend(codeword[position - 1] for position in data_positions)
+    return decoded, corrected, uncorrectable
 
 
 def _expanded_bits(marker: str) -> list[int]:
     sync_bits = marker_bits(SYNC_MARKER, SYNC_BITS)
-    data_bits = marker_bits(marker, DATA_BITS)
+    marker_bits_value = marker_bits(marker, DATA_BITS)
+    data_bits = []
+    for offset in range(0, DATA_BITS, 8):
+        data_bits.extend(_hamming128_encode(marker_bits_value[offset:offset + 8]))
     return (
         [bit for bit in sync_bits for _ in range(SYNC_REPETITIONS)]
         + [bit for bit in data_bits for _ in range(DATA_REPETITIONS)]
@@ -203,14 +256,16 @@ def embed_image(
         weighted_carrier -= float(weighted_carrier.mean())
         after[y0:y1, x0:x1] += (1.0 if bit else -1.0) * float(strength) * weighted_carrier
     return _rgb_delta(image, before, after), {
-        "version": "CDNIMG4-ADAPTIVE-SPREAD",
+        "version": "CDNIMG5-ADAPTIVE-SPREAD-SECDED",
         "marker": marker,
         "bits": DATA_BITS,
         "repetitions": REPETITIONS,
         "sync_repetitions": SYNC_REPETITIONS,
         "data_repetitions": DATA_REPETITIONS,
         "sync_bits": SYNC_BITS,
-        "carrier_block": CARRIER_BLOCK,
+        "coded_data_bits": CODED_DATA_BITS,
+        "error_correction": "SECDED Hamming(13,8), one corrected bit per byte",
+        "carrier": f"normalized-{CARRIER_CANONICAL_SIZE}x{CARRIER_CANONICAL_SIZE}",
         "grid": f"{GRID_SIZE}x{GRID_SIZE}",
         "layout": layout,
         "strength": float(strength),
@@ -225,13 +280,15 @@ def _decode_score_vector(scores: list[float] | np.ndarray, layout: ImageWatermar
     for _index in range(SYNC_BITS):
         bit_scores.append(scores[offset:offset + SYNC_REPETITIONS])
         offset += SYNC_REPETITIONS
-    for _index in range(DATA_BITS):
+    for _index in range(CODED_DATA_BITS):
         bit_scores.append(scores[offset:offset + DATA_REPETITIONS])
         offset += DATA_REPETITIONS
     recovered = [int(sum(1 if score >= 0 else 0 for score in group) >= (len(group) / 2)) for group in bit_scores]
     consistency = [max(sum(score >= 0 for score in group), sum(score < 0 for score in group)) / len(group) for group in bit_scores if group]
     sync = recovered[:SYNC_BITS]
-    data = recovered[SYNC_BITS:SYNC_BITS + DATA_BITS]
+    coded_data = recovered[SYNC_BITS:SYNC_BITS + CODED_DATA_BITS]
+    data, corrected_errors, uncorrectable_errors = _hamming128_decode(coded_data)
+    data = data[:DATA_BITS]
     sync_expected = marker_bits(SYNC_MARKER, SYNC_BITS)
     sync_confidence = sum(int(actual == expected) for actual, expected in zip(sync, sync_expected)) / SYNC_BITS
     data_marker_bytes = bytearray()
@@ -242,6 +299,8 @@ def _decode_score_vector(scores: list[float] | np.ndarray, layout: ImageWatermar
         "marker": marker,
         "sync_confidence": round(sync_confidence, 4),
         "repetition_consistency": round(float(sum(consistency) / len(consistency)), 4),
+        "corrected_errors": corrected_errors,
+        "uncorrectable_errors": uncorrectable_errors,
         "mean_signal": round(float(np.mean(np.abs(scores))), 4),
         "scores": scores,
         "supported": True,
@@ -271,9 +330,10 @@ def classify_image_evidence(evidence: dict) -> dict:
     """Classify decoded evidence; video detection uses this after frame aggregation."""
     sync = float(evidence["sync_confidence"])
     consistency = float(evidence["repetition_consistency"])
-    if sync < 0.5:
+    mean_signal = float(evidence.get("mean_signal", 0.0))
+    if sync < 0.5 or mean_signal < 0.5:
         status = "NOT_FOUND"
-    elif sync < 0.65 or consistency < 0.70:
+    elif sync < 0.8 or consistency < 0.75 or evidence.get("uncorrectable_errors", 0):
         status = "INCONCLUSIVE"
     else:
         status = "CANDIDATE"

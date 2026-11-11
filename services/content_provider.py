@@ -29,6 +29,8 @@ VIDEO_EXTENSIONS = frozenset({".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"})
 class ContentProvider(Protocol):
     def get_chunk(self, content_id: str, chunk_number: int) -> tuple[bytes, str]: ...
 
+    def resolve_asset(self, content_id: str, chunk_number: int = 0) -> tuple[Path, str]: ...
+
 
 @dataclass(frozen=True)
 class VideoCatalog:
@@ -39,10 +41,15 @@ class VideoCatalog:
 
 
 class FallbackContentProvider:
-    def get_chunk(self, content_id: str, chunk_number: int) -> tuple[bytes, str]:
-        from utils.video import get_video_chunk
+    def resolve_asset(self, content_id: str, chunk_number: int = 0) -> tuple[Path, str]:
+        from utils.video import get_video_asset
 
-        return get_video_chunk(chunk_number, content_id)
+        del chunk_number
+        return get_video_asset(content_id, "original")
+
+    def get_chunk(self, content_id: str, chunk_number: int) -> tuple[bytes, str]:
+        path, content_type = self.resolve_asset(content_id, chunk_number)
+        return path.read_bytes(), content_type
 
 
 class DatasetContentProvider:
@@ -153,4 +160,12 @@ class HybridContentProvider:
         if self.dataset_provider.supports(content_id):
             return self.dataset_provider.get_chunk(content_id, chunk_number)
         return self.fallback_provider.get_chunk(content_id, chunk_number)
+
+    def resolve_asset(self, content_id: str, chunk_number: int = 0) -> tuple[Path, str]:
+        if self.dataset_provider.supports(content_id):
+            return self.dataset_provider.resolve_asset(content_id, chunk_number)
+        resolver = getattr(self.fallback_provider, "resolve_asset", None)
+        if resolver is None:
+            raise FileNotFoundError("o provedor de fallback não expõe um arquivo de mídia")
+        return resolver(content_id, chunk_number)
 

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import os
+from pathlib import Path
 import threading
 import time
 import random
@@ -55,13 +59,22 @@ class LeakService:
                     continue
                 try:
                     chunk = self._stream_service.stream(client, state, chunk_number=1)
+                    try:
+                        media = base64.b64decode(chunk.payload, validate=True)
+                    except (ValueError, TypeError):
+                        continue
+                    leak_root = Path(os.getenv("CDN_LEAK_MEDIA_ROOT", "data/runtime/leaks"))
+                    leak_root.mkdir(parents=True, exist_ok=True)
+                    leak_id = f"leak-{uuid.uuid4().hex[:12]}"
+                    media_path = leak_root / f"{leak_id}.mp4"
+                    media_path.write_bytes(media)
                     platform = self._random.choice([
                         {"id": "mirrorflix", "name": "MirrorFlix", "kind": "vídeo espelho"},
                         {"id": "streambox", "name": "StreamBox", "kind": "retransmissão não autorizada"},
                         {"id": "torrent-index", "name": "Torrent Index", "kind": "índice de distribuição"},
                     ])
                     self._repository.append_leak({
-                        "leak_id": f"leak-{uuid.uuid4().hex[:12]}",
+                        "leak_id": leak_id,
                         "client_id": client.client_id,
                         "server_id": chunk.server_id,
                         "origin_server_id": chunk.server_id,
@@ -72,7 +85,10 @@ class LeakService:
                         "watermark_token": chunk.watermark_token,
                         "request_id": chunk.request_id,
                         "trace_id": chunk.trace_id,
-                        "content": chunk.payload,
+                        "content_type": chunk.content_type,
+                        "media_path": str(media_path.resolve()),
+                        "media_sha256": hashlib.sha256(media).hexdigest(),
+                        "content": None,
                         "created_at": time.time(),
                         "processed": False,
                     })

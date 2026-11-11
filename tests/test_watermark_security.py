@@ -9,6 +9,7 @@ from PIL import Image, ImageFilter
 
 from app import create_app
 from services.watermark_service import WatermarkService
+from services.watermark_registry import WatermarkRegistry
 from utils.image_watermark import _luminance, embed_image, visual_marker
 from utils.security import create_watermark_token
 from utils.video import get_video_asset
@@ -115,7 +116,33 @@ class WatermarkSecurityTests(unittest.TestCase):
                 )
         self.assertEqual(detected_video.status_code, 200, detected_video.get_json())
         self.assertEqual(detected_video.get_json()["status"], "VALID")
-        self.assertLessEqual(detected_video.get_json()["visual_hamming_distance"], 5)
+        self.assertEqual(detected_video.get_json()["visual_hamming_distance"], 0)
+
+    def test_registry_persists_and_near_marker_is_not_attributed(self):
+        with tempfile.TemporaryDirectory(prefix="cdn-watermark-registry-") as temporary:
+            registry_path = Path(temporary) / "registry.sqlite3"
+            registry = WatermarkRegistry(registry_path)
+            first = WatermarkService("persistent-secret", registry)
+            token, _claim = first.issue("client-persisted", "server-persisted", 0, "video-persisted")
+            marked, _metadata = embed_image(Image.new("RGB", (256, 256), (140, 120, 100)), token, first.secret_key)
+
+            restarted = WatermarkService("persistent-secret", WatermarkRegistry(registry_path))
+            evidence = restarted.detect_image(marked)
+            self.assertEqual(evidence["status"], "VALID")
+            self.assertEqual(evidence["client_id"], "client-persisted")
+            self.assertEqual(evidence["visual_hamming_distance"], 0)
+
+            for index in range(32):
+                restarted.issue(f"client-{index}", "server-persisted", index, f"video-{index}")
+            marker = visual_marker(token)
+            near_marker = f"{int(marker[0], 16) ^ 1:x}{marker[1:]}"
+            unregistered = restarted._resolve_detection({
+                "status": "CANDIDATE",
+                "marker": near_marker,
+                "confidence": 0.99,
+            })
+            self.assertEqual(unregistered["status"], "CANDIDATE")
+            self.assertEqual(unregistered["authentication"], "unregistered-marker")
 
 
 if __name__ == "__main__":

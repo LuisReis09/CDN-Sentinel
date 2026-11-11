@@ -1967,6 +1967,26 @@ label {
   gap: 12px;
   padding: 0 20px 19px;
 }
+.watermark-sync-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 20px 12px;
+}
+.watermark-sync-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 190px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.watermark-sync-toolbar input[type="range"] {
+  min-width: 120px;
+  accent-color: var(--cyan);
+}
 .noise-video {
   position: relative;
   overflow: hidden;
@@ -2947,6 +2967,14 @@ label {
   }
   .lab-toolbar {
     flex-direction: column;
+  }
+  .watermark-sync-toolbar {
+    align-items: stretch;
+    padding: 0 14px 12px;
+  }
+  .watermark-sync-toolbar label {
+    min-width: 100%;
+    margin-left: 0;
   }
   .lab-toolbar select {
     max-width: none;

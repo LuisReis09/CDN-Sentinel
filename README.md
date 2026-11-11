@@ -165,7 +165,8 @@ Endpoints principais:
 | Controle | `POST /api/control/fault/{server_id}` | offline, latência extra ou perda local |
 | Controle | `POST /api/control/metrics/reset` | zera telemetria sem apagar topologia/blacklist |
 | Controle | `POST /api/control/simulation/end` | encerra processos/workers e arquiva a simulacao |
-| Dados | `GET /api/clients/{id}/stream?chunk=0` | roteia, faz failover e entrega chunk watermarkado |
+| Dados | `GET /api/clients/{id}/stream?chunk=0` | roteia, faz failover e entrega o MP4 Base64 com marca visual nos frames |
+| Dados | `GET /api/clients/{id}/media?chunk=0` | entrega o MP4 watermarkado como mídia binária reproduzível |
 | Dados | `POST /api/clients/{id}/feedback` | registra like/nota e relaciona a percepção à latência observada |
 | Topologia | `GET/POST /api/topology/servers` | observa/adiciona nós |
 | Segurança | `POST /api/security/watermark/verify` | descriptografa e valida token AES-GCM/HMAC sem expor chave |

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List
 
 from repositories.in_memory import SimulationRepository
@@ -154,14 +155,44 @@ class MonitorService:
         candidates = [leak for leak in list(state.leaks) if not leak.get("processed") and leak.get("server_id") == server_id]
         for leak in candidates:
             try:
-                token = extract_watermark_token(leak.get("content", ""))
-                claim = self._watermark_service.verify(token)
-                entry = self._blacklist_service.report(token, detected_by_server_id=server_id, trace_id=leak.get("trace_id"))
+                media_path = leak.get("media_path")
+                if media_path:
+                    evidence = self._watermark_service.detect_video(Path(media_path))
+                    leak["forensic_status"] = evidence.get("status")
+                    leak["forensic_evidence"] = {
+                        key: value
+                        for key, value in evidence.items()
+                        if key not in {"scores", "frames"}
+                    }
+                    if evidence.get("status") != "VALID" or not evidence.get("claim"):
+                        leak["processed"] = True
+                        leak["detected_by_server_id"] = server_id
+                        rejected.append({
+                            "leak_id": leak.get("leak_id"),
+                            "monitor_server_id": server_id,
+                            "status": evidence.get("status"),
+                            "reason": evidence.get("reason", "evidência visual não autenticada; nenhuma ação automática"),
+                        })
+                        continue
+                    token = self._watermark_service.registered_token_for_marker(evidence.get("marker"))
+                    if not token:
+                        raise ValueError("evidência visual válida sem token exato no registro")
+                    claim = self._watermark_service.verify(token)
+                    entry = self._blacklist_service.report(token, detected_by_server_id=server_id, trace_id=leak.get("trace_id"))
+                    leak["forensic_source"] = "visual-media"
+                else:
+                    # Compatibility with historical synthetic leaks. New leaks
+                    # always use media_path and this branch is never used for
+                    # the real CDN data plane.
+                    token = extract_watermark_token(leak.get("content", ""))
+                    claim = self._watermark_service.verify(token)
+                    entry = self._blacklist_service.report(token, detected_by_server_id=server_id, trace_id=leak.get("trace_id"))
+                    leak["forensic_source"] = "legacy-prefix"
                 leak["processed"] = True
                 leak["detected_at"] = time.time()
                 leak["detected_by_server_id"] = server_id
-                detected.append({"leak_id": leak["leak_id"], "monitor_server_id": server_id, "claim": claim.to_dict(), "blacklist": entry.to_dict()})
-            except (ValueError, KeyError, TypeError) as exc:
+                detected.append({"leak_id": leak["leak_id"], "monitor_server_id": server_id, "claim": claim.to_dict(), "blacklist": entry.to_dict(), "forensic_source": leak["forensic_source"]})
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
                 leak["processed"] = True
                 leak["error"] = str(exc)
                 leak["detected_by_server_id"] = server_id

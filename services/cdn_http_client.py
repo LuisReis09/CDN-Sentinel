@@ -61,7 +61,10 @@ class CDNHttpClient:
             url,
             params=params,
             headers=self._headers("GET", url, params),
-            timeout=self._timeout,
+            # First delivery may populate the node's visual-watermark cache;
+            # keep health/control calls short but allow this bounded encode to
+            # finish without triggering a false routing failover.
+            timeout=max(self._timeout, float(os.getenv("CDN_STREAM_TIMEOUT", "30"))),
         )
         response.raise_for_status()
         result = response.json()

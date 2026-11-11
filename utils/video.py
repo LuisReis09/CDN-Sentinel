@@ -11,12 +11,20 @@ from typing import Tuple
 
 from services.content_provider import DatasetContentProvider, default_content_id
 from utils.video_watermark import VIDEO_STRENGTH, embed_video, transcode_video
-from utils.image_watermark import ADAPTIVE_MASK_FLOOR, CARRIER_BLOCK, DATA_BITS, SYNC_BITS, DATA_REPETITIONS
+from utils.image_watermark import (
+    ADAPTIVE_MASK_FLOOR,
+    CARRIER_CANONICAL_SIZE,
+    CODED_DATA_BITS,
+    DATA_BITS,
+    DATA_REPETITIONS,
+    SYNC_BITS,
+    SYNC_REPETITIONS,
+)
 
 
 MEDIA_ROOT = Path(__file__).resolve().parents[1] / "data" / "media"
 GENERATED_ROOT = MEDIA_ROOT / "generated"
-VISUAL_WATERMARK_VERSION = "independent-v9-adaptive-perceptual-spread-40bit"
+VISUAL_WATERMARK_VERSION = "independent-v10-adaptive-perceptual-spread-48bit-secded"
 VISUAL_WATERMARK_ALGORITHM = "adaptive-spread"
 VIDEO_CATALOG = (
     ("bigbuckbunny", "Big Buck Bunny · clipe real", "bigbuckbunny.mp4"),
@@ -191,7 +199,7 @@ def generate_visual_variants(video_id: str, token: str, secret_key: str | None =
     source, _ = get_video_asset(video_id, "original")
     generated_id = hashlib.sha256(
         f"{VISUAL_WATERMARK_VERSION}:{VISUAL_WATERMARK_ALGORITHM}:{VIDEO_STRENGTH}:"
-        f"{ADAPTIVE_MASK_FLOOR}:{CARRIER_BLOCK}:{DATA_BITS}:{SYNC_BITS}:{DATA_REPETITIONS}:"
+        f"{ADAPTIVE_MASK_FLOOR}:{CARRIER_CANONICAL_SIZE}:{DATA_BITS}:{SYNC_BITS}:{SYNC_REPETITIONS}:{DATA_REPETITIONS}:{CODED_DATA_BITS}:"
         f"diagnostic-lut8:{source}:{source.stat().st_mtime_ns}:{token}".encode()
     ).hexdigest()[:16]
     watermarked = GENERATED_ROOT / f"{generated_id}-watermarked.mp4"
