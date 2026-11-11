@@ -8,6 +8,8 @@ interface NoiseVideoPreviewProps {
   videoRef?: Ref<HTMLVideoElement>;
   onTimeUpdate?: (currentTime: number) => void;
   onLoadedMetadata?: (duration: number) => void;
+  onPlay?: () => void;
+  onPause?: () => void;
 }
 
 /** Plays the exact MP4 variant returned by the backend media catalog. */
@@ -19,6 +21,8 @@ export function NoiseVideoPreview({
   videoRef,
   onTimeUpdate,
   onLoadedMetadata,
+  onPlay,
+  onPause,
 }: NoiseVideoPreviewProps) {
   const [unavailable, setUnavailable] = useState(false);
 
@@ -40,13 +44,13 @@ export function NoiseVideoPreview({
             src={videoUrl}
             ref={videoRef}
             muted
-            loop
-            autoPlay
             playsInline
             aria-label={label}
             onError={() => setUnavailable(true)}
             onTimeUpdate={(event) => onTimeUpdate?.(event.currentTarget.currentTime)}
             onLoadedMetadata={(event) => onLoadedMetadata?.(event.currentTarget.duration)}
+            onPlay={onPlay}
+            onPause={onPause}
           />
         )}
         <span className="noise-video__source-badge">

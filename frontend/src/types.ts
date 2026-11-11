@@ -330,13 +330,14 @@ export interface LeakRecord {
   error?: string;
   trace_id?: string;
   request_id?: string;
+  forensic_status?: string;
+  investigation_id?: string;
 }
 
 export interface VideoChunk {
   chunk_id: string;
   content_type: string;
   payload: string;
-  watermark_token: string;
   server_id: string;
   client_id: string;
   issued_at: number;
@@ -348,6 +349,22 @@ export interface VideoChunk {
   end_to_end_ms?: number;
   routing_candidates?: Array<Record<string, unknown>>;
   routing_reason?: string;
+}
+
+export interface ForensicInvestigation {
+  investigation_id: string;
+  media_sha256: string;
+  forensic_status: string;
+  decision: "PENDING_REVIEW" | "INCONCLUSIVE" | "NO_WATERMARK";
+  attribution: "AUTHENTICATED_SESSION" | "NONE";
+  content_id?: string | null;
+  session_id?: string | null;
+  watermark_id?: string | null;
+  claim?: Record<string, unknown> | null;
+  content_match?: { status: string; matched_frames?: number; fraction?: number } | null;
+  evidence: Record<string, unknown>;
+  administrative_action: string;
+  blacklist_changed: boolean;
 }
 
 export interface WatermarkDemo {

@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api";
-import type { LeakRecord, Overview, WatermarkDetection } from "../types";
+import type { ForensicInvestigation, LeakRecord, Overview, WatermarkDetection } from "../types";
 
 export function SecurityPage({
   overview,
@@ -26,6 +26,33 @@ export function SecurityPage({
   const processedLeaks = overview.leaks.filter((leak) => leak.processed).length;
   const [detection, setDetection] = useState<WatermarkDetection | null>(null);
   const [detectionBusy, setDetectionBusy] = useState(false);
+  const [investigation, setInvestigation] = useState<ForensicInvestigation | null>(null);
+  const [reviewStatus, setReviewStatus] = useState("");
+  const [investigationBusy, setInvestigationBusy] = useState(false);
+
+  async function investigate(file: File | undefined) {
+    if (!file) return;
+    setInvestigationBusy(true);
+    setInvestigation(null);
+    setReviewStatus("");
+    try {
+      setInvestigation(await api.investigateVideo(file));
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : "Falha na investigação");
+    } finally {
+      setInvestigationBusy(false);
+    }
+  }
+
+  async function review(decision: "ACCEPT" | "REJECT" | "INCONCLUSIVE") {
+    if (!investigation) return;
+    try {
+      const result = await api.reviewInvestigation(investigation.investigation_id, decision);
+      setReviewStatus(`Revisão registrada: ${String(result.decision)}. Nenhuma blacklist foi alterada.`);
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : "Falha ao registrar revisão");
+    }
+  }
 
   async function detect(file: File | undefined) {
     if (!file) return;
@@ -47,8 +74,8 @@ export function SecurityPage({
           <h1>Security observatory</h1>
           <p className="page-lead">
             Cada servidor possui seu próprio monitor. Um vazamento nasce em uma
-            CDN, aparece numa plataforma externa simulada e só depois vira uma
-            decisão de blacklist distribuída.
+            CDN, aparece numa plataforma externa simulada e vira uma investigação
+            pendente de revisão. A conta associada não é automaticamente bloqueada.
           </p>
         </div>
         <div className="header-signal">
@@ -152,7 +179,7 @@ export function SecurityPage({
                 <strong>Varredura distribuída e automática</strong>
                 <small>
                   cada monitor observa vazamentos emitidos pelo seu servidor e
-                  denuncia aos pares via HTTP
+                  registra evidência para revisão humana
                 </small>
               </div>
             </div>
@@ -161,13 +188,45 @@ export function SecurityPage({
               <div>
                 <strong>Fluxo de acordo</strong>
                 <small>
-                  detectar → inserir localmente → enviar BLACKLIST_ALERT →
-                  receber ACK → atualizar peers
+                  detectar → confirmar marcador → verificar claim →
+                  conferir conteúdo → encaminhar para revisão
                 </small>
               </div>
             </div>
           </div>
         </div>
+      </section>
+      <section className="panel watermark-detection-panel">
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">AUTHORIZED FORENSIC INGESTION</p>
+            <h2>Investigar vídeo externo</h2>
+            <p className="panel-subtitle">O arquivo é analisado por seus bytes, sem informar o cliente esperado. O resultado registra hash, correspondência de conteúdo, sessão e estado de revisão.</p>
+          </div>
+          <Fingerprint size={18} className="accent" />
+        </div>
+        <label className="watermark-file-input">
+          <span>{investigationBusy ? "Analisando vídeo…" : "Selecionar vídeo suspeito"}</span>
+          <input type="file" accept="video/*,.mp4,.mkv,.webm,.mov" disabled={investigationBusy} onChange={(event) => void investigate(event.target.files?.[0])} />
+        </label>
+        {investigation && (
+          <div className="watermark-detection-result">
+            <strong>{investigation.decision}</strong>
+            <span>Estado forense: {investigation.forensic_status} · associação: {investigation.attribution}</span>
+            <code>SHA-256: {investigation.media_sha256}</code>
+            <span>Conteúdo: {investigation.content_id ?? "não confirmado"} · sessão: {investigation.session_id ?? "não atribuída"}</span>
+            <span>Correspondência do conteúdo: {investigation.content_match?.status ?? "não avaliada"}</span>
+            {investigation.decision === "PENDING_REVIEW" && !reviewStatus && (
+              <div className="watermark-sync-toolbar">
+                <button className="button button-secondary" type="button" onClick={() => void review("ACCEPT")}>Aceitar evidência</button>
+                <button className="button button-secondary" type="button" onClick={() => void review("REJECT")}>Rejeitar</button>
+                <button className="button button-secondary" type="button" onClick={() => void review("INCONCLUSIVE")}>Inconclusiva</button>
+              </div>
+            )}
+            {reviewStatus && <span>{reviewStatus}</span>}
+            <small>Revisão de evidência não determina autoria pessoal e não aplica sanção automaticamente.</small>
+          </div>
+        )}
       </section>
       <section className="panel watermark-detection-panel">
         <div className="panel-heading">

@@ -7,6 +7,7 @@ import type {
   VideoChunk,
   WatermarkDemo,
   WatermarkDetection,
+  ForensicInvestigation,
 } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").replace(
@@ -123,6 +124,23 @@ export const api = {
     }
     return body as WatermarkDetection;
   },
+  investigateVideo: async (file: File): Promise<ForensicInvestigation> => {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(`${API_BASE}/monitor/investigations`, {
+      method: "POST",
+      headers: CONTROL_TOKEN ? { "X-CDN-Control-Token": CONTROL_TOKEN } : undefined,
+      body: form,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}.`);
+    return body as ForensicInvestigation;
+  },
+  reviewInvestigation: (id: string, decision: "ACCEPT" | "REJECT" | "INCONCLUSIVE") =>
+    request<Record<string, unknown>>(`/monitor/investigations/${encodeURIComponent(id)}/review`, {
+      method: "POST",
+      body: JSON.stringify({ decision, reviewer: "local-operator" }),
+    }),
   watermarkDemo: (payload: Record<string, unknown> = {}) =>
     request<WatermarkDemo>("/security/watermark/demo", {
       method: "POST",

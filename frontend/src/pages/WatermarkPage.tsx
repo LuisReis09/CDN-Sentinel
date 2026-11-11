@@ -22,8 +22,8 @@ export function WatermarkPage({
           <p className="eyebrow">CRYPTOGRAPHIC CONTENT PROTECTION</p>
           <h1>Watermark studio</h1>
           <p className="page-lead">
-            Uma visão didática do ciclo de vida da cifra e assinatura forense sem expor
-            a chave secreta.
+            Compare os mesmos instantes do vídeo original, marcado e da diferença
+            diagnóstica. A marca visual é experimental; atribuição exige claim autenticado e revisão.
           </p>
         </div>
       </header>
@@ -31,22 +31,22 @@ export function WatermarkPage({
         <StoryCard
           icon={<LockKeyhole />}
           title="Emitir"
-          text="A CDN cria um token único usando cliente, servidor, timestamp e chunk."
+          text="A CDN registra uma sessão e um claim cifrado; o vídeo carrega apenas um marcador visual curto."
         />
         <StoryCard
           icon={<Fingerprint />}
           title="Assinar"
-          text="AES-256-GCM cifra o claim; HMAC-SHA256 assina o envelope e detecta adulteração."
+          text="AES-256-GCM cifra o claim e HMAC-SHA256 autentica o envelope no ledger."
         />
         <StoryCard
           icon={<ScanSearch />}
           title="Extrair"
-          text="O monitor extrai o prefixo CDNWM2 e descriptografa o claim dos bytes redistribuídos."
+          text="O monitor extrai o marcador dos frames e consulta a associação exata no ledger."
         />
         <StoryCard
           icon={<ShieldCheck />}
           title="Governar"
-          text="A prova válida identifica o assinante e dispara o gossip de blacklist."
+          text="Uma sessão associada vira evidência para revisão; não determina automaticamente a autoria da cópia."
         />
       </section>
       <WatermarkLab onError={onError} />

@@ -3894,3 +3894,5 @@ label {
   }
 }
 
+.watermark-preview-zoom .noise-video__frame { overflow: hidden; }
+.watermark-preview-zoom .noise-video__source { transform: scale(2); transform-origin: center; }
