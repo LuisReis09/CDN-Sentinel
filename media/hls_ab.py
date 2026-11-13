@@ -137,6 +137,8 @@ class HLSABService:
                 )
                 if not self.registry.ab_pattern_exists(content_id, pattern):
                     break
+                if viewer_session_id:
+                    raise RuntimeError("colisão de fingerprint para sessão fixa; conteúdo curto não oferece sequência distinta")
             else:
                 raise RuntimeError("espaço de fingerprints A/B esgotado para este conteúdo")
             token, claim = self.watermark_service.issue_forensic_claim(

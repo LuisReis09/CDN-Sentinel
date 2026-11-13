@@ -43,10 +43,12 @@ No fluxo MP4, o nó emite um claim CDNWM4 cifrado e autenticado, grava no ledger
 
 O backend seguro é apropriado apenas para **uma instância de API** atrás de HTTPS e de um proxy de mesma origem. Sessões e limites em memória se perdem em reinício e não são compartilhados entre workers. A sessão de espectador é emitida após autenticação da conta fora deste aplicativo. O cookie reduz replay por expiração, revogação e vínculo ao User-Agent, mas um cookie roubado ainda pode ser reutilizado no mesmo contexto até ser revogado ou expirar. O segredo do ledger e a base sob o mesmo administrador não produzem imutabilidade forte.
 
+Uma mídia HLS com três segmentos oferece só oito padrões A/B. A primeira execução do Actions nesta branch encontrou colisão ao criar uma terceira sessão com ID fixo; isso não é recuperabilidade forense. O teste agora reserva a sessão fixa antes das sessões aleatórias e o serviço relata colisão desse ID imediatamente. Ainda falta uma estratégia versionada de códigos longos e estatística de colisões para muitos espectadores.
+
 ## Validação disponível
 
 - `python -m compileall -q app.py controllers routes services tests utils watermark`: passou.
-- `python -m unittest discover -s tests -v`: 60 testes passaram em 114,090 s na segunda execução completa. Depois dela, um teste adicional de resultado de comparação desconhecido foi incluído; `python -m unittest tests.test_forensic_states tests.test_operator_auth tests.test_video_contract -v` passou com 8 testes em 1,150 s. A suíte completa precisa ser reexecutada no CI do PR.
+- `python -m unittest discover -s tests -v`: 61 testes passaram em 119,366 s na execução local final antes do ajuste do fixture HLS. Depois do ajuste, `python -m unittest tests.test_hls_ab -v` passou em 8,059 s e `python -m unittest tests.test_operator_auth tests.test_forensic_states -v` passou com 7 testes em 1,171 s. A suíte completa precisa ser reexecutada no GitHub Actions.
 - `npm.cmd run build`: passou; aviso de bundle maior que 500 kB.
 - `docker compose config --quiet`: passou; aviso local de leitura de configuração Docker, sem falha de validação.
 

@@ -18,10 +18,12 @@ class OperatorAuthTests(unittest.TestCase):
             "CDN_OPERATOR_ACCOUNTS": json.dumps(accounts),
             "CDN_SECRET_KEY": "secure-test-key-with-at-least-32-chars",
             "CDN_VIEWER_SESSION_SECRET": "secure-test-viewer-key-with-32-chars",
+            "CDN_CORS_ORIGINS": "",
         }):
             app = create_app()
         client = app.test_client()
         self.assertEqual(client.get("/api/observability/overview").status_code, 401)
+        self.assertNotIn("Access-Control-Allow-Origin", client.get("/api/observability/overview", headers={"Origin": "https://evil.example"}).headers)
         self.assertEqual(client.get("/api/monitor/leaks").status_code, 401)
         self.assertEqual(client.post("/api/security/watermark/verify", json={"token": "x"}).status_code, 401)
         login = client.post("/api/auth/login", json={"username": "alice", "password": "correct-password-operator"})

@@ -36,7 +36,8 @@ def create_app() -> Flask:
     bind_host = os.getenv("CDN_BIND_HOST", "127.0.0.1" if auth_mode == "local" else "0.0.0.0")
     if auth_mode == "local" and bind_host in {"0.0.0.0", "::"} and os.getenv("CDN_LOCAL_BIND_ACK", "") != "I_UNDERSTAND_LOCAL_MODE_HAS_NO_AUTH":
         raise ValueError("local mode cannot bind all interfaces without CDN_LOCAL_BIND_ACK")
-    configured_origins = os.getenv("CDN_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    default_origins = "http://localhost:5173,http://127.0.0.1:5173" if auth_mode == "local" else ""
+    configured_origins = os.getenv("CDN_CORS_ORIGINS", default_origins).split(",")
     if auth_mode == "secure" and any(origin.strip() == "*" for origin in configured_origins):
         raise ValueError("wildcard CORS is forbidden in secure mode")
     CORS(app, resources={r"/api/*": {"origins": [origin.strip() for origin in configured_origins if origin.strip()]}})

@@ -34,6 +34,14 @@ class HLSABTests(unittest.TestCase):
             registry = WatermarkRegistry(root / "ledger.sqlite3")
             service = WatermarkService("hls-test-secret-with-entropy", registry)
             hls = HLSABService(service, _LocalProvider(source), cache_root=root / "cache", segment_seconds=1)
+            # Reserve the fixed viewer identity first. A three-bit A/B clip
+            # has only eight possible patterns; reserving it after random
+            # sessions makes this compatibility test probabilistic.
+            bound = hls.create_session("client-c", "edge-a", "synthetic", viewer_session_id="view-test-session-123")
+            self.assertEqual(bound["session_id"], "view-test-session-123")
+            self.assertEqual(hls.create_session("client-c", "edge-a", "synthetic", viewer_session_id="view-test-session-123")["session_id"], bound["session_id"])
+            with self.assertRaises(PermissionError):
+                hls.create_session("client-d", "edge-a", "synthetic", viewer_session_id="view-test-session-123")
             first = hls.create_session("client-a", "edge-a", "synthetic")
             second = hls.create_session("client-b", "edge-a", "synthetic")
             self.assertEqual(first["segments"], 3)
@@ -42,11 +50,6 @@ class HLSABTests(unittest.TestCase):
             first_record = registry.ab_session(service.secret_key, first["session_id"])
             second_record = registry.ab_session(service.secret_key, second["session_id"])
             self.assertNotEqual(first_record["fingerprint"], second_record["fingerprint"])
-            bound = hls.create_session("client-c", "edge-a", "synthetic", viewer_session_id="view-test-session-123")
-            self.assertEqual(bound["session_id"], "view-test-session-123")
-            self.assertEqual(hls.create_session("client-c", "edge-a", "synthetic", viewer_session_id="view-test-session-123")["session_id"], bound["session_id"])
-            with self.assertRaises(PermissionError):
-                hls.create_session("client-d", "edge-a", "synthetic", viewer_session_id="view-test-session-123")
             self.assertIn("#EXT-X-ENDLIST", hls.manifest(first["session_id"], "client-a"))
             self.assertFalse(first["attribution_ready"])
             self.assertEqual(len(list((root / "cache" / hls.prepare("synthetic")["cache_id"] / "A").glob("*.ts"))), 3)
