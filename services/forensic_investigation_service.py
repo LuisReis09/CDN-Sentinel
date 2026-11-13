@@ -27,6 +27,7 @@ class ForensicInvestigationService:
         media_path = Path(path).resolve()
         if not media_path.is_file():
             raise FileNotFoundError(str(media_path))
+        source = str(source)[:240]
         digest_obj = hashlib.sha256()
         with media_path.open("rb") as stream:
             for block in iter(lambda: stream.read(1024 * 1024), b""):
@@ -34,34 +35,51 @@ class ForensicInvestigationService:
         digest = digest_obj.hexdigest()
         investigation_id = f"inv-{uuid.uuid4().hex}"
         started = time.time()
-        evidence = self._watermark_service.detect_forensic_video(media_path, algorithm=algorithm)
+        try:
+            evidence = self._watermark_service.detect_forensic_video(media_path, algorithm=algorithm)
+        except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+            evidence = {"status": "ERROR", "reason": "detector_failed", "error_type": type(exc).__name__}
+        if not isinstance(evidence, dict):
+            evidence = {"status": "ERROR", "reason": "invalid_detector_result"}
         content_match: dict[str, Any] | None = None
         if evidence.get("forensic_status") == "VALID" and evidence.get("claim"):
             try:
                 reference, _type = self._catalog.resolve_asset(evidence["claim"]["content_id"])
                 content_match = match_claimed_content(media_path, reference)
-            except (FileNotFoundError, KeyError, ValueError, OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
-                content_match = {"status": "INCONCLUSIVE", "reason": f"referência indisponível: {exc}"}
-            if content_match["status"] == "MATCH":
+            except (FileNotFoundError, KeyError, TypeError, ValueError, OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+                content_match = {"status": "ERROR", "reason": "content_match_failed", "error_type": type(exc).__name__}
+            if not isinstance(content_match, dict):
+                content_match = {"status": "ERROR", "reason": "invalid_content_match_result"}
+            if content_match.get("status") == "MATCH":
                 decision = "PENDING_REVIEW"
                 attribution = "AUTHENTICATED_SESSION"
+            elif content_match.get("status") not in {"MATCH", "MISMATCH", "INCONCLUSIVE"}:
+                decision = "ERROR"
+                attribution = "NONE"
             else:
                 decision = "INCONCLUSIVE"
                 attribution = "NONE"
         elif evidence.get("forensic_status") == "CANDIDATE":
+            decision = "CANDIDATE"
+            attribution = "NONE"
+        elif evidence.get("forensic_status", evidence.get("status")) == "NOT_FOUND":
+            decision = "NOT_FOUND"
+            attribution = "NONE"
+        elif evidence.get("forensic_status", evidence.get("status")) == "INCONCLUSIVE":
             decision = "INCONCLUSIVE"
             attribution = "NONE"
         else:
-            decision = "NO_WATERMARK"
+            decision = "ERROR"
             attribution = "NONE"
         claim = evidence.get("claim") or {}
         event_payload = {
-            "investigation_id": investigation_id, "source": source, "media_sha256": digest,
+            "investigation_id": investigation_id, "source": source, "source_trust": "untrusted-submitter-assertion", "media_sha256": digest,
             "forensic_status": evidence.get("forensic_status", evidence.get("status")),
             "attribution": attribution, "decision": decision,
             "content_id": claim.get("content_id"), "session_id": claim.get("session_id"),
             "watermark_id": claim.get("watermark_id"), "finished_at": time.time(),
             "content_match": content_match,
+            "detector_result": evidence,
         }
         self._watermark_service._registry_store.append_forensic_event(
             self._watermark_service.secret_key, "INVESTIGATION_COMPLETED", event_payload, claim.get("watermark_id")
@@ -69,6 +87,7 @@ class ForensicInvestigationService:
         return {
             "investigation_id": investigation_id,
             "source": source,
+            "source_trust": "untrusted-submitter-assertion",
             "media_sha256": digest,
             "started_at": started,
             "finished_at": time.time(),
@@ -80,10 +99,7 @@ class ForensicInvestigationService:
             "watermark_id": claim.get("watermark_id") if decision == "PENDING_REVIEW" else None,
             "claim": claim if decision == "PENDING_REVIEW" else None,
             "content_match": content_match,
-            "evidence": {
-                key: value for key, value in evidence.items()
-                if key not in {"scores", "frames", "claim", "claim_hash", "attribution"}
-            },
+            "evidence": evidence,
             "administrative_action": "REVIEW_REQUIRED",
             "blacklist_changed": False,
         }
@@ -107,4 +123,4 @@ class ForensicInvestigationService:
             raise ValueError("investigação já revisada")
         payload = {"investigation_id": investigation_id, "decision": normalized, "reviewer": reviewer, "notes": notes[:2_000], "reviewed_at": time.time()}
         event = registry.append_forensic_event(self._watermark_service.secret_key, "INVESTIGATION_REVIEWED", payload, original["watermark_id"])
-        return {**payload, "event": event, "administrative_action": "NO_AUTOMATIC_BLACKLIST"}
+        return {**payload, "state": "REVIEWED", "event": event, "administrative_action": "NO_AUTOMATIC_BLACKLIST"}

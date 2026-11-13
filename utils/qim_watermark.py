@@ -99,7 +99,7 @@ def embed_image_qim(image: Image.Image, token: str, secret: str, step: float = Q
     resized_residual = np.asarray(Image.fromarray(residual.astype(np.float32), mode="F").resize(image.size, Image.Resampling.BICUBIC), dtype=np.float32)
     original_luma, _mode, _alpha = _luminance(image)
     result = _rgb_delta(image, original_luma, original_luma + resized_residual)
-    return result, {"version": "CDNIMG-QIM2", "marker": marker, "bits": DATA_BITS, "sync_bits": SYNC_BITS, "spatial_repetitions_min": count // QIM_BITS, "canonical_size": [width, height], "step": step}
+    return result, {"version": "CDNIMG-QIM2", "marker": marker, "bits": DATA_BITS, "sync_bits": SYNC_BITS, "ecc": "none", "spatial_repetitions_min": count // QIM_BITS, "canonical_size": [width, height], "step": step}
 
 
 def detect_image_qim(image: Image.Image, secret: str, step: float = QIM_STEP) -> dict:

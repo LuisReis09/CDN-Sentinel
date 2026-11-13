@@ -276,11 +276,11 @@ class ApiController:
             raise RuntimeError("serviço de investigação forense não configurado")
         return self.forensic_investigation_service.investigate_video(path, source=source, algorithm=algorithm)
 
-    def review_investigation(self, investigation_id: str, payload: dict) -> dict:
+    def review_investigation(self, investigation_id: str, payload: dict, reviewer: str) -> dict:
         if not self.forensic_investigation_service:
             raise RuntimeError("serviço de investigação forense não configurado")
         return self.forensic_investigation_service.review(
-            investigation_id, str(payload.get("decision", "")), str(payload.get("reviewer", "operator")), str(payload.get("notes", ""))
+            investigation_id, str(payload.get("decision", "")), reviewer, str(payload.get("notes", ""))
         )
 
     def create_hls_session(self, client_id: str, viewer_session_id: str | None = None) -> dict:

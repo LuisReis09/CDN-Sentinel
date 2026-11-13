@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from flask import Response, request, send_file, stream_with_context
+from flask import Response, g, request, send_file, stream_with_context
 from flask_restx import Namespace, Resource, fields
 from PIL import Image, UnidentifiedImageError
 
@@ -146,7 +146,6 @@ def register_api_routes(api, controller: ApiController) -> None:
         "InvestigationReview",
         {
             "decision": fields.String(required=True, enum=["ACCEPT", "REJECT", "INCONCLUSIVE"]),
-            "reviewer": fields.String(required=True, min_length=1, max_length=160),
             "notes": fields.String(max_length=2000),
         },
     )
@@ -587,7 +586,7 @@ def register_api_routes(api, controller: ApiController) -> None:
         @monitor.expect(review_model, validate=True)
         def post(self, investigation_id: str):
             try:
-                return controller.review_investigation(investigation_id, request.get_json(silent=True) or {})
+                return controller.review_investigation(investigation_id, request.get_json(silent=True) or {}, g.operator_identity["username"])
             except (ValueError, RuntimeError) as exc:
                 return {"error": str(exc)}, 400
 

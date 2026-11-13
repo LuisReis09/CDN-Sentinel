@@ -96,7 +96,7 @@ class WatermarkService:
         session_id: str | None = None,
         segment_range: str = "0-0",
         algorithm_id: str = "adaptive-spread-v5",
-        fingerprint_scheme: str = "visual-marker-48-secded",
+        fingerprint_scheme: str | None = None,
         key_id: str | None = None,
         valid_for_seconds: float = 86_400.0,
     ) -> tuple[str, ForensicClaim]:
@@ -104,6 +104,11 @@ class WatermarkService:
         if not 1 <= valid_for_seconds <= 366 * 86_400:
             raise ValueError("valid_for_seconds fora do intervalo")
         now = time.time()
+        if fingerprint_scheme is None:
+            fingerprint_scheme = (
+                "visual-marker-48-secded-hamming-13-8-v1"
+                if algorithm_id == "adaptive-spread-v5" else "visual-marker-48-uncoded-v1"
+            )
         key_id = key_id or self._active_key_id
         if key_id not in self._forensic_keys:
             raise ValueError("kid desconhecido")
@@ -189,12 +194,17 @@ class WatermarkService:
         if any(item not in {"qim2", "adaptive-spread", "dct"} for item in algorithms):
             raise ValueError("algoritmo visual desconhecido")
         strongest: dict | None = None
+        priority = {"NOT_FOUND": 0, "INCONCLUSIVE": 1, "ERROR": 2, "CANDIDATE": 3}
         for algorithm_name in algorithms:
             for secret in self._forensic_keys.values():
-                evidence = detect_video(path, secret, algorithm=algorithm_name, max_frames=max_frames)
-                if strongest is None or evidence.get("status") == "CANDIDATE":
+                try:
+                    evidence = detect_video(path, secret, algorithm=algorithm_name, max_frames=max_frames)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    evidence = {"status": "ERROR", "reason": "detector_failed", "error_type": type(exc).__name__}
+                status = evidence.get("status")
+                if strongest is None or priority.get(status, 2) > priority.get(strongest.get("status"), 2):
                     strongest = evidence
-                if evidence.get("status") != "CANDIDATE":
+                if status != "CANDIDATE":
                     continue
                 record = self._registry_store.claim_for_marker(secret, str(evidence.get("marker")))
                 if not record:
@@ -216,7 +226,9 @@ class WatermarkService:
         evidence = strongest or {"status": "NOT_FOUND"}
         if evidence.get("status") == "CANDIDATE":
             return {**evidence, "forensic_status": "CANDIDATE", "authentication": "unregistered-or-context-mismatch", "attribution": "NONE"}
-        return {**evidence, "forensic_status": "INCONCLUSIVE" if evidence.get("status") == "INCONCLUSIVE" else "NOT_FOUND", "attribution": "NONE"}
+        status = evidence.get("status")
+        forensic_status = status if status in {"NOT_FOUND", "INCONCLUSIVE", "ERROR"} else "ERROR"
+        return {**evidence, "forensic_status": forensic_status, "attribution": "NONE"}
 
     def register_token(self, token: str) -> dict:
         """Index a valid token in memory and in the durable marker registry."""
