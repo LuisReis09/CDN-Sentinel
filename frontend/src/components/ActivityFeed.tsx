@@ -15,8 +15,6 @@ import type { SimulationEvent } from "../types";
 
 const iconByType = {
   client_request: Radio,
-  client_connected: Radio,
-  client_disconnected: Radio,
   blacklist_propagated: Ban,
   monitor_scan: ScanSearch,
   simulation_config_updated: Settings2,
@@ -32,10 +30,6 @@ const iconByType = {
 function labelFor(event: SimulationEvent) {
   if (event.type === "client_request")
     return `${event.client_id} requisitou chunk via ${event.server_id}`;
-  if (event.type === "client_connected")
-    return `${event.client_id} conectou-se novamente`;
-  if (event.type === "client_disconnected")
-    return `${event.client_id} saiu após consumir ${event.videos_consumed ?? 0} vídeo(s)`;
   if (event.type === "blacklist_propagated")
     return `${event.client_id} banido e propagado por ${event.propagated_to?.length ?? 0} nós`;
   if (event.type === "monitor_scan")
@@ -43,7 +37,7 @@ function labelFor(event: SimulationEvent) {
   if (event.type === "server_message")
     return `${event.message_type ?? "Mensagem"}: ${event.from_server ?? "origem"} → ${event.to_server ?? "destino"} (${event.status ?? "observada"})`;
   if (event.type === "simulation_tick")
-    return `Tick ${event.tick ?? "?"}: intervalo ${event.tick_interval_seconds ?? "—"}s · churn de sessão 20%`;
+    return `Tick ${event.tick ?? "?"}: intervalo ${event.tick_interval_seconds ?? "—"}s · demanda agregada`;
   if (event.type === "watermark_verified")
     return `${event.client_id} validado com AES-GCM + HMAC-SHA256`;
   if (event.type === "server_added")

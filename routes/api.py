@@ -15,7 +15,7 @@ from PIL import Image, UnidentifiedImageError
 
 from controllers.api_controller import ApiController
 from services.content_provider import default_content_id
-from services.stream_service import ClientOfflineError, SimulationPausedError
+from services.stream_service import SimulationPausedError
 from utils.video import get_video_asset
 from utils.video_watermark import probe_video_limits
 
@@ -69,7 +69,7 @@ def register_api_routes(api, controller: ApiController) -> None:
             "base_node_port": fields.Integer(description="Primeira porta dedicada aos nós", default=5101, min=1024, max=64000),
             "secret_key": fields.String(description="Chave HMAC da CDN", required=False),
             "video_id": fields.String(description="Identificador do conteúdo", default=default_content_id()),
-            "tick_interval_seconds": fields.Float(description="Intervalo real entre ticks do sistema, em segundos", default=2.5, min=0.5, max=5),
+            "tick_interval_seconds": fields.Float(description="Intervalo real entre ticks do sistema, em segundos", default=1.25, min=0.5, max=5),
             "base_client_port": fields.Integer(description="Base opcional para processos de cliente", default=6101, min=1024, max=64000),
             "monthly_client_price_usd": fields.Float(description="Preço didático por cliente/mês em USD", default=25.0, min=0),
             "monthly_server_cost_usd": fields.Float(description="Custo didático por servidor/mês em USD", default=100.0, min=0),
@@ -357,8 +357,6 @@ def register_api_routes(api, controller: ApiController) -> None:
                 return {"error": str(exc)}, 401
             except SimulationPausedError as exc:
                 return {"error": str(exc)}, 409
-            except ClientOfflineError as exc:
-                return {"error": str(exc)}, 409
             except PermissionError as exc:
                 return {"error": str(exc)}, 403
             except (KeyError, ValueError) as exc:
@@ -392,8 +390,6 @@ def register_api_routes(api, controller: ApiController) -> None:
             except ViewerAuthenticationError as exc:
                 return {"error": str(exc)}, 401
             except SimulationPausedError as exc:
-                return {"error": str(exc)}, 409
-            except ClientOfflineError as exc:
                 return {"error": str(exc)}, 409
             except PermissionError as exc:
                 return {"error": str(exc)}, 403

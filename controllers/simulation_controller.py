@@ -25,6 +25,37 @@ from services.content_provider import default_content_id
 from utils.geo import city_with_jitter, haversine_km, load_global_cities
 
 
+def effective_server_health(server: CDNServer, *, latency_p95_ms: float, slo_p95_ms: float) -> str:
+    """Classify the service users observe, not only the process liveness."""
+    current = str(server.health_status or server.status)
+    if current in {"offline", "stopped", "error"} or server.status in {"offline", "stopped", "error"}:
+        return "offline"
+    fault = server.fault or {}
+    if fault.get("offline"):
+        return "offline"
+    pressure = max(float(server.utilization or 0.0), float(server.capacity_pressure or 0.0))
+    if (
+        pressure >= 0.90
+        # ``queue_rejected`` is a cumulative counter on real nodes, therefore
+        # it is evidence for the dashboard but cannot by itself keep a node
+        # red forever after it has recovered.
+        or int(server.queue_depth or 0) >= 6
+        or float(server.queue_wait_ms or 0.0) >= 150.0
+        or latency_p95_ms > max(slo_p95_ms * 1.5, slo_p95_ms + 100.0)
+    ):
+        return "overloaded"
+    if (
+        current == "degraded"
+        or bool(fault.get("extra_latency_ms") or fault.get("drop_rate"))
+        or pressure >= 0.75
+        or int(server.queue_depth or 0) > 0
+        or float(server.queue_wait_ms or 0.0) >= 50.0
+        or latency_p95_ms > slo_p95_ms
+    ):
+        return "degraded"
+    return "healthy"
+
+
 class SimulationController:
     def __init__(self, repository: SimulationRepository, http_client: CDNHttpClient) -> None:
         self._repository = repository
@@ -271,13 +302,10 @@ class SimulationController:
         state = self._repository.snapshot_without_clients()
         client_summary = self._repository.client_summary()
         now = time.time()
-        healthy_servers = sum(1 for server in state.servers.values() if server.health_status == "healthy" or server.status == "healthy")
-        degraded_servers = sum(1 for server in state.servers.values() if server.health_status == "degraded" or server.status == "degraded")
-        overloaded_servers = sum(1 for server in state.servers.values() if server.health_status == "overloaded" or server.status == "overloaded")
-        available_servers = sum(1 for server in state.servers.values() if server.health_status in {"healthy", "degraded", "overloaded"} or server.status in {"healthy", "degraded", "overloaded"})
-        online_clients = client_summary["online"]
-        demand_rps = online_clients * float(state.config.get("demand_rps_per_client", 0.25))
-        capacity_values = [float(server.capacity_rps) for server in state.servers.values() if server.server_id and (server.health_status in {"healthy", "degraded", "overloaded"} or server.status in {"healthy", "degraded", "overloaded"}) and server.capacity_rps > 0]
+        active_clients = client_summary["active"]
+        demand_rps = active_clients * float(state.config.get("demand_rps_per_client", 0.25))
+        available_servers = sum(1 for server in state.servers.values() if server.status in {"healthy", "degraded", "overloaded"})
+        capacity_values = [float(server.capacity_rps) for server in state.servers.values() if server.server_id and server.status in {"healthy", "degraded", "overloaded"} and server.capacity_rps > 0]
         if not capacity_values and available_servers:
             fallback_profile = profile_for_tier(str(state.config.get("node_tier", "basic")))
             capacity_values = [capacity_limits(fallback_profile)["capacity_rps"]] * available_servers
@@ -286,27 +314,6 @@ class SimulationController:
         queue_depth = sum(server.queue_depth for server in state.servers.values())
         queue_rejected = sum(server.queue_rejected for server in state.servers.values())
         queue_wait_ms = round(sum(server.queue_wait_ms for server in state.servers.values()) / len(state.servers), 1) if state.servers else 0.0
-        if not available_servers:
-            profile = "indisponível"
-            message = "Nenhum nó saudável para atender a demanda"
-        elif utilization >= 1.0 or queue_rejected > 0:
-            profile = "gargalo"
-            message = "Demanda efetiva próxima ou acima da capacidade: fila e rejeições observadas"
-        elif utilization >= 0.9:
-            profile = "alerta"
-            message = "Alerta: mais de 90% da capacidade comprometida, com pouca folga operacional"
-        elif not healthy_servers:
-            profile = "degradada"
-            message = "Todos os nós estão degradados, mas ainda podem atender com risco de latência"
-        elif queue_depth > 0 or queue_wait_ms >= 100:
-            profile = "alerta"
-            message = "Alerta: existe fila ou espera de atendimento mesmo com capacidade nominal"
-        elif healthy_servers >= max(1, online_clients * 2):
-            profile = "sobredimensionada"
-            message = "Muitos nós para poucos clientes: custo operacional elevado"
-        else:
-            profile = "equilibrada"
-            message = "Capacidade compatível com a demanda observada"
         window_seconds = 60.0
         recent_traffic = [item for item in state.traffic if now - float(item.get("at", now)) <= window_seconds]
         latencies = [float(item.get("end_to_end_ms", item.get("http_rtt_ms", 0))) for item in recent_traffic]
@@ -325,13 +332,13 @@ class SimulationController:
         error_count = sum(int(server.errors_total) for server in state.servers.values())
         monthly_server_cost = sum(float(profile_for_tier(server.capacity_tier).cost_monthly_usd) for server in state.servers.values() if server.status != "stopped") or available_servers * float(state.config.get("monthly_server_cost_usd", state.config.get("monthly_server_cost_unit", 100.0)))
         monthly_fixed_cost = float(state.config.get("monthly_fixed_cost_usd", state.config.get("monthly_fixed_cost_unit", 150.0)))
-        monthly_variable_cost = online_clients * 2.0
+        monthly_variable_cost = active_clients * 2.0
         monthly_cost = monthly_server_cost + monthly_fixed_cost + monthly_variable_cost
         paying_clients = max(1, client_summary["total"]) if client_summary["total"] else 0
         configured_price = float(state.config.get("monthly_client_price_usd", state.config.get("monthly_client_price_unit", 25.0)))
         break_even_price = monthly_cost / paying_clients if paying_clients else 0
         minimum_price = break_even_price * 1.2 if paying_clients else 0
-        revenue = client_summary["paying_online"] * configured_price
+        revenue = client_summary["paying_active"] * configured_price
         observed_requests = sum(int(item.get("request_count", 1)) for item in recent_traffic)
         observed_rps = round(observed_requests / window_seconds, 3)
         total_requests = sum(int(server.requests_total) for server in state.servers.values())
@@ -340,6 +347,92 @@ class SimulationController:
         slo_p95_ms = float(state.config.get("slo_p95_ms", 250.0))
         slo_success_rate_pct = float(state.config.get("slo_success_rate_pct", 99.0))
         slo_compliant = bool(observed_requests and p95_latency <= slo_p95_ms and (success_rate_pct is None or success_rate_pct >= slo_success_rate_pct))
+        server_latencies: dict[str, list[float]] = {server_id: [] for server_id in state.servers}
+        for item in recent_traffic:
+            server_id = str(item.get("server_id") or "")
+            if server_id in server_latencies:
+                server_latencies[server_id].append(
+                    float(item.get("end_to_end_ms", item.get("http_rtt_ms", 0.0)))
+                )
+        # The aggregate demand model is the source of pressure for the
+        # orchestration view.  Reflect it on every participating node even
+        # before an optional local HTTP request reaches that node.
+        modeled_pressure = demand_rps / max(capacity, 1.0)
+        for server in state.servers.values():
+            if server.status not in {"healthy", "degraded", "overloaded"}:
+                continue
+            modeled_queue_depth = max(0, round((modeled_pressure - 0.90) * 20))
+            modeled_queue_wait_ms = round(max(0.0, modeled_pressure - 0.75) * 120, 3)
+            # The orchestration screen uses a common aggregate-demand model
+            # for virtual and local HTTP nodes.  Assigning (rather than
+            # accumulating) these derived fields lets a recovered node turn
+            # green immediately after a capacity action; measured request
+            # latency and error counters remain separate evidence below.
+            server.utilization = round(modeled_pressure, 3)
+            server.capacity_pressure = round(modeled_pressure, 3)
+            server.load = min(16, round(modeled_pressure * 16))
+            server.queue_depth = modeled_queue_depth
+            server.queue_wait_ms = modeled_queue_wait_ms
+        health_by_server: dict[str, str] = {}
+        live_servers = self._repository.state_ref().servers
+        for server_id, server in state.servers.items():
+            server_p95 = percentile(sorted(server_latencies.get(server_id, [])), 0.95)
+            health = effective_server_health(
+                server, latency_p95_ms=server_p95, slo_p95_ms=slo_p95_ms,
+            )
+            health_by_server[server_id] = health
+            server.status = health
+            server.health_status = health
+            server.latency_p95_ms = server_p95
+            server.slo_breached = health != "healthy"
+            live_server = live_servers.get(server_id)
+            if live_server is not None:
+                live_server.status = health
+                live_server.health_status = health
+                live_server.latency_p95_ms = server_p95
+                live_server.utilization = server.utilization
+                live_server.capacity_pressure = server.capacity_pressure
+                live_server.load = server.load
+                live_server.queue_depth = server.queue_depth
+                live_server.queue_wait_ms = server.queue_wait_ms
+                live_server.slo_breached = health != "healthy"
+
+        healthy_servers = sum(health == "healthy" for health in health_by_server.values())
+        degraded_servers = sum(health == "degraded" for health in health_by_server.values())
+        overloaded_servers = sum(health == "overloaded" for health in health_by_server.values())
+        available_servers = sum(health in {"healthy", "degraded", "overloaded"} for health in health_by_server.values())
+        if not available_servers:
+            profile = "indisponível"
+            message = "Nenhum nó disponível para atender a demanda"
+        elif utilization >= 1.0 or queue_depth > 0:
+            profile = "gargalo"
+            message = "Demanda próxima ou acima da capacidade; a CDN já perde folga operacional"
+        elif utilization >= 0.75 or p95_latency > slo_p95_ms:
+            profile = "alerta"
+            message = "Pressão ou latência acima do alvo: revise capacidade, cache e balanceamento"
+        elif healthy_servers < available_servers:
+            profile = "degradada"
+            message = "Há nós degradados; a entrega continua disponível, mas com menor margem"
+        elif healthy_servers >= max(1, active_clients * 2):
+            profile = "sobredimensionada"
+            message = "Muitos nós para a demanda atual: a qualidade está boa, mas o custo é alto"
+        else:
+            profile = "equilibrada"
+            message = "Capacidade, latência e disponibilidade estão equilibradas"
+
+        node_health = (
+            healthy_servers + (degraded_servers * 0.60) + (overloaded_servers * 0.25)
+        ) / max(1, len(state.servers))
+        capacity_health = max(0.05, 1.0 - max(0.0, utilization - 0.70) / 0.80)
+        latency_health = (
+            max(0.05, 1.0 - max(0.0, p95_latency - slo_p95_ms) / max(1.0, slo_p95_ms * 1.5))
+            if observed_requests else 1.0
+        )
+        success_health = (
+            max(0.05, min(1.0, success_rate_pct / max(1.0, slo_success_rate_pct)))
+            if success_rate_pct is not None else 1.0
+        )
+        health_score_pct = round(100 * min(node_health, capacity_health, latency_health, success_health), 1)
         self._record_metric(
             state,
             now,
@@ -352,18 +445,7 @@ class SimulationController:
                 "healthy_servers": healthy_servers,
                 "available_servers": available_servers,
                 "servers_total": len(state.servers),
-                "health_score_pct": round(
-                    100
-                    * (
-                        healthy_servers
-                        + (degraded_servers * 0.6)
-                        + (overloaded_servers * 0.3)
-                    )
-                    / len(state.servers),
-                    1,
-                )
-                if state.servers
-                else 0.0,
+                "health_score_pct": health_score_pct,
                 "server_requests": {
                     server.server_id: int(server.requests_total)
                     for server in state.servers.values()
@@ -380,14 +462,14 @@ class SimulationController:
             "started_at": state.started_at,
             "updated_at": state.updated_at,
             "configuration": state.config,
-            "tick_interval_seconds": round(float(state.config.get("tick_interval_seconds", 2.5)), 2),
+            "tick_interval_seconds": round(float(state.config.get("tick_interval_seconds", 1.25)), 2),
             "servers_total": len(state.servers),
             "clients_total": client_summary["total"],
             "malicious_clients": client_summary["malicious"],
             "initialization": self.initialization_progress(),
             "blacklisted_total": len(state.blacklist),
             "scalability": {
-                "online_clients": online_clients,
+                "active_clients": active_clients,
                 "healthy_servers": healthy_servers,
                 "degraded_servers": degraded_servers,
                 "available_servers": available_servers,
@@ -415,6 +497,7 @@ class SimulationController:
                 "slo_p95_ms": slo_p95_ms,
                 "slo_success_rate_pct": slo_success_rate_pct,
                 "slo_compliant": slo_compliant,
+                "health_score_pct": health_score_pct,
                 "metrics_provenance": "demanda/capacidade são modelo virtual; fila, erros, RTT e E2E vêm dos nós HTTP",
                 "latency_semantics": "end_to_end_ms de requisições concluídas na janela; artificial_latency_ms, http_rtt_ms e queue_wait_ms são separados",
                 "cost_model": {
@@ -738,8 +821,11 @@ class SimulationController:
             if client is None:
                 continue
             client.process_status = "online" if process.poll() is None else "offline"
-            if client.process_status == "offline":
-                client.online = False
+            # Process telemetry is not a viewer-session state.  A client
+            # remains active in the simulation even if its optional local
+            # placeholder process has ended.
+            if client.active and state.lifecycle == "running":
+                client.online = True
 
     def refresh_clients(self, limit: int | None = None) -> list[dict]:
         state = self._repository.state_ref()

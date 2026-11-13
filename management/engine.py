@@ -56,7 +56,7 @@ class ManagementEngine:
                 paying_clients=paying,
                 reputation=initial_reputation,
                 customer_satisfaction=initial_satisfaction,
-                active_clients=sum(1 for client in world.clients.values() if client.active and client.online),
+                active_clients=sum(1 for client in world.clients.values() if client.active),
                 objective=copy.deepcopy(scenario["objective"]),
                 nodes={
                     server.server_id: ManagementNode(
@@ -308,7 +308,7 @@ class ManagementEngine:
             self._append_event("clients_arrived", {"count": self._state.arrivals_today, "population": next_paying_clients, "reason": "rede_saudavel_preco_satisfacao_reputacao_cenario"})
         if self._state.departures_today:
             self._append_event("clients_departed", {"count": self._state.departures_today, "population": next_paying_clients, "reason": "churn_por_latencia_preco_qualidade_ou_capacidade"})
-        self._state.active_clients = sum(1 for client in world.clients.values() if client.active and client.online and not client.malicious)
+        self._state.active_clients = sum(1 for client in world.clients.values() if client.active and not client.malicious)
         self._state.churned_clients = self._state.departures_total
         self._state.demand_rps = round(max(0.0, self._state.paying_clients * float(world.config.get("demand_rps_per_client", 0.25)) * (1.0 + growth * self._state.day)), 3)
         cache_bonus = 1.0 + (sum(node.cache_hit_rate for node in self._state.nodes.values()) / max(1, len(self._state.nodes))) * 0.15

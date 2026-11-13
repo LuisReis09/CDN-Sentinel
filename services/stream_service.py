@@ -15,10 +15,6 @@ class SimulationPausedError(RuntimeError):
     """Raised when streaming is requested while the simulation is paused."""
 
 
-class ClientOfflineError(RuntimeError):
-    """Raised when a disconnected simulated client requests a stream."""
-
-
 class StreamService:
     def __init__(self, http_client: CDNHttpClient, repository=None, watermark_service=None) -> None:
         self._http_client = http_client
@@ -88,8 +84,6 @@ class StreamService:
     def stream(self, client: Client, state: SimulationState, chunk_number: int = 0, request_id: str | None = None, *, viewer_session_id: str | None = None) -> VideoChunk:
         if state.paused:
             raise SimulationPausedError("A simulação está pausada")
-        if not client.online:
-            raise ClientOfflineError(f"Cliente {client.client_id} está offline")
         if chunk_number < 0:
             raise ValueError("chunk deve ser maior ou igual a zero")
         request_id = request_id or f"req-{uuid.uuid4().hex[:16]}"

@@ -55,9 +55,9 @@ export function MapView({
     servers.map((server) => [server.server_id, server]),
   );
   const trafficLinesSeen = new Set<string>();
-  const trafficLines = traffic.slice(-80).reverse().flatMap((entry) => {
+  const trafficLines = traffic.slice(-48).reverse().flatMap((entry) => {
     const routeKey = `${entry.client_id}:${entry.server_id}`;
-    if (trafficLinesSeen.has(routeKey) || trafficLinesSeen.size >= 32) return [];
+    if (trafficLinesSeen.has(routeKey) || trafficLinesSeen.size >= 18) return [];
     trafficLinesSeen.add(routeKey);
     const client = clientsById.get(entry.client_id);
     const server = serversById.get(entry.server_id);
@@ -87,7 +87,7 @@ export function MapView({
       event.type === "server_message" && event.from_server && event.to_server,
   );
   const serverLinks = minimumSpanningTree(servers);
-  const messageLinks = messageEvents.slice(-16).flatMap((event, index) => {
+  const messageLinks = messageEvents.slice(-12).flatMap((event, index) => {
     const from = serversById.get(event.from_server ?? "");
     const to = serversById.get(event.to_server ?? "");
     return from && to
@@ -254,13 +254,14 @@ function ServerMarker({
   server: ServerNode;
   onSelect: () => void;
 }) {
-  const available = ["healthy", "degraded", "overloaded"].includes(server.status);
-  const overloaded = available && (server.load >= 8 || (server.utilization ?? 0) >= 0.9 || (server.capacity_pressure ?? 0) >= 0.9 || server.status === "overloaded");
+  const health = server.health_status ?? server.status;
+  const available = ["healthy", "degraded", "overloaded"].includes(health);
+  const overloaded = available && health === "overloaded";
   const state = !available
     ? "offline"
     : overloaded
       ? "overloaded"
-      : server.status === "degraded"
+      : health === "degraded"
         ? "degraded"
         : "active";
   const colors = {
@@ -286,7 +287,9 @@ function ServerMarker({
         <br />
         porta {server.port} · PID {server.process_id ?? "—"}
         <br />
-        carga {server.load} · {overloaded ? "sobrecarregado" : server.status}
+        saúde {health} · pressão {Math.round((server.utilization ?? 0) * 100)}%
+        <br />
+        P95 {Math.round(server.latency_p95_ms ?? 0)} ms · fila {server.queue_depth ?? 0}
         <br />
         mensagens recebidas: {server.messages_received}
       </Popup>
@@ -303,20 +306,13 @@ function ClientMarker({
 }) {
   const banned = !client.active;
   const dangerous = client.malicious && !banned;
-  const offline =
-    !banned &&
-    !dangerous &&
-    (!client.online || client.process_status === "offline");
   const state = banned
     ? "banned"
     : dangerous
       ? "dangerous"
-      : offline
-        ? "inactive"
-        : "active";
+      : "active";
   const colors = {
     active: { color: "#8fc8ff", fillColor: "#1763a1" },
-    inactive: { color: "#b0b7be", fillColor: "#59636d" },
     dangerous: { color: "#ffd08b", fillColor: "#b5682e" },
     banned: { color: "#ff6177", fillColor: "#a52b47" },
   }[state];
@@ -336,9 +332,7 @@ function ClientMarker({
           ? "BLACKLIST"
           : dangerous
             ? "cliente perigoso"
-            : offline
-              ? "cliente inativo"
-              : "cliente ativo"}
+            : "cliente ativo"}
         <br />
         PID {client.process_id ?? "—"} · processo{" "}
         {client.process_status || "desconhecido"}
@@ -374,7 +368,7 @@ function CommunicationOverlay({
     clients.map((client) => [client.client_id, client]),
   );
   const duration = Math.max(1.2, Math.min(5, tickIntervalSeconds * 0.85));
-  const serverPackets = events.slice(-16).flatMap((event) => {
+  const serverPackets = events.slice(-10).flatMap((event) => {
     const from = serversById.get(event.from_server!);
     const to = serversById.get(event.to_server!);
     if (!from || !to) return [];
@@ -391,7 +385,7 @@ function CommunicationOverlay({
       },
     ];
   });
-  const clientPackets = traffic.slice(-18).flatMap((entry) => {
+  const clientPackets = traffic.slice(-10).flatMap((entry) => {
     const client = clientsById.get(entry.client_id);
     const server = serversById.get(entry.server_id);
     if (!client || !server) return [];
@@ -484,17 +478,18 @@ function communicationIcon(
 
 function MapLegends() {
   return (
-    <div className="map-legends" aria-label="Legendas do mapa">
+    <details className="map-legends" aria-label="Legendas do mapa">
+      <summary>Legenda do mapa</summary>
       <section className="map-legend-card">
         <strong>ENTIDADES E TRAÇADOS</strong>
         <div className="map-legend-grid">
           <LegendItem symbol="server-active" label="servidor ativo e estável" />
+          <LegendItem symbol="server-degraded" label="servidor degradado" />
           <LegendItem
             symbol="server-overloaded"
             label="servidor sobrecarregado"
           />
           <LegendItem symbol="client-active" label="cliente" />
-          <LegendItem symbol="client-inactive" label="cliente inativo" />
           <LegendItem symbol="client-dangerous" label="cliente perigoso" />
           <LegendItem symbol="client-banned" label="cliente banido" />
           <LegendItem
@@ -511,18 +506,6 @@ function MapLegends() {
         <strong>COMUNICAÇÕES</strong>
         <div className="map-legend-grid">
           <LegendItem
-            symbol="diamond-blacklist"
-            label="aviso de banimento / blacklist"
-          />
-          <LegendItem
-            symbol="diamond-content"
-            label="entrega de novos conteúdos"
-          />
-          <LegendItem
-            symbol="diamond-update"
-            label="atualizações e metadados"
-          />
-          <LegendItem
             symbol="diamond-client"
             label="entrega de conteúdo ao cliente"
           />
@@ -536,7 +519,7 @@ function MapLegends() {
           />
         </div>
       </section>
-    </div>
+    </details>
   );
 }
 

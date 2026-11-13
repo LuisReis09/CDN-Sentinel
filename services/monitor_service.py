@@ -29,7 +29,9 @@ class MonitorService:
 
     def start(self, servers: list[dict] | None = None, tick_interval_seconds: float = 2.5) -> None:
         self.stop()
-        self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
+        # Forensic extraction invokes FFmpeg; it must not speed up merely
+        # because the visual orchestration clock is faster.
+        self._tick_interval_seconds = max(2.5, float(tick_interval_seconds))
         state = self._repository.state_ref()
         candidates = servers or [server.to_dict() for server in state.servers.values()]
         for server in candidates:
@@ -44,7 +46,7 @@ class MonitorService:
         if isinstance(server, dict) and server.get("process_mode", "http") == "virtual":
             return
         if tick_interval_seconds is not None:
-            self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
+            self._tick_interval_seconds = max(2.5, float(tick_interval_seconds))
         with self._lifecycle_lock:
             if server_id in self._threads and self._threads[server_id].is_alive():
                 return
@@ -74,7 +76,7 @@ class MonitorService:
             self._last_results.clear()
 
     def configure_tick_interval(self, tick_interval_seconds: float) -> None:
-        self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
+        self._tick_interval_seconds = max(2.5, float(tick_interval_seconds))
 
     def remove_server(self, server_id: str) -> None:
         """Stop only the monitor owned by a server removed during live resize."""

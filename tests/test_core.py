@@ -41,18 +41,33 @@ class SecurityAndNetworkTests(unittest.TestCase):
         far = propagation_delay_seconds(2_000, 1)
         self.assertAlmostEqual(far / near, 2.0, delta=0.01)
 
-    def test_client_session_churn_is_bidirectional_after_first_video(self):
+    def test_client_activity_keeps_every_simulated_client_active(self):
         repository = SimulationRepository()
         service = ClientActivityService(repository, StreamService(CDNHttpClient()))
         client = Client("client-1", 0, 0, "Test", online=False)
-        service._maybe_toggle_client(client, 1)
+        server = CDNServer("cdn-01", "127.0.0.1", 5101, 0, 0, "Test", status="healthy", capacity_rps=10)
+        repository.replace(SimulationState(
+            initialized=True,
+            lifecycle="running",
+            config={"demand_rps_per_client": 1.0},
+            clients={client.client_id: client},
+            servers={server.server_id: server},
+        ))
+        service._advance_virtual_clients(repository.state_ref(), [client], 1)
         self.assertTrue(client.online)
-        client.videos_consumed = 1
-        service.session_transition_probability = 1.0
-        service._maybe_toggle_client(client, 2)
-        self.assertFalse(client.online)
-        service._maybe_toggle_client(client, 3)
-        self.assertTrue(client.online)
+        self.assertFalse(any(
+            event["type"] in {"client_connected", "client_disconnected"}
+            for event in repository.snapshot().events
+        ))
+
+    def test_management_clock_keeps_a_human_decision_cadence(self):
+        service = ClientActivityService(SimulationRepository(), StreamService(CDNHttpClient()))
+        service.configure_tick_interval(1.25)
+        self.assertEqual(service._management_tick_every, 2)
+        service.configure_tick_interval(0.5)
+        self.assertEqual(service._management_tick_every, 5)
+        service.configure_tick_interval(5.0)
+        self.assertEqual(service._management_tick_every, 1)
 
     def test_client_process_generates_feedback_from_delivery_latency(self):
         repository = SimulationRepository()
@@ -122,6 +137,61 @@ class SecurityAndNetworkTests(unittest.TestCase):
         status = SimulationController(repository, CDNHttpClient()).status()
         self.assertEqual(status["scalability"]["profile"], "alerta")
         self.assertGreaterEqual(status["scalability"]["utilization"], 0.9)
+
+    def test_dashboard_health_and_node_state_follow_capacity_pressure(self):
+        repository = SimulationRepository()
+        server = CDNServer("cdn-01", "127.0.0.1", 5101, 0, 0, "Test", status="healthy", capacity_rps=10)
+        clients = {f"client-{index}": Client(f"client-{index}", 0, 0, "Test") for index in range(60)}
+        repository.replace(SimulationState(
+            initialized=True,
+            lifecycle="running",
+            config={"demand_rps_per_client": 0.25, "slo_p95_ms": 250},
+            servers={server.server_id: server},
+            clients=clients,
+        ))
+        controller = SimulationController(repository, CDNHttpClient())
+        status = controller.status()
+        observed = repository.state_ref().servers["cdn-01"]
+        self.assertGreaterEqual(status["scalability"]["utilization"], 1.5)
+        self.assertLess(status["scalability"]["health_score_pct"], 100)
+        self.assertEqual(observed.health_status, "overloaded")
+
+        # A cumulative rejection counter must not leave the node red after
+        # the capacity condition itself has recovered.
+        repository.state_ref().clients = {
+            "client-1": Client("client-1", 0, 0, "Test")
+        }
+        recovered = controller.status()
+        self.assertEqual(recovered["scalability"]["health_score_pct"], 100.0)
+        self.assertEqual(observed.health_status, "healthy")
+
+    def test_management_scenario_resizes_the_observed_population(self):
+        from app import create_app
+
+        app = create_app()
+        controller = app.extensions["cdn_controller"]
+        controller.simulation_controller._real_node_process_limit = 0
+        controller.simulation_controller._real_client_process_limit = 0
+        client = app.test_client()
+        try:
+            initialized = client.post(
+                "/api/control/simulation/init",
+                json={"num_servers": 1, "num_clients": 1, "demand_rps_per_client": 0.25, "seed": 53},
+            )
+            self.assertEqual(initialized.status_code, 201, initialized.get_json())
+            started = client.post(
+                "/api/management/scenarios/start",
+                json={"scenario_id": "rapid-growth", "seed": 53},
+            )
+            self.assertEqual(started.status_code, 201, started.get_json())
+            status = client.get("/api/control/simulation/status").get_json()
+            self.assertEqual(status["clients_total"], 100)
+            self.assertEqual(status["scalability"]["active_clients"], 100)
+            self.assertEqual(status["configuration"]["demand_rps_per_client"], 1.0)
+            self.assertEqual(status["tick_interval_seconds"], 1.25)
+            self.assertTrue(all(item.active for item in controller.repository.state_ref().clients.values()))
+        finally:
+            client.post("/api/control/simulation/end")
 
     def test_local_video_catalog_has_valid_reproducible_mp4_variants(self):
         examples = list_video_examples()

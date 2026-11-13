@@ -41,6 +41,7 @@ export interface ServerNode {
   queue_rejected?: number;
   queue_wait_ms?: number;
   capacity_pressure?: number;
+  latency_p95_ms?: number;
   slo_breached?: boolean;
   fault?: { offline?: boolean; extra_latency_ms?: number; drop_rate?: number };
 }
@@ -200,7 +201,7 @@ export interface SimulationStatus {
     detail: string;
   };
   scalability: {
-    online_clients: number;
+    active_clients: number;
     healthy_servers: number;
     degraded_servers?: number;
     available_servers?: number;
@@ -228,6 +229,7 @@ export interface SimulationStatus {
     slo_p95_ms?: number;
     slo_success_rate_pct?: number;
     slo_compliant?: boolean;
+    health_score_pct?: number;
     metrics_provenance?: string;
     latency_semantics?: string;
     cost_model: {

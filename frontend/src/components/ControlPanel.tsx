@@ -32,7 +32,7 @@ export function ControlPanel({
     num_servers: config.num_servers > 0 ? config.num_servers : 4,
     num_clients: config.num_clients > 0 ? config.num_clients : 32,
     malicious_probability: config.malicious_probability ?? 0.25,
-    tick_interval_seconds: config.tick_interval_seconds ?? 2.5,
+    tick_interval_seconds: config.tick_interval_seconds ?? 1.25,
     monthly_client_price_usd: config.monthly_client_price_usd ?? 25,
     monthly_server_cost_usd: config.monthly_server_cost_usd ?? 100,
     monthly_fixed_cost_usd: config.monthly_fixed_cost_usd ?? 150,
@@ -62,7 +62,7 @@ export function ControlPanel({
       num_servers: config.num_servers > 0 ? config.num_servers : 4,
       num_clients: config.num_clients > 0 ? config.num_clients : 32,
       malicious_probability: config.malicious_probability ?? 0.25,
-      tick_interval_seconds: config.tick_interval_seconds ?? 2.5,
+      tick_interval_seconds: config.tick_interval_seconds ?? 1.25,
       monthly_client_price_usd: config.monthly_client_price_usd ?? 25,
       monthly_server_cost_usd: config.monthly_server_cost_usd ?? 100,
       monthly_fixed_cost_usd: config.monthly_fixed_cost_usd ?? 150,
@@ -204,7 +204,7 @@ export function ControlPanel({
   ).length;
   const tickInterval = Math.max(
     0.5,
-    Math.min(5, form.tick_interval_seconds || 2.5),
+    Math.min(5, form.tick_interval_seconds || 1.25),
   );
   const activeSimulation =
     status.initialized &&
@@ -236,7 +236,7 @@ export function ControlPanel({
         <span>
           <strong>{monitorCount} monitores de servidor ativos</strong>
           <small>
-            próximo ciclo em {tickInterval.toFixed(1)}s ·{" "}
+            varredura a cada {(monitor.interval_seconds ?? 2.5).toFixed(1)}s ·{" "}
             {monitor.pending_leaks ?? 0} pendência(s)
           </small>
         </span>
@@ -282,8 +282,9 @@ export function ControlPanel({
           <small>0,5 a 5,0 segundos</small>
         </label>
         <small className="tick-hint">
-          O tick é o relógio do sistema. A cada tick, cada cliente tem 20% de
-          chance de alternar login/logout.
+          O tick acelera o relógio e a telemetria agregada. Todos os clientes
+          permanecem ativos; assistir mídia pelo cliente continua sendo uma
+          requisição real e independente.
         </small>
       </div>
       {initProgress.in_progress && (

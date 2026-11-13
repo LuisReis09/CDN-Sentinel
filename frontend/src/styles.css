@@ -334,7 +334,7 @@ code {
 }
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 12px;
   margin-bottom: 13px;
 }
@@ -3013,13 +3013,32 @@ label {
 .map-legends {
   position: absolute;
   z-index: 500;
-  left: 12px;
   right: 12px;
   bottom: 12px;
+  width: min(440px, calc(100% - 24px));
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(5, 15, 28, 0.88);
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(8px);
+  gap: 8px;
+  pointer-events: auto;
+}
+.map-legends summary {
+  cursor: pointer;
+  color: #b7d5ec;
+  font: 9px "DM Mono", monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.map-legends[open] {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  pointer-events: none;
+}
+.map-legends[open] summary {
+  grid-column: 1 / -1;
+  margin-bottom: 2px;
 }
 .noise-video__fallback {
   display: grid;
@@ -3113,12 +3132,7 @@ label {
 }
 .map-legend-card {
   min-width: 0;
-  padding: 9px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  background: rgba(5, 15, 28, 0.88);
-  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.22);
-  backdrop-filter: blur(8px);
+  padding: 5px 2px 1px;
 }
 .map-legend-card > strong {
   display: block;
@@ -3156,16 +3170,16 @@ label {
   border-color: #9eff6c;
 }
 .map-legend-symbol--server-overloaded {
-  background: #b58a2e;
-  border-color: #ffe06b;
+  background: #a52b47;
+  border-color: #ff6177;
+}
+.map-legend-symbol--server-degraded {
+  background: #9b5c25;
+  border-color: #ffb86b;
 }
 .map-legend-symbol--client-active {
   background: #1763a1;
   border-color: #8fc8ff;
-}
-.map-legend-symbol--client-inactive {
-  background: #59636d;
-  border-color: #b0b7be;
 }
 .map-legend-symbol--client-dangerous {
   background: #b5682e;
@@ -3896,6 +3910,7 @@ label {
     bottom: 8px;
     left: 8px;
     right: 8px;
+    width: auto;
   }
   .map-legend-card {
     padding: 7px 8px;

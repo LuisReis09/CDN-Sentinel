@@ -12,7 +12,7 @@ import type { Overview } from "../types";
 
 export function DistributedEvidencePanel({ overview }: { overview: Overview }) {
   const healthyNodes = overview.servers.filter(
-    (server) => server.status === "healthy",
+    (server) => (server.health_status ?? server.status) === "healthy",
   ).length;
   const requestEvents = overview.recent_events.filter(
     (event) => event.type === "client_request",

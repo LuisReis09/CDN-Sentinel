@@ -87,7 +87,7 @@ export function HistoryPage() {
                   {history.servers.map((server) => (
                     <tr key={server.server_id}>
                       <td>{server.server_id}</td>
-                      <td><span className={`status-dot ${server.status === "healthy" ? "status-live" : server.status === "degraded" ? "status-degraded" : "status-stopped"}`} /> {server.status}</td>
+                      <td><span className={`status-dot ${(server.health_status ?? server.status) === "healthy" ? "status-live" : (server.health_status ?? server.status) === "degraded" ? "status-degraded" : "status-stopped"}`} /> {server.health_status ?? server.status}</td>
                       <td>{server.requests_total ?? 0}</td>
                       <td>{server.errors_total ?? 0}</td>
                       <td>{server.blacklist_size}</td>

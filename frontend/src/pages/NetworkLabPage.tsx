@@ -260,12 +260,13 @@ function NodeCard({
     label: string,
   ) => Promise<void>;
 }) {
+  const health = server.health_status ?? server.status;
   const offline =
-    server.status === "offline" ||
-    server.status === "stopped" ||
+    health === "offline" ||
+    health === "stopped" ||
     server.fault?.offline;
-  const degraded = server.status === "degraded";
-  const overloaded = server.status === "overloaded" || (server.utilization ?? 0) >= 0.9;
+  const degraded = health === "degraded";
+  const overloaded = health === "overloaded";
   const tone = offline
     ? "status-offline"
     : overloaded
@@ -298,6 +299,12 @@ function NodeCard({
         </span>
         <span>
           uptime <b>{Math.round(server.uptime_seconds ?? 0)}s</b>
+        </span>
+        <span>
+          pressão <b>{Math.round((server.utilization ?? 0) * 100)}%</b>
+        </span>
+        <span>
+          P95 <b>{Math.round(server.latency_p95_ms ?? 0)} ms</b>
         </span>
       </div>
       <div className="lab-actions">

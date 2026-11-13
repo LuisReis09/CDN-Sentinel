@@ -1,26 +1,32 @@
 from __future__ import annotations
 
+import math
 import random
 import threading
 import time
 import uuid
 
 from repositories.in_memory import SimulationRepository
-from services.stream_service import ClientOfflineError, SimulationPausedError, StreamService
+from services.stream_service import StreamService
 from services.content_provider import default_content_id
 from utils.geo import haversine_km
 from utils.latency import propagation_delay_seconds
 
 
 class ClientActivityService:
-    """Advances one shared simulation tick and produces client session churn."""
+    """Advances aggregate demand while every simulated client stays available.
 
-    # Keep presence visibly dynamic in the didactic map without changing the
-    # demand model itself. Clients still need an initial delivery before
-    # transitions begin.
-    session_transition_probability = 0.38
+    Real requests still exercise the data plane.  Background ticks are kept
+    aggregate so they do not compete with a viewer for FFmpeg/QIM work.
 
-    def __init__(self, repository: SimulationRepository, stream_service: StreamService, interval_seconds: float = 2.5, on_tick=None) -> None:
+    The management game advances at a human decision cadence independent of
+    the faster telemetry clock.  A player must have time to read a warning
+    and submit an action before a simulated day elapses.
+    """
+
+    management_tick_seconds = 2.5
+
+    def __init__(self, repository: SimulationRepository, stream_service: StreamService, interval_seconds: float = 1.25, on_tick=None) -> None:
         self._repository = repository
         self._stream_service = stream_service
         self._interval_seconds = interval_seconds
@@ -29,13 +35,16 @@ class ClientActivityService:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._on_tick = on_tick
+        self._management_tick_every = 1
+        self._configure_management_cadence()
 
     def set_on_tick(self, callback) -> None:
         self._on_tick = callback
 
-    def start(self, tick_interval_seconds: float = 2.5) -> None:
+    def start(self, tick_interval_seconds: float = 1.25) -> None:
         self.stop()
         self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
+        self._configure_management_cadence()
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, name="client-activity-simulator", daemon=True)
         self._thread.start()
@@ -49,6 +58,13 @@ class ClientActivityService:
     def configure_tick_interval(self, tick_interval_seconds: float) -> None:
         """Change the cadence for the next wait without recreating the worker."""
         self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
+        self._configure_management_cadence()
+
+    def _configure_management_cadence(self) -> None:
+        self._management_tick_every = max(
+            1,
+            math.ceil(self.management_tick_seconds / max(0.5, self._tick_interval_seconds)),
+        )
 
     def _run(self) -> None:
         tick = 0
@@ -62,46 +78,31 @@ class ClientActivityService:
                 "at": time.time(),
                 "tick": tick,
                 "tick_interval_seconds": self._tick_interval_seconds,
-                "session_transition_probability": self.session_transition_probability,
+                "delivery_model": "aggregated-active-clients",
             })
             clients = [client for client in state.clients.values() if client.active]
-            if len(clients) > 250:
-                self._advance_virtual_clients(state, clients, tick)
-            else:
-                for client in clients:
-                    self._maybe_toggle_client(client, tick)
-                    if not client.online:
-                        continue
-                    try:
-                        self._stream_service.stream(client, state, chunk_number=client.videos_consumed % 5)
-                    except (ClientOfflineError, SimulationPausedError, PermissionError, RuntimeError, OSError):
-                        continue
+            self._advance_virtual_clients(state, clients, tick)
             self._emit_server_communications(state, tick)
-            if self._on_tick:
+            if self._on_tick and tick % self._management_tick_every == 0:
                 try:
                     self._on_tick()
                 except Exception as exc:
                     self._repository.append_event({"type": "management_tick_failed", "at": time.time(), "error": str(exc)})
 
     def _advance_virtual_clients(self, state, clients: list, tick: int) -> None:
-        """Account for large populations without one subprocess/request per client."""
-        # A bounded sample keeps session churn visible without making a tick
-        # O(number of clients). The demand calculation below still uses every
-        # online client in the population.
-        sample_size = min(128, len(clients))
-        sample_start = (tick * sample_size) % max(1, len(clients))
-        sampled_clients = [clients[(sample_start + index) % len(clients)] for index in range(sample_size)]
-        for client in sampled_clients:
-            self._maybe_toggle_client(client, tick)
-
-        online_clients = [client for client in clients if client.online]
-        demand_rps = len(online_clients) * float(state.config.get("demand_rps_per_client", 0.25))
+        """Account for all active clients without per-client video encoding."""
+        for client in clients:
+            # ``online`` is retained for old archived API payloads, but a
+            # running simulation no longer models disconnected sessions.
+            client.online = True
+        active_clients = clients
+        demand_rps = len(active_clients) * float(state.config.get("demand_rps_per_client", 0.25))
         available = [
             server
             for server in state.servers.values()
             if server.status in {"healthy", "degraded", "overloaded"}
         ]
-        if not online_clients or not available:
+        if not active_clients or not available:
             return
         fallback_capacity = 8.0
         capacities = {
@@ -119,7 +120,7 @@ class ClientActivityService:
             request_count = max(0, round(served_rps * interval * capacities[server.server_id] / max(visible_capacity, 1.0)))
             if request_count == 0:
                 continue
-            client = online_clients[index % len(online_clients)]
+            client = active_clients[index % len(active_clients)]
             distance = haversine_km(client.latitude, client.longitude, server.latitude, server.longitude)
             utilization = demand_rps / max(total_capacity, 1.0)
             # The virtual path follows the same geospatial model as a real
@@ -132,7 +133,7 @@ class ClientActivityService:
             server.errors_total += rejected
             server.requests_in_flight = 0
             server.load = min(16, round(utilization * 16))
-            server.utilization = round(demand_rps / max(capacities[server.server_id], 1.0), 3)
+            server.utilization = round(utilization, 3)
             server.capacity_pressure = server.utilization
             server.queue_depth = max(0, round((server.utilization - 0.9) * 20))
             server.queue_rejected += rejected
@@ -174,35 +175,16 @@ class ClientActivityService:
             "type": "client_request_batch",
             "at": time.time(),
             "tick": tick,
-            "client_count": len(online_clients),
+            "client_count": len(active_clients),
             "request_count": round(served_rps * interval),
             "demand_rps": round(demand_rps, 3),
             "served_rps": round(served_rps, 3),
             "virtual": True,
-            "reason": "agregação de telemetria para população grande",
-        })
-
-    def _maybe_toggle_client(self, client, tick: int) -> None:
-        """Toggle sessions in both directions, but only after first delivery."""
-        if client.videos_consumed < 1:
-            client.online = True
-            return
-        if self._random.random() >= self.session_transition_probability:
-            return
-        client.online = not client.online
-        event_type = "client_connected" if client.online else "client_disconnected"
-        self._repository.append_event({
-            "type": event_type,
-            "at": time.time(),
-            "client_id": client.client_id,
-            "tick": tick,
-            "probability": self.session_transition_probability,
-            "reason": "tick_session_churn_after_first_video",
-            "videos_consumed": client.videos_consumed,
+            "reason": "telemetria agregada para clientes sempre ativos",
         })
 
     def _emit_server_communications(self, state, tick: int) -> None:
-        online_count = sum(1 for client in state.clients.values() if client.online)
+        active_count = sum(1 for client in state.clients.values() if client.active)
         peers = [server for server in state.servers.values() if server.status in {"healthy", "degraded", "overloaded"} and server.process_mode == "http"]
         peer_ids = {peer.server_id for peer in peers}
         source_candidates = [server for server in peers if any(peer_id in peer_ids for peer_id in server.peer_ids)]
@@ -235,7 +217,7 @@ class ClientActivityService:
             message = {
                 "content_id": state.config.get("video_id") or default_content_id(),
                 "content_title": state.config.get("video_id") or default_content_id(),
-                "viewer_count_delta": online_count,
+                "viewer_count_delta": active_count,
                 "region": source.city,
                 "metadata_version": f"catalog-{tick:04d}",
                 "delivery_mode": "catalog_sync",

@@ -283,7 +283,7 @@ export function ManagementPage({
       <section className="management-status-strip">
         <span>
           <strong>Dia simulado {state?.day ?? 0}</strong>
-          <small>1 tick = 1 dia · seed {state?.seed ?? "—"}</small>
+          <small>cada dia avança em no mínimo 2,5 s · seed {state?.seed ?? "—"}</small>
         </span>
         <span>
           <strong>{state?.scenario_id ?? "free"}</strong>
@@ -953,7 +953,7 @@ function ClientInspector({
         <p className="eyebrow">CLIENT INSPECTOR</p>
         <strong>{client.client_id} · {client.city}</strong>
         <small>
-          {client.online ? "online" : "offline"} · {client.likes ?? 0} likes · {client.dislikes ?? 0} dislikes
+          participante ativo · {client.likes ?? 0} likes · {client.dislikes ?? 0} dislikes
         </small>
       </div>
       <span>

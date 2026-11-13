@@ -37,7 +37,7 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
         <div>
           <Users size={14} />
           <span>
-            clientes online<strong>{scale.online_clients}</strong>
+            clientes ativos<strong>{scale.active_clients}</strong>
           </span>
         </div>
         <div>
@@ -83,6 +83,9 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
         </span>
         <span>
           SLO: <b>{scale.slo_compliant === undefined ? "sem dados" : scale.slo_compliant ? "atendido" : "violado"}</b>
+        </span>
+        <span>
+          saúde: <b>{scale.health_score_pct === undefined ? "sem dados" : `${Math.round(scale.health_score_pct)}%`}</b>
         </span>
       </div>
       <div className="economics-grid">

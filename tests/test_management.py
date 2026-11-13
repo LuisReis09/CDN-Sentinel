@@ -112,10 +112,14 @@ class ManagementSimulationTests(unittest.TestCase):
         initial_cash = self.engine.snapshot()["cash_balance_usd"]
         self.assertEqual(initial_cash, self.engine.snapshot()["initial_cash_balance_usd"])
         self.engine.apply_action({"action_type": "price_adjustment", "parameters": {"monthly_price_usd": 35}, "expected_version": self.engine.snapshot()["version"]})
+        # The action investment is charged immediately.  With the enlarged
+        # 72-client starting scenario, one day of valid revenue can already
+        # offset it, so the accounting invariant belongs at submission time.
+        self.assertLess(self.engine.snapshot()["cash_balance_usd"], initial_cash)
         self.engine.tick()
         first = self.engine.snapshot()
         self.assertNotEqual(first["monthly_price_per_client_usd"], 25)
-        self.assertLess(first["cash_balance_usd"], initial_cash)
+        self.assertNotEqual(first["cash_balance_usd"], initial_cash)
         with self.assertRaises(ValueError):
             self.engine.apply_action({"action_type": "price_adjustment", "parameters": {"monthly_price_usd": 40}, "expected_version": first["version"]})
 
@@ -123,8 +127,14 @@ class ManagementSimulationTests(unittest.TestCase):
         initial = self.engine.snapshot()
         self.engine.tick()
         grown = self.engine.snapshot()
-        self.assertGreaterEqual(grown["paying_clients"], initial["paying_clients"])
-        self.assertGreaterEqual(grown["client_population_target"], grown["paying_clients"])
+        # A deliberately undersized one-node fixture may lose customers; the
+        # important behavior is that the market moves toward its calculated
+        # target, rather than being frozen by client-session churn.
+        self.assertNotEqual(grown["paying_clients"], initial["paying_clients"])
+        self.assertLess(
+            abs(grown["paying_clients"] - grown["client_population_target"]),
+            abs(initial["paying_clients"] - grown["client_population_target"]),
+        )
 
         version = grown["version"]
         self.engine.apply_action({"action_type": "price_adjustment", "parameters": {"monthly_price_usd": 200}, "expected_version": version})

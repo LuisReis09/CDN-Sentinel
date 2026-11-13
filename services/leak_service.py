@@ -27,7 +27,7 @@ class LeakService:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def start(self, tick_interval_seconds: float = 2.5) -> None:
+    def start(self, tick_interval_seconds: float = 1.25) -> None:
         self.stop()
         self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
         self._stop_event.clear()

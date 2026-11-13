@@ -1,4 +1,4 @@
-import { Activity, Ban, Globe2, Network, Server, Users } from "lucide-react";
+import { Activity, Ban, Globe2, HeartPulse, Network, Server, Users } from "lucide-react";
 import { useState } from "react";
 import { api } from "../api";
 import { ControlPanel } from "../components/ControlPanel";
@@ -72,18 +72,21 @@ export function DashboardPage({
   const selectedClientServer = selectedClientServerId
     ? overview.servers.find((server) => server.server_id === selectedClientServerId)
     : undefined;
+  const healthOf = (server: ServerNode) => server.health_status ?? server.status;
   const available = overview.servers.filter(
-    (server) => ["healthy", "degraded", "overloaded"].includes(server.status),
+    (server) => ["healthy", "degraded", "overloaded"].includes(healthOf(server)),
   ).length;
   const healthy = overview.servers.filter(
-    (server) => server.status === "healthy",
+    (server) => healthOf(server) === "healthy",
   ).length;
   const degraded = overview.servers.filter(
-    (server) => server.status === "degraded",
+    (server) => healthOf(server) === "degraded",
   ).length;
   const overloaded = overview.servers.filter(
-    (server) => server.status === "overloaded" || (server.utilization ?? 0) >= 0.9,
+    (server) => healthOf(server) === "overloaded",
   ).length;
+  const healthScore = status.scalability.health_score_pct ?? 0;
+  const healthTone = healthScore >= 85 ? "green" : healthScore >= 60 ? "warning" : "red";
 
   async function createPlacement(payload: Record<string, unknown>) {
     if (!placement) return;
@@ -148,6 +151,13 @@ export function DashboardPage({
           }
           icon={Activity}
           tone={latencyTone}
+        />
+        <MetricCard
+          label="SAÚDE DA CDN"
+          value={`${healthScore.toFixed(0)}%`}
+          caption={status.scalability.message}
+          icon={HeartPulse}
+          tone={healthTone}
         />
         <MetricCard
           label="BLACKLIST"
@@ -285,7 +295,7 @@ function NodeHealthPanel({
               </strong>
               <small>
                 {server.role ?? "edge"} · {server.process_mode ?? "http"} · PID {server.process_id ?? "—"} · porta {server.port} · uptime{" "}
-                {Math.round(server.uptime_seconds ?? 0)}s · {server.status} · {server.peer_ids?.length ?? 0} peers
+                {Math.round(server.uptime_seconds ?? 0)}s · {server.health_status ?? server.status} · {server.peer_ids?.length ?? 0} peers
               </small>
             </span>
             <span className="node-health-stat">
@@ -295,6 +305,14 @@ function NodeHealthPanel({
             <span className="node-health-stat">
               <b>{server.errors_total ?? 0}</b>
               <small>erros</small>
+            </span>
+            <span className="node-health-stat">
+              <b>{Math.round((server.utilization ?? 0) * 100)}%</b>
+              <small>pressão</small>
+            </span>
+            <span className="node-health-stat">
+              <b>{Math.round(server.latency_p95_ms ?? 0)} ms</b>
+              <small>P95</small>
             </span>
             <span className="node-health-stat">
               <b>{server.blacklist_size}</b>
@@ -311,10 +329,11 @@ function NodeHealthPanel({
 }
 
 function serverTone(server: ServerNode) {
-  if (server.status === "healthy") return "status-live";
-  if (server.status === "degraded") return "status-degraded";
-  if (server.status === "overloaded") return "status-offline";
-  if (server.status === "starting") return "status-starting";
-  if (server.status === "stopped") return "status-stopped";
+  const health = server.health_status ?? server.status;
+  if (health === "healthy") return "status-live";
+  if (health === "degraded") return "status-degraded";
+  if (health === "overloaded") return "status-offline";
+  if (health === "starting") return "status-starting";
+  if (health === "stopped") return "status-stopped";
   return "status-offline";
 }

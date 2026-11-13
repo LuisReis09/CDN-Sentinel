@@ -12,6 +12,7 @@ from services.stream_service import StreamService
 from services.watermark_demo_service import WatermarkDemoService
 from services.client_activity_service import ClientActivityService
 from controllers.simulation_controller import SimulationController
+from management.scenarios import SCENARIOS
 
 
 class ApiController:
@@ -49,7 +50,7 @@ class ApiController:
         if self.management_engine:
             self.management_engine.reset(seed=result["configuration"].get("seed", 2026))
         self.watermark_service.configure(self.simulation_controller.secret_key)
-        tick_interval = result["configuration"].get("tick_interval_seconds", 2.5)
+        tick_interval = result["configuration"].get("tick_interval_seconds", 1.25)
         self.leak_service.start(tick_interval)
         self.client_activity_service.start(tick_interval)
         self.monitor_service.start(result.get("servers", []), tick_interval)
@@ -70,12 +71,12 @@ class ApiController:
             result = self.simulation_controller.update(payload)
         except Exception:
             if rebuild and current.initialized:
-                tick_interval = current.config.get("tick_interval_seconds", 2.5)
+                tick_interval = current.config.get("tick_interval_seconds", 1.25)
                 self.leak_service.start(tick_interval)
                 self.client_activity_service.start(tick_interval)
                 self.monitor_service.start([server.to_dict() for server in current.servers.values()], tick_interval)
             raise
-        tick_interval = result["configuration"].get("tick_interval_seconds", 2.5)
+        tick_interval = result["configuration"].get("tick_interval_seconds", 1.25)
         if rebuild:
             self.leak_service.start(tick_interval)
             self.client_activity_service.start(tick_interval)
@@ -134,9 +135,40 @@ class ApiController:
         return self.management_engine.apply_action(payload)
 
     def management_start_scenario(self, payload: dict) -> dict:
-        if not self.repository.snapshot().initialized or self.repository.snapshot().lifecycle == "ended":
-            self.initialize({"num_servers": 3, "num_clients": 16, "seed": int(payload.get("seed", 2026)), "tick_interval_seconds": 2.5})
-        return self.management_engine.reset(str(payload.get("scenario_id", "free")), payload.get("seed"))
+        scenario_id = str(payload.get("scenario_id", "free"))
+        if scenario_id not in SCENARIOS:
+            raise ValueError("cenário inválido")
+        scenario = SCENARIOS[scenario_id]
+        initial_clients = int(scenario["initial"]["clients"])
+        current = self.repository.snapshot_without_clients()
+        if not current.initialized or current.lifecycle == "ended":
+            self.initialize({
+                "num_servers": 3,
+                "num_clients": initial_clients,
+                "demand_rps_per_client": 1.0,
+                "seed": int(payload.get("seed", 2026)),
+                "tick_interval_seconds": 1.25,
+            })
+        else:
+            # Starting a management scenario must also make the observed
+            # topology match its advertised conditions.  Do this as a live
+            # resize so switching modes does not needlessly restart healthy
+            # local node processes.
+            desired = {
+                "num_clients": initial_clients,
+                "demand_rps_per_client": 1.0,
+                "tick_interval_seconds": 1.25,
+            }
+            if int(current.config.get("num_servers", len(current.servers))) < 3:
+                desired["num_servers"] = 3
+            changes = {
+                key: value
+                for key, value in desired.items()
+                if current.config.get(key) != value
+            }
+            if changes:
+                self.update_simulation(changes)
+        return self.management_engine.reset(scenario_id, payload.get("seed"))
 
     def management_reset(self) -> dict:
         return self.management_engine.reset("free")
@@ -155,11 +187,14 @@ class ApiController:
 
     def create_server(self, payload: dict) -> dict:
         result = self.simulation_controller.add_server(payload)
-        self.monitor_service.add_server(result, self.simulation_controller.status()["configuration"].get("tick_interval_seconds", 2.5))
+        self.monitor_service.add_server(result, self.simulation_controller.status()["configuration"].get("tick_interval_seconds", 1.25))
         return result
 
     def servers(self) -> list[dict]:
-        return self.simulation_controller.refresh_servers()
+        self.simulation_controller.refresh_servers()
+        self.simulation_controller.status()
+        state = self.repository.snapshot_without_clients()
+        return [server.to_dict() for server in state.servers.values()]
 
     def stream(self, client_id: str, chunk_number: int, request_id: str | None = None, viewer_session_id: str | None = None) -> dict:
         # This is a short mutation boundary: stream accounting and failover
@@ -225,9 +260,13 @@ class ApiController:
         return list(self.repository.snapshot().traffic)
 
     def overview(self) -> dict:
+        # Refresh the process facts first, then calculate service health from
+        # the same telemetry snapshot.  Returning the old order made the map
+        # and health history disagree by one poll (and often stay green).
+        self.simulation_controller.refresh_servers()
         status = self.status()
         state = self.repository.snapshot_without_clients()
-        servers = self.servers()
+        servers = [server.to_dict() for server in state.servers.values()]
         blacklist = [entry.to_dict() for entry in self.repository.blacklist_values()]
         recent_events = state.events[-25:]
         message_events = [event for event in state.events if event.get("type") == "server_message"][-10:]
@@ -295,7 +334,7 @@ class ApiController:
         client = state.clients.get(client_id)
         if client is None:
             raise KeyError("cliente não encontrado")
-        if not client.active or not client.online or client_id in state.blacklist:
+        if not client.active or client_id in state.blacklist:
             raise PermissionError("cliente indisponível")
         server = next((item for item in state.servers.values() if item.status != "offline"), None)
         if server is None:

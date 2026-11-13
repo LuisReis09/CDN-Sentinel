@@ -20,7 +20,7 @@ class SimulationConfig:
     secret_key: str
     base_node_port: int = 5101
     video_id: str = field(default_factory=default_content_id)
-    tick_interval_seconds: float = 2.5
+    tick_interval_seconds: float = 1.25
     base_client_port: int = 6101
     monthly_client_price_usd: float = 25.0
     monthly_server_cost_usd: float = 100.0
@@ -42,7 +42,7 @@ class SimulationConfig:
             raw_tick_interval = payload.get("tick_interval_seconds")
             if raw_tick_interval is None:
                 legacy_speed = float(payload.get("simulation_speed", 1.0))
-                tick_interval_seconds = 2.5 / legacy_speed
+                tick_interval_seconds = 1.25 / legacy_speed
             else:
                 tick_interval_seconds = float(raw_tick_interval)
             base_client_port = int(payload.get("base_client_port", 6101))

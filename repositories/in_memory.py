@@ -80,21 +80,21 @@ class SimulationRepository:
         """Calculate client counters without creating a 100k-object snapshot."""
         with self._lock:
             clients = self._state.clients.values()
-            online = 0
+            active = 0
             malicious = 0
             paying = 0
             for client in clients:
-                if client.active and client.online:
-                    online += 1
+                if client.active:
+                    active += 1
                     if not client.malicious:
                         paying += 1
                 if client.malicious:
                     malicious += 1
             return {
                 "total": len(self._state.clients),
-                "online": online,
+                "active": active,
                 "malicious": malicious,
-                "paying_online": paying,
+                "paying_active": paying,
             }
 
     def client_sample(self, limit: int = 2_000) -> list[Client]:

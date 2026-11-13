@@ -46,6 +46,7 @@ class CDNServer:
     queue_rejected: int = 0
     queue_wait_ms: float = 0.0
     capacity_pressure: float = 0.0
+    latency_p95_ms: float = 0.0
     slo_breached: bool = False
     load: int = 0
     blacklist_size: int = 0
