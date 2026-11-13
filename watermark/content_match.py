@@ -13,7 +13,15 @@ from pathlib import Path
 import numpy as np
 
 
-def frame_hashes(path: Path, *, max_seconds: int = 180) -> list[tuple[int, float, float]]:
+def frame_hashes(path: Path, *, max_seconds: int = 30) -> list[tuple[int, float, float]]:
+    """Hash the bounded delivery window used by the CDN leak detector.
+
+    A leaked delivery is a short segment, not an entire catalog movie. The
+    previous 180-second upper bound made every authenticated investigation
+    decode far beyond the received chunk and serialized blacklist progress.
+    The matching thresholds remain unchanged; only irrelevant tail decoding
+    is avoided.
+    """
     command = [
         "ffmpeg", "-v", "error", "-i", str(path), "-an", "-vf", "fps=1,scale=16:16:flags=area,format=gray",
         "-frames:v", str(max_seconds), "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",

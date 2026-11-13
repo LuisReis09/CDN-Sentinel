@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import random
 import threading
 import time
@@ -19,12 +18,15 @@ class ClientActivityService:
     Real requests still exercise the data plane.  Background ticks are kept
     aggregate so they do not compete with a viewer for FFmpeg/QIM work.
 
-    The management game advances at a human decision cadence independent of
-    the faster telemetry clock.  A player must have time to read a warning
-    and submit an action before a simulated day elapses.
+    Management advances together with the telemetry clock so player actions
+    are reflected on the next visible simulation update.
     """
 
-    management_tick_seconds = 2.5
+    # Every active client receives a visible playback update on a normal
+    # scenario tick.  Keep a cap for unusually large ad-hoc simulations and
+    # rotate through it fairly instead of returning to one FFmpeg/QIM job per
+    # client.
+    virtual_delivery_batch_size = 2_000
 
     def __init__(self, repository: SimulationRepository, stream_service: StreamService, interval_seconds: float = 1.25, on_tick=None) -> None:
         self._repository = repository
@@ -35,8 +37,6 @@ class ClientActivityService:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._on_tick = on_tick
-        self._management_tick_every = 1
-        self._configure_management_cadence()
 
     def set_on_tick(self, callback) -> None:
         self._on_tick = callback
@@ -44,7 +44,6 @@ class ClientActivityService:
     def start(self, tick_interval_seconds: float = 1.25) -> None:
         self.stop()
         self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
-        self._configure_management_cadence()
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, name="client-activity-simulator", daemon=True)
         self._thread.start()
@@ -58,13 +57,6 @@ class ClientActivityService:
     def configure_tick_interval(self, tick_interval_seconds: float) -> None:
         """Change the cadence for the next wait without recreating the worker."""
         self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
-        self._configure_management_cadence()
-
-    def _configure_management_cadence(self) -> None:
-        self._management_tick_every = max(
-            1,
-            math.ceil(self.management_tick_seconds / max(0.5, self._tick_interval_seconds)),
-        )
 
     def _run(self) -> None:
         tick = 0
@@ -83,7 +75,7 @@ class ClientActivityService:
             clients = [client for client in state.clients.values() if client.active]
             self._advance_virtual_clients(state, clients, tick)
             self._emit_server_communications(state, tick)
-            if self._on_tick and tick % self._management_tick_every == 0:
+            if self._on_tick:
                 try:
                     self._on_tick()
                 except Exception as exc:
@@ -120,14 +112,11 @@ class ClientActivityService:
             request_count = max(0, round(served_rps * interval * capacities[server.server_id] / max(visible_capacity, 1.0)))
             if request_count == 0:
                 continue
-            client = active_clients[index % len(active_clients)]
-            distance = haversine_km(client.latitude, client.longitude, server.latitude, server.longitude)
             utilization = demand_rps / max(total_capacity, 1.0)
             # The virtual path follows the same geospatial model as a real
             # stream.  Distance is the only latency input exposed to the
             # simulation; a client twice as far observes roughly twice the
             # propagation delay (before queueing and HTTP overhead).
-            latency = round(propagation_delay_seconds(distance, 1.0) * 1000, 3)
             rejected = max(0, round(request_count * max(0.0, utilization - 1.0)))
             server.requests_total += request_count
             server.errors_total += rejected
@@ -138,39 +127,65 @@ class ClientActivityService:
             server.queue_depth = max(0, round((server.utilization - 0.9) * 20))
             server.queue_rejected += rejected
             server.queue_wait_ms = round(max(0.0, (server.utilization - 0.75) * 120), 3)
-            client.videos_consumed += request_count
-            client.last_activity_at = time.time()
-            watch_record = {
-                "at": time.time(),
-                "video_id": state.config.get("video_id") or default_content_id(),
-                "chunk_number": client.videos_consumed % 5,
-                "chunk_id": f"batch-chunk-{tick}-{server.server_id}",
-                "server_id": server.server_id,
-                "latency_ms": round(latency + server.queue_wait_ms, 3),
-                "network_latency_ms": latency,
-                "queue_wait_ms": server.queue_wait_ms,
-                "liked": None,
-            }
-            client.watch_history.append(watch_record)
-            client.watch_history = client.watch_history[-100:]
-            self._stream_service.record_delivery_feedback(client, watch_record)
             self._repository.append_traffic({
                 "at": time.time(),
                 "request_id": f"batch-{tick}-{server.server_id}",
                 "trace_id": f"trace-batch-{tick}-{server.server_id}",
-                "client_id": client.client_id,
+                "client_id": "aggregate",
                 "server_id": server.server_id,
-                "distance_km": round(distance, 2),
-                "latency_ms": latency,
-                "artificial_latency_ms": latency,
+                "distance_km": 0.0,
+                "latency_ms": server.queue_wait_ms,
+                "artificial_latency_ms": 0.0,
                 "http_rtt_ms": 0.0,
                 "queue_wait_ms": server.queue_wait_ms,
-                "end_to_end_ms": round(latency + server.queue_wait_ms, 3),
+                "end_to_end_ms": server.queue_wait_ms,
                 "chunk_id": f"batch-chunk-{tick}-{server.server_id}",
                 "request_count": request_count,
                 "virtual": True,
                 "routing_reason": "roteamento virtual agregado para escala",
             })
+        # The aggregate traffic record above protects the real playback path
+        # from hundreds of QIM/FFmpeg jobs.  Playback progress remains fair:
+        # ordinary scenarios update every client every tick, while oversized
+        # simulations use a deterministic rotating window.
+        batch_size = min(len(active_clients), self.virtual_delivery_batch_size)
+        start = ((tick - 1) * batch_size) % len(active_clients)
+        now = time.time()
+        for offset in range(batch_size):
+            client = active_clients[(start + offset) % len(active_clients)]
+            # Keep the simulated playback route consistent with the real
+            # StreamService: geographic nearest eligible node first. The
+            # aggregate loop above still spreads capacity telemetry; it must
+            # not dictate which node a given client appears to use.
+            server = min(
+                available,
+                key=lambda candidate: (
+                    haversine_km(
+                        client.latitude,
+                        client.longitude,
+                        candidate.latitude,
+                        candidate.longitude,
+                    ),
+                    candidate.server_id,
+                ),
+            )
+            distance = haversine_km(client.latitude, client.longitude, server.latitude, server.longitude)
+            network_latency = round(propagation_delay_seconds(distance, 1.0) * 1000, 3)
+            client.videos_consumed += 1
+            client.last_activity_at = now
+            client.watch_history.append({
+                "at": now,
+                "video_id": state.config.get("video_id") or default_content_id(),
+                "chunk_number": client.videos_consumed % 5,
+                "chunk_id": f"simulated-chunk-{tick}-{client.client_id}",
+                "server_id": server.server_id,
+                "latency_ms": round(network_latency + server.queue_wait_ms, 3),
+                "network_latency_ms": network_latency,
+                "queue_wait_ms": server.queue_wait_ms,
+                "liked": None,
+                "delivery_mode": "simulated-aggregate",
+            })
+            client.watch_history = client.watch_history[-100:]
         self._repository.append_event({
             "type": "client_request_batch",
             "at": time.time(),

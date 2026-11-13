@@ -167,6 +167,17 @@ export function ManagementPage({
 
   async function confirmAction() {
     if (!selectedAction || !management) return;
+    if (
+      (selectedAction.action_type === "vertical_scale" ||
+        selectedAction.action_type === "cache_upgrade") &&
+      !Object.prototype.hasOwnProperty.call(
+        management.nodes,
+        String(parameters.server_id ?? ""),
+      )
+    ) {
+      onError("Selecione um nó CDN existente antes de confirmar a ação.");
+      return;
+    }
     setBusy(true);
     try {
       const result = await api.applyManagementAction({
@@ -283,7 +294,7 @@ export function ManagementPage({
       <section className="management-status-strip">
         <span>
           <strong>Dia simulado {state?.day ?? 0}</strong>
-          <small>cada dia avança em no mínimo 2,5 s · seed {state?.seed ?? "—"}</small>
+          <small>1 tick de orquestração = 1 dia · seed {state?.seed ?? "—"}</small>
         </span>
         <span>
           <strong>{state?.scenario_id ?? "free"}</strong>
@@ -373,15 +384,6 @@ export function ManagementPage({
         </div>
         <ul>{satisfactionTips.map((tip) => <li key={tip}>{tip}</li>)}</ul>
       </section>
-
-      {state?.alerts.map((alert, index) => (
-        <div
-          className={`management-alert management-alert--${alert.severity}`}
-          key={`${alert.message}-${index}`}
-        >
-          <ArrowUpRight size={15} /> {alert.message}
-        </div>
-      ))}
 
       <section className="management-main-grid">
         <div className="panel management-map-card">
@@ -493,6 +495,23 @@ export function ManagementPage({
                       ...current,
                       ...(action.action_type === "horizontal_scale"
                         ? { operation: "add" }
+                        : action.action_type === "vertical_scale" ||
+                            action.action_type === "cache_upgrade"
+                          ? {
+                              server_id:
+                                selectedEntity?.kind === "server" &&
+                                Object.prototype.hasOwnProperty.call(
+                                  management?.nodes ?? {},
+                                  selectedEntity.id,
+                                )
+                                  ? selectedEntity.id
+                                  : Object.prototype.hasOwnProperty.call(
+                                        management?.nodes ?? {},
+                                        String(current.server_id ?? ""),
+                                      )
+                                    ? current.server_id
+                                    : Object.keys(management?.nodes ?? {})[0] ?? "",
+                            }
                         : {}),
                     }));
                   }}

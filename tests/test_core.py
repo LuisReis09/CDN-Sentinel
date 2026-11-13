@@ -41,33 +41,52 @@ class SecurityAndNetworkTests(unittest.TestCase):
         far = propagation_delay_seconds(2_000, 1)
         self.assertAlmostEqual(far / near, 2.0, delta=0.01)
 
-    def test_client_activity_keeps_every_simulated_client_active(self):
+    def test_client_activity_advances_every_simulated_client_without_encoding_each_one(self):
         repository = SimulationRepository()
         service = ClientActivityService(repository, StreamService(CDNHttpClient()))
-        client = Client("client-1", 0, 0, "Test", online=False)
+        clients = {
+            f"client-{index}": Client(f"client-{index}", index, index, "Test", online=False)
+            for index in range(3)
+        }
         server = CDNServer("cdn-01", "127.0.0.1", 5101, 0, 0, "Test", status="healthy", capacity_rps=10)
+        nearby = CDNServer("cdn-near", "127.0.0.1", 5102, 1, 1, "Near", status="healthy", capacity_rps=10)
+        distant = CDNServer("cdn-far", "127.0.0.1", 5103, 50, 50, "Far", status="healthy", capacity_rps=10)
         repository.replace(SimulationState(
             initialized=True,
             lifecycle="running",
             config={"demand_rps_per_client": 1.0},
-            clients={client.client_id: client},
-            servers={server.server_id: server},
+            clients=clients,
+            servers={
+                server.server_id: server,
+                nearby.server_id: nearby,
+                distant.server_id: distant,
+            },
         ))
-        service._advance_virtual_clients(repository.state_ref(), [client], 1)
-        self.assertTrue(client.online)
+        service._advance_virtual_clients(repository.state_ref(), list(clients.values()), 1)
+        self.assertTrue(all(client.online for client in clients.values()))
+        self.assertEqual([client.videos_consumed for client in clients.values()], [1, 1, 1])
+        self.assertTrue(all(client.watch_history for client in clients.values()))
+        self.assertTrue(all(
+            client.watch_history[-1]["delivery_mode"] == "simulated-aggregate"
+            for client in clients.values()
+        ))
+        self.assertEqual(
+            clients["client-0"].watch_history[-1]["server_id"],
+            "cdn-01",
+        )
         self.assertFalse(any(
             event["type"] in {"client_connected", "client_disconnected"}
             for event in repository.snapshot().events
         ))
 
-    def test_management_clock_keeps_a_human_decision_cadence(self):
+    def test_management_clock_uses_every_operational_tick(self):
         service = ClientActivityService(SimulationRepository(), StreamService(CDNHttpClient()))
         service.configure_tick_interval(1.25)
-        self.assertEqual(service._management_tick_every, 2)
+        self.assertEqual(service._tick_interval_seconds, 1.25)
         service.configure_tick_interval(0.5)
-        self.assertEqual(service._management_tick_every, 5)
+        self.assertEqual(service._tick_interval_seconds, 0.5)
         service.configure_tick_interval(5.0)
-        self.assertEqual(service._management_tick_every, 1)
+        self.assertEqual(service._tick_interval_seconds, 5.0)
 
     def test_client_process_generates_feedback_from_delivery_latency(self):
         repository = SimulationRepository()

@@ -95,18 +95,25 @@ class ManagementSimulationTests(unittest.TestCase):
         self.assertGreater(replica["staleness_ms"], 0)
 
     def test_horizontal_and_vertical_are_pending_then_applied(self):
+        registered_servers = []
+        self.engine.set_server_added_callback(registered_servers.append)
         horizontal = self.engine.apply_action({"action_type": "horizontal_scale", "parameters": {"operation": "add", "latitude": 10, "longitude": 10}, "expected_version": self.engine.snapshot()["version"]})
         self.assertEqual(horizontal["action"]["status"], "pending")
         self.engine.tick()
         self.assertEqual(self.engine.snapshot()["day"], 1)
         self.engine.tick()
-        self.assertEqual(len(self.engine.snapshot()["nodes"]), 2)
+        scaled = self.engine.snapshot()
+        self.assertEqual(len(scaled["nodes"]), 2)
+        new_server_id = next(
+            node_id for node_id in scaled["nodes"] if node_id != "cdn-01"
+        )
+        self.assertEqual(registered_servers[0]["server_id"], new_server_id)
         version = self.engine.snapshot()["version"]
-        action = self.engine.apply_action({"action_type": "vertical_scale", "parameters": {"server_id": "cdn-01", "tier": "standard"}, "expected_version": version})
+        action = self.engine.apply_action({"action_type": "vertical_scale", "parameters": {"server_id": new_server_id, "tier": "standard"}, "expected_version": version})
         self.assertEqual(action["action"]["status"], "pending")
         self.assertEqual(action["action"]["investment_usd"], 280.0)
         self.engine.tick()
-        self.assertEqual(self.engine.snapshot()["nodes"]["cdn-01"]["tier"], "standard")
+        self.assertEqual(self.engine.snapshot()["nodes"][new_server_id]["tier"], "standard")
 
     def test_price_cooldown_and_daily_accounting_are_bounded(self):
         initial_cash = self.engine.snapshot()["cash_balance_usd"]

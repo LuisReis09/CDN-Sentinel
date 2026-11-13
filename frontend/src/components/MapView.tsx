@@ -479,46 +479,40 @@ function communicationIcon(
 function MapLegends() {
   return (
     <details className="map-legends" aria-label="Legendas do mapa">
-      <summary>Legenda do mapa</summary>
-      <section className="map-legend-card">
-        <strong>ENTIDADES E TRAÇADOS</strong>
-        <div className="map-legend-grid">
-          <LegendItem symbol="server-active" label="servidor ativo e estável" />
-          <LegendItem symbol="server-degraded" label="servidor degradado" />
-          <LegendItem
-            symbol="server-overloaded"
-            label="servidor sobrecarregado"
-          />
-          <LegendItem symbol="client-active" label="cliente" />
-          <LegendItem symbol="client-dangerous" label="cliente perigoso" />
-          <LegendItem symbol="client-banned" label="cliente banido" />
-          <LegendItem
-            symbol="line-server"
-            label="comunicação entre servidores"
-          />
-          <LegendItem
-            symbol="line-client"
-            label="comunicação servidor-cliente"
-          />
-        </div>
-      </section>
-      <section className="map-legend-card">
-        <strong>COMUNICAÇÕES</strong>
-        <div className="map-legend-grid">
-          <LegendItem
-            symbol="diamond-client"
-            label="entrega de conteúdo ao cliente"
-          />
-          <LegendItem
-            symbol="diamond-failover"
-            label="failover de requisição"
-          />
-          <LegendItem
-            symbol="diamond-capacity"
-            label="alerta de capacidade"
-          />
-        </div>
-      </section>
+      <summary>Camadas do mapa</summary>
+      <div className="map-legend-groups">
+        <section className="map-legend-card map-legend-card--servers">
+          <strong>Servidores</strong>
+          <div className="map-legend-grid">
+            <LegendItem symbol="server-active" label="saudável" />
+            <LegendItem symbol="server-degraded" label="degradado" />
+            <LegendItem symbol="server-overloaded" label="no limite" />
+          </div>
+        </section>
+        <section className="map-legend-card map-legend-card--clients">
+          <strong>Clientes</strong>
+          <div className="map-legend-grid">
+            <LegendItem symbol="client-active" label="regular" />
+            <LegendItem symbol="client-dangerous" label="suspeito" />
+            <LegendItem symbol="client-banned" label="bloqueado" />
+          </div>
+        </section>
+        <section className="map-legend-card map-legend-card--routes">
+          <strong>Rotas</strong>
+          <div className="map-legend-grid">
+            <LegendItem symbol="line-server" label="entre servidores" />
+            <LegendItem symbol="line-client" label="entrega ao cliente" />
+          </div>
+        </section>
+        <section className="map-legend-card map-legend-card--events">
+          <strong>Eventos</strong>
+          <div className="map-legend-grid">
+            <LegendItem symbol="diamond-client" label="conteúdo" />
+            <LegendItem symbol="diamond-failover" label="failover" />
+            <LegendItem symbol="diamond-capacity" label="capacidade" />
+          </div>
+        </section>
+      </div>
     </details>
   );
 }

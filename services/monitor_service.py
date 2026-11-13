@@ -20,18 +20,19 @@ class MonitorService:
         self._watermark_service = watermark_service
         self._blacklist_service = blacklist_service
         self._investigations = ForensicInvestigationService(watermark_service)
-        self._tick_interval_seconds = 2.5
+        self._tick_interval_seconds = 1.0
         self._threads: Dict[str, threading.Thread] = {}
         self._stop_events: Dict[str, threading.Event] = {}
         self._locks: Dict[str, threading.Lock] = {}
         self._last_results: Dict[str, Dict[str, Any]] = {}
         self._lifecycle_lock = threading.RLock()
 
-    def start(self, servers: list[dict] | None = None, tick_interval_seconds: float = 2.5) -> None:
+    def start(self, servers: list[dict] | None = None, tick_interval_seconds: float = 1.0) -> None:
         self.stop()
-        # Forensic extraction invokes FFmpeg; it must not speed up merely
-        # because the visual orchestration clock is faster.
-        self._tick_interval_seconds = max(2.5, float(tick_interval_seconds))
+        # The per-server lock keeps forensic extraction non-overlapping. A
+        # short polling cadence only reduces the time a fresh leak waits for
+        # its first authenticated inspection; it does not relax detection.
+        self._tick_interval_seconds = max(1.0, float(tick_interval_seconds))
         state = self._repository.state_ref()
         candidates = servers or [server.to_dict() for server in state.servers.values()]
         for server in candidates:
@@ -46,7 +47,7 @@ class MonitorService:
         if isinstance(server, dict) and server.get("process_mode", "http") == "virtual":
             return
         if tick_interval_seconds is not None:
-            self._tick_interval_seconds = max(2.5, float(tick_interval_seconds))
+            self._tick_interval_seconds = max(1.0, float(tick_interval_seconds))
         with self._lifecycle_lock:
             if server_id in self._threads and self._threads[server_id].is_alive():
                 return
@@ -76,7 +77,7 @@ class MonitorService:
             self._last_results.clear()
 
     def configure_tick_interval(self, tick_interval_seconds: float) -> None:
-        self._tick_interval_seconds = max(2.5, float(tick_interval_seconds))
+        self._tick_interval_seconds = max(1.0, float(tick_interval_seconds))
 
     def remove_server(self, server_id: str) -> None:
         """Stop only the monitor owned by a server removed during live resize."""

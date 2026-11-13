@@ -41,6 +41,21 @@ class ApiController:
         self.forensic_investigation_service = forensic_investigation_service
         self.hls_ab_service = hls_ab_service
         self.management_engine = management_engine
+        if self.management_engine:
+            self.management_engine.set_server_added_callback(
+                self._monitor_management_server,
+            )
+
+    def _monitor_management_server(self, server: dict) -> None:
+        """Give a horizontally scaled node the same monitor as API-created nodes."""
+        interval = self.simulation_controller.status()["configuration"].get(
+            "tick_interval_seconds", 1.25,
+        )
+        self.monitor_service.add_server(
+            server,
+            tick_interval_seconds=interval,
+            start_thread=server.get("status") != "offline",
+        )
 
     def initialize(self, payload: dict) -> dict:
         self.leak_service.stop()

@@ -648,7 +648,10 @@ def register_api_routes(api, controller: ApiController) -> None:
                     payload["clients"] = payload.get("clients", [])[:600]
                     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
                     yield f"event: overview\ndata: {encoded}\n\n"
-                    time.sleep(1.5)
+                    # Keep the management view responsive after an action is
+                    # applied, without switching the UI to high-frequency
+                    # per-client polling.
+                    time.sleep(1.0)
 
             return Response(
                 generate(),

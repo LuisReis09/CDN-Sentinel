@@ -25,10 +25,15 @@ class ManagementEngine:
         self._catalog = MetadataCatalog()
         self._state = ManagementState()
         self._lock = RLock()
+        self._on_server_added = None
 
     @property
     def registry(self) -> ActionRegistry:
         return self._registry
+
+    def set_server_added_callback(self, callback) -> None:
+        """Register the runtime hook for nodes created by game actions."""
+        self._on_server_added = callback
 
     def reset(self, scenario_id: str = "free", seed: int | None = None) -> dict:
         with self._lock:
@@ -208,6 +213,8 @@ class ManagementEngine:
                         result = self._simulation_controller.add_server({"latitude": action.parameters["latitude"], "longitude": action.parameters["longitude"], "city": action.parameters.get("city", "gestão"), "capacity_tier": "basic"})
                         server_id = result["server_id"]
                         self._state.nodes[server_id] = ManagementNode(server_id=server_id, tier="basic", lifecycle_status=result.get("lifecycle_status", "starting"), health_status=result.get("health_status", result.get("status", "starting")), monthly_cost_usd=CAPACITY_TIERS["basic"].cost_monthly_usd)
+                        if self._on_server_added:
+                            self._on_server_added(result)
                         action.result = {"server_id": server_id, "operation": "add"}
                     else:
                         server_id = str(action.parameters["server_id"])
@@ -369,16 +376,6 @@ class ManagementEngine:
                 slo_reasons.append(f"o p95 excedeu a meta de {slo_p95:g} ms")
             if self._state.availability_pct < slo_success:
                 slo_reasons.append(f"a disponibilidade ficou abaixo da meta de {slo_success:g}%")
-            self._state.alerts.append({
-                "severity": "critical",
-                "message": (
-                    f"SLO violado: p95 {self._state.latency_p95_ms} ms "
-                    f"(meta ≤ {slo_p95:g} ms) / disponibilidade {self._state.availability_pct}% "
-                    f"(meta ≥ {slo_success:g}%). "
-                    "O p95 representa os 5% de entregas mais lentas; "
-                    f"motivo: {'; '.join(slo_reasons)}."
-                ),
-            })
         if outage_factor < 1:
             self._state.alerts.append({"severity": "critical", "message": "Evento de cenário: queda de nó reduziu a capacidade agregada; verifique failover no Network Lab."})
         self._state.updated_at = time.time() if hasattr(self._state, "updated_at") else None
