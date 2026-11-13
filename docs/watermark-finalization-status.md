@@ -32,10 +32,10 @@ Base remota conferida com `git fetch origin --prune`: `codex/forensic-watermark-
 | P1.9 identificador longo | Pendente | 48 bits mantidos, sem medição que justifique ampliação |
 | P1.10 codecs e desempenho | Pendente | Sem matriz temporal e de codecs completa |
 | P1.11 compatibilidade | Parcial | Testes de simulação, gestão, rede e E2E continuam passando; sem auditoria completa de todos os contratos |
-| 2.1 CI | Parcial | Correção FFmpeg preparada; aprovação do GitHub Actions ainda obrigatória |
+| 2.1 CI | Parcial | [Actions de push da branch 43349564010](https://github.com/LuisReis09/CDN-Sentinel/actions/runs/43349564010) passou em backend, frontend e Compose; CI sobre PR ainda pendente |
 | 2.2 benchmark e estudo humano | Pendente | Sem dataset separado para desenvolvimento, calibração e teste final; sem participantes humanos |
 | 2.3 E2E completo | Parcial | Teste existente cobre dois clientes, MP4 recodificado, investigação e revisão; busca independente, HLS A/B e negativos exigidos faltam |
-| 3.1–3.4 PR e merge | Bloqueado | P0 e critérios experimentais pendentes impedem merge seguro |
+| 3.1–3.4 PR e merge | Bloqueado | Branch publicada; criação do PR recebeu HTTP 403 da integração GitHub. P0 e critérios experimentais pendentes impedem merge seguro |
 
 ## Arquitetura e limites
 
@@ -51,6 +51,7 @@ Uma mídia HLS com três segmentos oferece só oito padrões A/B. A primeira exe
 - `python -m unittest discover -s tests -v`: 61 testes passaram em 119,366 s na execução local final antes do ajuste do fixture HLS. Depois do ajuste, `python -m unittest tests.test_hls_ab -v` passou em 8,059 s e `python -m unittest tests.test_operator_auth tests.test_forensic_states -v` passou com 7 testes em 1,171 s. A suíte completa precisa ser reexecutada no GitHub Actions.
 - `npm.cmd run build`: passou; aviso de bundle maior que 500 kB.
 - `docker compose config --quiet`: passou; aviso local de leitura de configuração Docker, sem falha de validação.
+- [GitHub Actions 43349564010](https://github.com/LuisReis09/CDN-Sentinel/actions/runs/43349564010), evento `push`, commit `5835b679f648d9052eb23de44be3cef6c4c1e4a8`: **success** em backend (61 testes em 105,772 s), frontend e Compose. A primeira execução da branch, [43348892570](https://github.com/LuisReis09/CDN-Sentinel/actions/runs/43348892570), falhou no teste HLS curto antes do ajuste descrito acima.
 
 Ensaio exploratório adicional: `python tools/forensic_benchmark.py --input data/media/bigbuckbunny.mp4 --seconds 2 --mode quick --algorithms adaptive-spread qim2 --output data/runtime/final-benchmark.json`. O JSON de esquema 2 registra `git_dirty=true`, hash SHA-256 da fonte e um controle H.264 com os mesmos parâmetros. Resultado de **um único clipe de 2 s**, sem inferência estatística:
 
