@@ -243,8 +243,18 @@ def generate_visual_variants(video_id: str, token: str, secret_key: str | None =
 
 
 def get_video_chunk(chunk_number: int = 0, video_id: str | None = None) -> Tuple[bytes, str]:
-    """Return the deterministic local MP4 as a transport sample."""
-    del chunk_number
+    """Legacy whole-asset compatibility for chunk zero only.
+
+    Temporal segments are served by the HLS path; returning the same whole MP4
+    for every chunk number would silently misrepresent the delivery contract.
+    """
+    if chunk_number != 0:
+        raise ValueError("legacy whole-asset route has no temporal chunks; use HLS")
+    return get_video_asset_bytes(video_id)
+
+
+def get_video_asset_bytes(video_id: str | None = None) -> Tuple[bytes, str]:
+    """Read a complete local asset for the explicitly legacy demo."""
     path, content_type = get_video_asset(video_id, "original")
     return path.read_bytes(), content_type
 

@@ -11,10 +11,10 @@ from utils.video import (
     encode_payload,
     generate_visual_variants,
     get_video_asset,
-    get_video_chunk,
+    get_video_asset_bytes,
     list_video_examples,
 )
-from utils.video_watermark import assess_video_robustness
+from utils.video_watermark import assess_video_robustness, probe_video_limits
 
 
 class WatermarkDemoService:
@@ -46,7 +46,7 @@ class WatermarkDemoService:
                 str(payload.get("exclude_video_id")) if payload.get("exclude_video_id") else None
             )
 
-        original_bytes, content_type = get_video_chunk(chunk_number, video["video_id"])
+        original_bytes, content_type = get_video_asset_bytes(video["video_id"])
         original_asset, _ = get_video_asset(video["video_id"], "original")
         token, claim = self._watermark_service.issue(client_id, server_id, chunk_number, video["video_id"])
         generated_id = generate_visual_variants(video["video_id"], token, self._watermark_service.secret_key)
@@ -76,6 +76,7 @@ class WatermarkDemoService:
                 "mime": content_type,
                 "resolution": video.get("resolution", "1280x720"),
                 "size_bytes": original_asset.stat().st_size,
+                "fps": probe_video_limits(original_asset)["fps"],
                 "source": video.get("source", "asset MP4 local"),
                 "visual_transform": "marcador visual autenticado de 48 bits, SECDED Hamming(13,8), sincronização redundante e portadora adaptativa em grade 16×16; a terceira variante é apenas uma diferença amplificada para diagnóstico",
             },

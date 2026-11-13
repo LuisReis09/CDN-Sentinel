@@ -49,6 +49,11 @@ export function WatermarkPage({
           text="Uma sessão associada vira evidência para revisão; não determina automaticamente a autoria da cópia."
         />
       </section>
+      <p role="note" className="panel-subtitle">
+        O laboratorio abaixo executa apenas o caminho legado CDNWM3 / Adaptive Spread.
+        Um resultado VALID ali nao autentica uma sessao forense CDNWM4 / QIM2.
+        A atribuicao CDNWM4 depende do ledger, da verificacao do conteudo e da revisao.
+      </p>
       <WatermarkLab onError={onError} />
     </main>
   );

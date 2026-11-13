@@ -108,7 +108,8 @@ export function WatermarkLab({
 
   function stepFrame(direction: number) {
     pauseAll();
-    seekAll(Math.max(0, Math.min(duration, (videoRefs.current.original?.currentTime ?? playbackTime) + direction / 30)));
+    const fps = demo?.video_metadata?.fps && Number(demo.video_metadata.fps) > 0 ? Number(demo.video_metadata.fps) : 30;
+    seekAll(Math.max(0, Math.min(duration, (videoRefs.current.original?.currentTime ?? playbackTime) + direction / fps)));
   }
 
   async function simulate() {
@@ -137,7 +138,7 @@ export function WatermarkLab({
     <section className="panel watermark-lab">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">FORENSIC WATERMARK LAB / STANDALONE</p>
+          <p className="eyebrow">LEGACY CDNWM3 / ADAPTIVE SPREAD</p>
           <h2>Estúdio de watermark</h2>
         </div>
         <Fingerprint size={20} className="accent" />
@@ -235,11 +236,11 @@ export function WatermarkLab({
           <Check size={16} />
           <strong>
             {demo.verification?.forensic_status === "VALID"
-              ? "Watermark visual recuperada e autenticada"
+              ? "Marca legada recuperada; sem autenticacao forense CDNWM4"
               : "Watermark visual pendente ou inconclusiva"}
           </strong>
           <span>
-            {demo.video_label} · chunk {demo.chunk_number} · SHA-256{" "}
+            {demo.video_label} · ensaio {demo.chunk_number} · SHA-256{" "}
             {demo.payload_sha256.slice(0, 18)}…
           </span>
           <small>

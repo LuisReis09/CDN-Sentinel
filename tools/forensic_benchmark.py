@@ -43,6 +43,13 @@ def _version(command: list[str]) -> str:
         return "unavailable"
 
 
+def _git_dirty() -> bool | None:
+    try:
+        return bool(_command(["git", "status", "--porcelain"], timeout=15).stdout.strip())
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+
 def _attacks(mode: str) -> list[tuple[str, str | None, str, int, str]]:
     attacks = [
         ("h264_crf23", None, "libx264", 23, "benign"),
@@ -116,11 +123,12 @@ def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms
     if not inputs:
         raise ValueError("nenhum vídeo disponível")
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "environment": {
             "python": platform.python_version(), "platform": platform.platform(),
             "ffmpeg": _version(["ffmpeg", "-version"]),
             "git_commit": _version(["git", "rev-parse", "HEAD"]),
+            "git_dirty": _git_dirty(),
         },
             "protocol": {"mode": mode, "clip_seconds": seconds, "algorithms": algorithms, "qim_step": qim_step, "control": "same H.264 CRF24 veryfast yuv420p", "human_review": "not performed"},
         "limitations": ["SSIM/MS-SSIM here use global approximations from watermark_perceptual_experiments.py", "VMAF and LPIPS require separate optional tooling", "neural checkpoints are not evaluated by this script", "visual detector confidence is not statistically calibrated"],
@@ -160,9 +168,12 @@ def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms
                     shutil.copy2(marked, target / f"{algorithm}.mp4")
                 embed_seconds = time.perf_counter() - start
                 marked_frames = _read_frames(marked, max_frames=8)
+                quality = _quality(reference_frames, marked_frames)
+                quality["ssim_global_approx"] = quality.pop("ssim")
+                quality["ms_ssim_global_approx"] = quality.pop("ms_ssim")
                 item = {
                     "algorithm": algorithm, "strength_or_step": step,
-                    "quality_vs_control": _quality(reference_frames, marked_frames),
+                    "quality_vs_control": quality,
                     "embed_seconds": round(embed_seconds, 3), "marked_size_bytes": marked.stat().st_size,
                     "clean_detection": _detect(marked, service.secret_key, token, algorithm, step),
                     "negative_detection": _detect(clip, service.secret_key, token, algorithm, step),
