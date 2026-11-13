@@ -99,17 +99,6 @@ export function ForensicStudio({ onError }: { onError: (message: string) => void
 
   return (
     <section className="forensic-studio" aria-label="Laboratório de watermark CDNWM4">
-      <header className="forensic-studio__intro">
-        <div>
-          <p className="eyebrow">AMBIENTE ISOLADO DE DEMONSTRAÇÃO</p>
-          <h2>Laboratório de watermark</h2>
-          <p>
-            Este ensaio é independente da entrega da CDN. Ele cria uma sessão local,
-            marca um clipe curto e mostra a evidência visual e criptográfica em etapas.
-          </p>
-        </div>
-        <span className="forensic-studio__independent"><FlaskConical size={15} /> demonstração local</span>
-      </header>
 
       <div className="forensic-studio__setup">
         <div className="forensic-studio__algorithm">

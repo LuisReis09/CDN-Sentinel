@@ -8,4 +8,4 @@ data/media/generated/
 data/runtime/
 data/datasets/youtube_clipped_videos/
 *.tsbuildinfo
-
+docs/
