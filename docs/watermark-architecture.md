@@ -1,5 +1,7 @@
 # Arquitetura atual do watermark forense
 
+> **Atualização de 13/11/2026:** a implementação atual usa QIM3 com SECDED(55,48) e passo 28 como padrão para fontes >=640×360. O Studio principal executa CDNWM4 real; CDNWM3 é opcional. Veja [o relatório de refinamento](watermark-refinement-2026-11-13.md). As descrições QIM2/Studio abaixo documentam o estado histórico anterior.
+
 > **Atualização de 12/11/2026:** a situação de implementação e as pendências obrigatórias estão em [watermark-finalization-status.md](watermark-finalization-status.md). QIM2 carrega 48 bits sem ECC; claims novos deixam de declarar SECDED nesse caminho. O Studio ainda executa o CDNWM3 legado.
 
 Estado experimental da branch `codex/forensic-watermark-reengineering`, derivada de `761e64a`. O simulador continua oferecendo rotas legadas, mas a investigação forense usa o fluxo abaixo.

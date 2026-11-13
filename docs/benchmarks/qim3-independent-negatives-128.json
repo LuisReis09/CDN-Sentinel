@@ -1,0 +1,779 @@
+{
+  "algorithm": "qim3",
+  "count": 128,
+  "offset": 384,
+  "step": 28.0,
+  "max_negative_score": 0.171,
+  "candidate_count": 0,
+  "rows": [
+    {
+      "video": "data\\tmp3vs_jbxw.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1266,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp3vvpzmns.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.1482,
+      "sync": 0.625
+    },
+    {
+      "video": "data\\tmp3w9z15ar.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1216,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp3wf6n6k0.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1231,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp3x233m82.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1074,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp3x4zrlwb.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1042,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp3xmfykx2.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0824,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp3xyuk9s8.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0783,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp3y3x02rp.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1085,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp3y5bsizk.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1202,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp3yds9z6w.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0534,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp3yfzwkd_.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1209,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp3yhv4yec.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1157,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp3zg0uc1y.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.0381,
+      "sync": 0.75
+    },
+    {
+      "video": "data\\tmp3zow7r3n.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0389,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp3zszgsse.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1331,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp3zyfarf7.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0794,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp40pysi09.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0585,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp40qwaem6.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1021,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp40u9tapq.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.0297,
+      "sync": 0.625
+    },
+    {
+      "video": "data\\tmp414kstxl.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0732,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp417yzn6s.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1379,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp419t52ia.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1087,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp41bdx6o4.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0974,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp41pr4lqk.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1119,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp41sg3dtr.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0867,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp423w72rh.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.101,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp42qnpwtg.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0423,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp43445fnc.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0827,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4372_wny.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0979,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp43_owbll.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.049,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp43h43o3k.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1048,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp43hae3hw.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0455,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp43n9lufe.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0409,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp43xjv8qp.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1117,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp44056f_t.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0898,
+      "sync": 0.0
+    },
+    {
+      "video": "data\\tmp4422wgcj.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0961,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp44dqfuud.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0911,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp456ylbxf.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.116,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp484grew2.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0828,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp48_n3rr_.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0809,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp48wld1d6.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0587,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp48ypjj9d.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1488,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp49i59dsy.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0991,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp49jslhru.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1031,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp49k0yuou.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.0826,
+      "sync": 0.75
+    },
+    {
+      "video": "data\\tmp49o4gqul.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1086,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4_bnmx8_.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1198,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4_j29kf9.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.114,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4_q6y9m6.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0427,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4_y4btnn.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0603,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4a0lbtnq.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1015,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4amt8v3w.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0992,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4b30aqbu.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0695,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4belffik.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1115,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4bf0vl9p.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.0322,
+      "sync": 0.75
+    },
+    {
+      "video": "data\\tmp4bxeroxs.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0447,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4cjjbncc.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1019,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4cwb8ga1.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0987,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4d47nzdf.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0292,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4d5rkygo.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1054,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4dcnmiss.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0729,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4dt5tm77.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0309,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4e05yacx.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1124,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4e0xv3tc.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1025,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4eul6ys2.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.072,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4ewhhytr.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1055,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4f7k5g15.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.102,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4fl2nzux.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0446,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4fm8fv18.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.037,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4glqh4os.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0568,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4gv87j2x.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0694,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4gztqt0y.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0346,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4hdsz389.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.0427,
+      "sync": 0.625
+    },
+    {
+      "video": "data\\tmp4hpr3b9y.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0804,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4j5l1hia.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1072,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4jjwystm.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1054,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4jl7en3l.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1106,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4k42bojb.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.1271,
+      "sync": 0.75
+    },
+    {
+      "video": "data\\tmp4k9b4nks.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0415,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4kc7beym.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.1328,
+      "sync": 0.625
+    },
+    {
+      "video": "data\\tmp4l7e9i4j.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0565,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4m9p8c85.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0636,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4mzh21x9.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1069,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4ncila8z.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0577,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4nfq5ky7.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0745,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4nugoj_j.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.09,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4ohj001t.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.1022,
+      "sync": 0.625
+    },
+    {
+      "video": "data\\tmp4p1xj3jc.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.096,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4p989_7x.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0761,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4p9abk0r.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0399,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4pur38p9.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.171,
+      "sync": 0.75
+    },
+    {
+      "video": "data\\tmp4qaf533_.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0726,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4qiepvq5.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0629,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4qowtn__.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0676,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4r8zburs.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.129,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4rsxsa22.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0976,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4s3zm68v.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.1443,
+      "sync": 0.625
+    },
+    {
+      "video": "data\\tmp4s946z69.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.044,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4siaexj7.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0642,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4t2koesl.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0512,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4t6r_2qp.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0876,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4to3tfyt.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0979,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4tvbck59.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1168,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4uq8wl69.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0867,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4v0wy0da.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0416,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4v7f3h2j.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0815,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4vwohkdd.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1188,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4w4i_gp9.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1035,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4wfj40rz.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0799,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4x0gj7q0.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1102,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4x80zo23.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0549,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4xfdt8_y.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0673,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp4xl1xkde.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1093,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4y4ysup0.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1013,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp4yexh_69.mp4",
+      "status": "INCONCLUSIVE",
+      "score": 0.0576,
+      "sync": 0.875
+    },
+    {
+      "video": "data\\tmp4ykyqpl8.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0661,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4ylz1ezk.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0479,
+      "sync": 0.5
+    },
+    {
+      "video": "data\\tmp4yo0c975.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1286,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp4zev7b_5.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0798,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp509qz3uh.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1466,
+      "sync": 0.0
+    },
+    {
+      "video": "data\\tmp51ddyk13.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1082,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp51meqnrn.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1133,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp52_xvq9c.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.0782,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp532t1emq.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.058,
+      "sync": 0.25
+    },
+    {
+      "video": "data\\tmp541dui3v.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1214,
+      "sync": 0.125
+    },
+    {
+      "video": "data\\tmp546_xyag.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.1365,
+      "sync": 0.375
+    },
+    {
+      "video": "data\\tmp549xknf6.mp4",
+      "status": "NOT_FOUND",
+      "score": 0.073,
+      "sync": 0.5
+    }
+  ],
+  "calibration_only": false
+}

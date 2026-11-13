@@ -1,5 +1,7 @@
 # Benchmark forense reproduzível
 
+> **Nova rodada, 13/11/2026:** comparação com SSIM janelado correto, QIM3/ECC e nove ataques em quatro fontes em [watermark-refinement-2026-11-13.md](watermark-refinement-2026-11-13.md). Os números abaixo são da rodada anterior e usam SSIM global aproximado.
+
 > **Atualização de 12/11/2026:** estes números pertencem à rodada histórica indicada abaixo e não são uma avaliação final independente. A matriz, os intervalos de confiança e o estudo humano exigidos continuam pendentes; veja [o checklist de fechamento](watermark-finalization-status.md).
 
 Data: 2026-11-11. Base auditada: `761e64a89d2d63ea2334566ff852a5da27b8c2be`; medições feitas na árvore de trabalho da branch `codex/forensic-watermark-reengineering` antes dos commits finais. Ambiente: Windows 11, Python 3.12.10, FFmpeg 8.1.2, NumPy 2.5.1, SciPy 1.18.0, CPU local. O script grava versão do ambiente e hash SHA-256 de cada fonte no JSON. Os arquivos sob `data/runtime/` são ignorados pelo Git; os comandos abaixo os recriam.

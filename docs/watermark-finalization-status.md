@@ -1,5 +1,7 @@
 # Fechamento da auditoria forense — 12/11/2026
 
+> **Registro histórico:** o status de 12/11 foi sucedido pelo [refinamento de 13/11](watermark-refinement-2026-11-13.md). Itens sobre ECC, QIM2 e Studio abaixo descrevem o estado anterior e não a implementação atual.
+
 Base remota conferida com `git fetch origin --prune`: `codex/forensic-watermark-reengineering` em `11d213a913099138c89e00bfd96cec17e6d83ff7` e `main` em `1bf2b8aabd574cf67f0031b478544a20ca66873e`. A `main` é ancestral da branch auditada. Esta etapa usa `codex/forensic-watermark-finalization`; nenhuma alteração foi feita diretamente na `main`.
 
 ## Contrato implementado nesta etapa
