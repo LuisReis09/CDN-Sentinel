@@ -32,13 +32,19 @@ class WatermarkDemoService:
     def run_forensic(self, payload: dict | None = None) -> dict:
         """Run the CDNWM4 issue, embed, ledger resolution and content gate."""
         payload = payload or {}
-        video_id = str(payload.get("video_id") or "bigbuckbunny")
         algorithm = str(payload.get("algorithm") or "qim3")
         if algorithm not in {"qim2", "qim3"}:
             raise ValueError("algorithm deve ser qim2 ou qim3")
-        video = next((item for item in list_video_examples() if item["video_id"] == video_id), None)
+        videos = list_video_examples()
+        dataset_videos = [item for item in videos if item.get("source") == "kishan51/youtube_clipped_videos"]
+        requested_video_id = str(payload.get("video_id") or "")
+        if dataset_videos:
+            video = next((item for item in dataset_videos if item["video_id"] == requested_video_id), dataset_videos[0])
+        else:
+            video = next((item for item in videos if item["video_id"] == (requested_video_id or "bigbuckbunny")), None)
         if video is None:
             raise ValueError("video_id local invalido")
+        video_id = video["video_id"]
         source, _ = get_video_asset(video_id)
         limits = probe_video_limits(source)
         if limits["duration_seconds"] < 3:
