@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from itertools import combinations
 
 import numpy as np
 from PIL import Image
@@ -138,13 +139,49 @@ def _perceptual_block_mask(blocks: np.ndarray) -> np.ndarray:
     return (mean >= 24) & (mean <= 232) & (texture >= 2.5) & (edge_peak <= 110)
 
 
-def _decode_qim3_score_vector(scores: np.ndarray) -> dict:
+def _decode_qim3_score_vector(scores: np.ndarray, *, soft_decode: bool = False) -> dict:
     if len(scores) != QIM3_BITS:
         raise ValueError("QIM3 score vector has wrong length")
     recovered = (scores < 0).astype(np.uint8).tolist()
     expected_sync = marker_bits(SYNC_MARKER, SYNC_BITS)
     sync_correct = sum(int(a == b) for a, b in zip(recovered[:SYNC_BITS], expected_sync))
-    marker_bits_value, corrected, ecc_status = Secded55Codec().decode(recovered[SYNC_BITS:])
+    code_scores = scores[SYNC_BITS:]
+    codec = Secded55Codec()
+    marker_bits_value, corrected, ecc_status = codec.decode(recovered[SYNC_BITS:])
+    soft_margin = None
+    soft_attempts = 0
+    if marker_bits_value is None and soft_decode:
+        # Chase-style decoding: test only the eight least reliable hard
+        # decisions. A candidate must still be a valid SECDED codeword and
+        # remain clearly better than the runner-up. This never relaxes the
+        # synchronization or QIM correlation gates below.
+        hard_code = recovered[SYNC_BITS:]
+        weakest = np.argsort(np.abs(code_scores))[:8].tolist()
+        candidates: dict[tuple[int, ...], tuple[float, list[int], int]] = {}
+        for flips in ((), *((item,) for item in weakest), *combinations(weakest, 2)):
+            trial = list(hard_code)
+            for index in flips:
+                trial[index] ^= 1
+            decoded, decoder_corrections, _status = codec.decode(trial)
+            soft_attempts += 1
+            if decoded is None:
+                continue
+            codeword = codec.encode(decoded)
+            likelihood = float(np.dot(1 - 2 * np.asarray(codeword, dtype=np.int8), code_scores))
+            previous = candidates.get(tuple(codeword))
+            if previous is None or likelihood > previous[0]:
+                candidates[tuple(codeword)] = (likelihood, decoded, len(flips) + decoder_corrections)
+        ranked = sorted(candidates.values(), key=lambda item: item[0], reverse=True)
+        if ranked:
+            best = ranked[0]
+            runner_up = ranked[1][0] if len(ranked) > 1 else float("-inf")
+            soft_margin = best[0] - runner_up if math.isfinite(runner_up) else float("inf")
+            # The margin protects the detector from converting an arbitrary
+            # noisy codeword into a candidate merely because it belongs to
+            # the Hamming code.  0.08 is a likelihood separation, not a
+            # detection-threshold reduction.
+            if soft_margin >= 0.08:
+                marker_bits_value, corrected, ecc_status = best[1], best[2], "SOFT_CORRECTED"
     marker = None
     if marker_bits_value is not None:
         marker = bytes(
@@ -162,6 +199,9 @@ def _decode_qim3_score_vector(scores: np.ndarray) -> dict:
         "confidence": round(strength, 4), "confidence_kind": "uncalibrated-mean-qim-correlation",
         "ecc": "SECDED-Hamming-55-48-v1", "ecc_status": ecc_status,
         "ecc_corrected_bits": corrected, "coded_bits": Secded55Codec.code_bits,
+        "soft_decode": "adopted" if ecc_status == "SOFT_CORRECTED" else ("attempted" if soft_decode else "disabled"),
+        "soft_decode_margin": round(soft_margin, 5) if soft_margin is not None and math.isfinite(soft_margin) else None,
+        "soft_decode_attempts": soft_attempts,
         "scores": scores.tolist(), "supported": True,
     }
 
@@ -205,7 +245,7 @@ def embed_image_qim3(image: Image.Image, token: str, secret: str, step: float = 
     }
 
 
-def detect_image_qim3(image: Image.Image, secret: str, step: float = QIM3_STEP) -> dict:
+def detect_image_qim3(image: Image.Image, secret: str, step: float = QIM3_STEP, *, soft_decode: bool = False) -> dict:
     try:
         canonical, width, height = _canonical(image)
         luma, _mode, _alpha = _luminance(canonical)
@@ -222,7 +262,7 @@ def detect_image_qim3(image: Image.Image, secret: str, step: float = QIM3_STEP) 
         weights = np.where(_perceptual_block_mask(blocks).reshape(-1)[order], 1.0, 0.1)
         slots = np.arange(len(order)) % QIM3_BITS
         scores = np.bincount(slots, weights=correlations * weights, minlength=QIM3_BITS) / np.bincount(slots, weights=weights, minlength=QIM3_BITS)
-        return {**_decode_qim3_score_vector(scores), "canonical_size": [width, height], "step": step, "spatial_repetitions_min": len(order) // QIM3_BITS}
+        return {**_decode_qim3_score_vector(scores, soft_decode=soft_decode), "canonical_size": [width, height], "step": step, "spatial_repetitions_min": len(order) // QIM3_BITS}
     except ValueError as exc:
         return {"status": "INCONCLUSIVE", "marker": None, "reason": str(exc), "supported": False, "confidence": 0.0}
 

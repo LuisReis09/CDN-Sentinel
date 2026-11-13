@@ -5,8 +5,8 @@ import numpy as np
 from PIL import Image
 
 from watermark.ecc import Secded55Codec
-from utils.qim_watermark import detect_image_qim3, embed_image_qim3
-from utils.image_watermark import visual_marker
+from utils.qim_watermark import _decode_qim3_score_vector, detect_image_qim3, embed_image_qim3
+from utils.image_watermark import SYNC_BITS, SYNC_MARKER, marker_bits, visual_marker
 from tools.watermark_perceptual_experiments import _ssim
 
 
@@ -44,6 +44,23 @@ class Secded55Tests(unittest.TestCase):
                 damaged[left] ^= 1
                 damaged[right] ^= 1
                 self.assertEqual(codec.decode(damaged)[2], "UNCORRECTABLE")
+
+    def test_soft_qim3_decoder_recovers_two_low_confidence_channel_errors_without_relaxing_gate(self):
+        token = "CDNWM4.soft-decoder-test"
+        marker = visual_marker(token)
+        bits = marker_bits(SYNC_MARKER, SYNC_BITS) + Secded55Codec().encode(marker_bits(marker))
+        scores = np.asarray([-0.6 if bit else 0.6 for bit in bits], dtype=np.float64)
+        # Two weak sign errors are uncorrectable for the hard SECDED path but
+        # recoverable when their reliabilities identify them as the least
+        # trustworthy observations.
+        for index in (SYNC_BITS + 3, SYNC_BITS + 17):
+            scores[index] *= -0.03
+        baseline = _decode_qim3_score_vector(scores)
+        improved = _decode_qim3_score_vector(scores, soft_decode=True)
+        self.assertEqual(baseline["ecc_status"], "UNCORRECTABLE")
+        self.assertEqual(improved["ecc_status"], "SOFT_CORRECTED")
+        self.assertEqual(improved["marker"], marker)
+        self.assertGreaterEqual(improved["confidence"], 0.15)
 
 
 if __name__ == "__main__":

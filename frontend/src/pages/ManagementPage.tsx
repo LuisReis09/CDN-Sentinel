@@ -211,6 +211,23 @@ export function ManagementPage({
   const initialPrice = scenarioPreviewActive
     ? Number(scenarioInitial.monthly_price_usd ?? state?.monthly_price_per_client_usd ?? 0)
     : state?.monthly_price_per_client_usd ?? 0;
+  const showInitialConditions = !overview.status.initialized || overview.status.lifecycle === "ended";
+  const satisfaction = state?.customer_satisfaction ?? 0;
+  const satisfactionTips = [
+    ...(state && state.latency_p95_ms > 180
+      ? ["Reduza o P95: adicione capacidade, aumente o tier ou use balanceamento híbrido antes de subir o preço."]
+      : []),
+    ...(state && state.error_rate_pct > 0.5
+      ? ["Ataque rejeições e fila: escala horizontal ou vertical diminui erros que derrubam satisfação."]
+      : []),
+    ...(state && state.monthly_price_per_client_usd > 25
+      ? ["O preço acima da referência reduz satisfação e aumenta churn; compense-o com SLA melhor ou revise o preço."]
+      : []),
+    ...(state && state.utilization >= 0.75
+      ? ["A pressão está alta: cache e capacidade reduzem tempo de espera antes que clientes saiam."]
+      : []),
+  ];
+  if (!satisfactionTips.length) satisfactionTips.push("A satisfação está estável. Preserve o SLA e evite elevar preço ou carga sem capacidade correspondente.");
 
   return (
     <main className="page-content management-page">
@@ -282,7 +299,7 @@ export function ManagementPage({
         </span>
       </section>
 
-      <section className="panel management-initial-state">
+      {showInitialConditions && <section className="panel management-initial-state">
         <div className="panel-heading">
           <div>
             <p className="eyebrow">INITIAL CONDITIONS / DIDACTIC WORLD</p>
@@ -303,7 +320,7 @@ export function ManagementPage({
         <p className="management-inline-note">
           A população do jogo evolui por satisfação, reputação, preço, capacidade e cenário; ela é separada dos clientes físicos observados pela orquestração.
         </p>
-      </section>
+      </section>}
 
       <section className="management-kpis">
         <Kpi
@@ -341,6 +358,20 @@ export function ManagementPage({
           detail={`${pressure}% pressão · alvo ${state?.client_population_target ?? 0} clientes`}
           tone={pressure >= 95 ? "red" : pressure >= 75 ? "orange" : "cyan"}
         />
+      </section>
+
+      <section className={`management-satisfaction management-satisfaction--${satisfaction >= 75 ? "good" : satisfaction >= 55 ? "watch" : "risk"}`} aria-label="Satisfação dos clientes">
+        <div>
+          <p className="eyebrow">PRIMARY PLAYER METRIC</p>
+          <h2>Satisfação do cliente: {satisfaction.toFixed(0)}/100</h2>
+          <p>Ela determina reputação, chegada de pagantes e churn. É calculada por latência P95, erros, preço e feedback real das entregas.</p>
+        </div>
+        <div className="management-satisfaction__signals">
+          <span><small>feedback</small><b>{state?.feedback_score ?? 0}/100</b></span>
+          <span><small>P95</small><b>{state?.latency_p95_ms ?? 0} ms</b></span>
+          <span><small>erros</small><b>{state?.error_rate_pct ?? 0}%</b></span>
+        </div>
+        <ul>{satisfactionTips.map((tip) => <li key={tip}>{tip}</li>)}</ul>
       </section>
 
       {state?.alerts.map((alert, index) => (

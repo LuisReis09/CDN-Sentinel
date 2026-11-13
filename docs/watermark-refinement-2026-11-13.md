@@ -9,6 +9,30 @@
 
 As seis amostras reais de Big Buck Bunny geradas no workspace estão relacionadas com hash SHA-256 em [studio-sample-manifest.json](benchmarks/studio-sample-manifest.json). Os MP4/PNG ficam em `data/media/generated/`, ignorados pelo Git; execute o Studio para regenerar amostras após um checkout limpo. A inspeção local confirmou 120 quadros e desvio de timestamp 0 ms entre as cinco variantes de vídeo. A primeira versão do filtro de diferença produzia uma visualização quase preta apesar de uma diferença RGB média de 2,79 níveis; ela foi corrigida e o E2E exige diferença visível.
 
+## Rodada de detector QIM3 — 13/11/2026
+
+Esta rodada usou somente três clipes locais de `kishan51/youtube_clipped_videos` (`tmp008xheyw`, `tmp00up6ls4`, `tmp00ytz800`), pois o dataset estava disponível. Cada clipe foi limitado a 2 s, o controle foi H.264 CRF24/veryfast/yuv420p e o token visual determinístico foi igual entre as alternativas. A matriz inclui clean, H.264 CRF23/28, resize 75%/50%, blur leve, ruído leve, grayscale, crop moderado e resize+blur+reencode. Os JSONs locais reproduzíveis são `data/runtime/qim3-detector-baseline.json`, `qim3-detector-soft.json` e `qim3-step30.json`.
+
+| Alternativa | Inserção | Exatos (clean + 9 ataques) | Blur leve | Resize + blur + reencode | Negativos sem marca | PSNR médio | SSIM janelado médio | Decisão |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| Baseline QIM3 | passo 28 | 14/30 | 0/3 | 0/3 | 0/3 candidatos | 38,569 dB | 0,98591 | manter padrão |
+| ECC soft experimental | passo 28, mesma mídia | 15/30 | 0/3 | 0/3 | 0/3 candidatos | 38,569 dB | 0,98591 | não promover |
+| Passo 30 experimental | passo 30 | 16/30 | 0/3 | 0/3 | 0/3 candidatos | 38,510 dB | 0,98533 | não promover |
+
+O decoder soft aplica uma busca Chase limitada aos oito bits menos confiáveis apenas depois de `UNCORRECTABLE`; sincronismo e gate de correlação 0,15 permanecem iguais. Ele recuperou um H.264 CRF28 adicional, mas não melhorou blur ou resize combinado e criou um candidato não exato em um resize 75%. O passo 30 trouxe dois acertos adicionais fora dos ataques prioritários, mas reduziu PSNR e SSIM em todos os clipes. Logo, nenhuma alternativa foi incorporada ao fluxo padrão: QIM3 passo 28, inserção atual e thresholds atuais permanecem intactos. Isso preserva 48/48 nos clean já aprovados e evita trocar imperceptibilidade ou confiabilidade por um resultado seletivo.
+
+Como controle de falso positivo, 32 clipes sem watermark (índices 32–63 do mesmo dataset, chave independente de calibração e até oito frames por clipe) produziram **0/32 candidatos** tanto no baseline quanto no soft decoder; a maior confiança negativa foi 0,1245, abaixo do gate 0,15. É uma calibração limitada, não uma taxa de produção, e não compensa a ausência de ganho nos ataques prioritários.
+
+Reprodução da comparação:
+
+```powershell
+python tools/forensic_benchmark.py --dataset-root data/datasets/youtube_clipped_videos --max-files 3 --seconds 2 --mode refinement --algorithms qim3 --qim3-step 28 --token-seed detector-ab-20261113 --output data/runtime/qim3-detector-baseline.json
+python tools/forensic_benchmark.py --dataset-root data/datasets/youtube_clipped_videos --max-files 3 --seconds 2 --mode refinement --algorithms qim3 --qim3-step 28 --qim3-soft-decode --token-seed detector-ab-20261113 --output data/runtime/qim3-detector-soft.json
+python tools/forensic_benchmark.py --dataset-root data/datasets/youtube_clipped_videos --max-files 3 --seconds 2 --mode refinement --algorithms qim3 --qim3-step 30 --token-seed detector-ab-20261113 --output data/runtime/qim3-step30.json
+python tools/qim_threshold_calibration.py --dataset-root data/datasets/youtube_clipped_videos --count 32 --offset 32 --algorithm qim3 --qim-step 28 --output data/runtime/qim3-negative-baseline-32.json
+python tools/qim_threshold_calibration.py --dataset-root data/datasets/youtube_clipped_videos --count 32 --offset 32 --algorithm qim3 --qim-step 28 --qim3-soft-decode --output data/runtime/qim3-negative-soft-32.json
+```
+
 ## Protocolo e resultados locais
 
 Foram usados os três clipes da rodada anterior (`tmp008xheyw`, `tmp00up6ls4`, `tmp00ytz800`) e Big Buck Bunny. Cada fonte foi cortada em 2 s, codificada em H.264 CRF24/veryfast/yuv420p; o controle foi recodificado com os mesmos parâmetros. Um mesmo marcador por fonte foi inserido por Adaptive Spread força 24, QIM2 passo 20 e QIM3 passo 28. Qualidade usa até oito quadros contra o controle. **SSIM** agora usa janelas Gaussianas 11×11, σ=1,5, na luminância, faixa 255. O MS-SSIM continua aproximação em três escalas. Extração usa até 24 quadros. Exato significa marcador de 48/48 bits e gate visual `CANDIDATE`. Os JSONs incluem hashes SHA-256, ambiente, tempos, estados, BER bruto do canal QIM e correções ECC. Não houve análise perceptual com participantes.

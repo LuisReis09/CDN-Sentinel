@@ -15,7 +15,10 @@ from utils.latency import propagation_delay_seconds
 class ClientActivityService:
     """Advances one shared simulation tick and produces client session churn."""
 
-    session_transition_probability = 0.2
+    # Keep presence visibly dynamic in the didactic map without changing the
+    # demand model itself. Clients still need an initial delivery before
+    # transitions begin.
+    session_transition_probability = 0.38
 
     def __init__(self, repository: SimulationRepository, stream_service: StreamService, interval_seconds: float = 2.5, on_tick=None) -> None:
         self._repository = repository

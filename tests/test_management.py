@@ -71,6 +71,14 @@ class ManagementSimulationTests(unittest.TestCase):
         self.assertGreater(next_day["paying_clients"], initial["paying_clients"])
         self.assertGreater(next_day["arrivals_today"], 0)
 
+    def test_population_response_is_faster_than_the_scenario_base_rate(self):
+        initial = self.engine.reset("rapid-growth", 11)
+        next_day = self.engine.tick()
+        target = next_day["client_population_target"]
+        observed_move = next_day["paying_clients"] - initial["paying_clients"]
+        base_rate_move = round((target - initial["paying_clients"]) * 0.72)
+        self.assertGreaterEqual(observed_move, base_rate_move)
+
     def test_slo_alert_explains_which_target_was_missed(self):
         self.repository.update_config({"slo_p95_ms": 100.0, "slo_success_rate_pct": 99.0})
         state = self.engine.reset("free", 11)

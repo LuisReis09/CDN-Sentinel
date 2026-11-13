@@ -262,6 +262,7 @@ def detect_video(
     algorithm: str = "adaptive-spread",
     dct_step: float = 10.0,
     qim_step: float | None = None,
+    qim3_soft_decode: bool = False,
 ) -> dict:
     """Sample the whole video and aggregate independent frame evidence.
 
@@ -305,7 +306,10 @@ def detect_video(
                 if algorithm == "dct":
                     raw_evidence = _decode_dct_scores(frame, secret, step=dct_step)
                 elif algorithm in {"qim2", "qim3"}:
-                    raw_evidence = (detect_image_qim3 if algorithm == "qim3" else detect_image_qim)(frame, secret, step=qim_step)
+                    raw_evidence = (
+                        detect_image_qim3(frame, secret, step=qim_step, soft_decode=qim3_soft_decode)
+                        if algorithm == "qim3" else detect_image_qim(frame, secret, step=qim_step)
+                    )
                     evidences.append({key: value for key, value in raw_evidence.items() if key != "scores"})
                     if raw_evidence.get("supported"):
                         score_vectors.append(raw_evidence["scores"])
@@ -342,7 +346,7 @@ def detect_video(
         averaged_scores = np.average(np.asarray(score_vectors, dtype=np.float64), axis=0, weights=weights)
         aggregate = (
             _decode_qim_score_vector(averaged_scores) if algorithm == "qim2" else
-            _decode_qim3_score_vector(averaged_scores) if algorithm == "qim3" else
+            _decode_qim3_score_vector(averaged_scores, soft_decode=qim3_soft_decode) if algorithm == "qim3" else
             classify_image_evidence(_decode_score_vector(averaged_scores, aggregate_layout))
         )
         # Compression can corrupt different coded bits in different frames,
@@ -382,6 +386,7 @@ def detect_video(
             "detection_width": detection_width,
             "detection_height": detection_height,
             "temporal_sampling": "uniform-over-full-video",
+            "qim3_soft_decode": qim3_soft_decode if algorithm == "qim3" else None,
             "sampled_frame_indices": indices,
             "frames": evidences,
         }

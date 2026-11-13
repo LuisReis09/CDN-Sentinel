@@ -294,7 +294,10 @@ class ManagementEngine:
             target = float(base_population)
         previous_paying_clients = self._state.paying_clients
         self._state.client_population_target = round(target, 2)
-        response_rate = max(0.2, min(0.95, float(scenario.get("population_response", 0.72))))
+        # Make arrivals and departures readable during the didactic loop.
+        # The target remains driven by price, quality, reputation and capacity;
+        # this only shortens the population's response lag.
+        response_rate = max(0.3, min(0.98, float(scenario.get("population_response", 0.72)) * 1.15))
         next_paying_clients = max(0, round(previous_paying_clients + (target - previous_paying_clients) * response_rate))
         self._state.paying_clients = next_paying_clients
         self._state.arrivals_today = max(0, next_paying_clients - previous_paying_clients)

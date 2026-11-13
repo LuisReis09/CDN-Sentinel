@@ -103,7 +103,9 @@ class WatermarkE2EForensicsTests(unittest.TestCase):
                 self.assertEqual(scan["detected"][0]["forensic_source"], "visual-media")
                 self.assertEqual(scan["detected"][0]["decision"], "PENDING_REVIEW")
                 self.assertNotEqual(scan["detected"][0]["claim"]["client_id"], innocent_id)
-                self.assertEqual(controller.repository.blacklist_values(), [])
+                self.assertEqual(scan["detected"][0]["blacklist"]["client_id"], client_id)
+                self.assertEqual(len(controller.repository.blacklist_values()), 1)
+                self.assertEqual(controller.repository.blacklist_values()[0].client_id, client_id)
 
                 with leaked.open("rb") as file:
                     uploaded = client.post("/api/monitor/investigations", data={"file": (file, "leaked.mp4")}, content_type="multipart/form-data", headers=operator_headers)
@@ -119,7 +121,8 @@ class WatermarkE2EForensicsTests(unittest.TestCase):
                 )
                 self.assertEqual(reviewed.status_code, 200, reviewed.get_json())
                 self.assertEqual(reviewed.get_json()["administrative_action"], "NO_AUTOMATIC_BLACKLIST")
-                self.assertEqual(controller.repository.blacklist_values(), [])
+                self.assertEqual(len(controller.repository.blacklist_values()), 1)
+                self.assertEqual(controller.repository.blacklist_values()[0].client_id, client_id)
                 repeated = client.post(
                     f"/api/monitor/investigations/{investigation_id}/review",
                     json={"decision": "ACCEPT", "reviewer": "test-operator"},

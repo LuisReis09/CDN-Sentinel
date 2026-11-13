@@ -110,9 +110,12 @@ def _attack(source: Path, destination: Path, filter_expr: str | None, codec: str
     _command(command, timeout=180)
 
 
-def _detect(path: Path, secret: str, token: str, algorithm: str, step: float) -> dict:
+def _detect(path: Path, secret: str, token: str, algorithm: str, step: float, *, qim3_soft_decode: bool = False) -> dict:
     started = time.perf_counter()
-    evidence = detect_video(path, secret, algorithm=algorithm, dct_step=step, qim_step=step)
+    evidence = detect_video(
+        path, secret, algorithm=algorithm, dct_step=step, qim_step=step,
+        qim3_soft_decode=qim3_soft_decode,
+    )
     expected = visual_marker(token)
     recovered = evidence.get("marker")
     exact = evidence.get("status") == "CANDIDATE" and recovered == expected
@@ -133,6 +136,7 @@ def _detect(path: Path, secret: str, token: str, algorithm: str, step: float) ->
         "raw_channel_bit_errors_known_truth": raw_errors, "raw_channel_bits": raw_total,
         "raw_channel_ber_known_truth": round(raw_errors / raw_total, 4) if raw_total else None,
         "ecc_status": evidence.get("ecc_status"), "ecc_corrected_bits": evidence.get("ecc_corrected_bits", 0),
+        "soft_decode": evidence.get("qim3_soft_decode") if algorithm == "qim3" else None,
         "confidence_uncalibrated": evidence.get("confidence"),
         "frames_sampled": evidence.get("frames_sampled"), "elapsed_seconds": round(time.perf_counter() - started, 3),
     }
@@ -143,7 +147,7 @@ def _split(path: Path) -> str:
     return "development" if bucket < 6 else ("calibration" if bucket < 8 else "final")
 
 
-def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms: tuple[str, ...] = ("adaptive-spread", "dct", "qim2", "qim3"), artifact_root: Path | None = None, qim_step: float = 20.0, qim3_step: float = 28.0) -> dict:
+def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms: tuple[str, ...] = ("adaptive-spread", "dct", "qim2", "qim3"), artifact_root: Path | None = None, qim_step: float = 20.0, qim3_step: float = 28.0, qim3_soft_decode: bool = False, token_seed: str | None = None) -> dict:
     if not inputs:
         raise ValueError("nenhum vídeo disponível")
     report = {
@@ -154,7 +158,7 @@ def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms
             "git_commit": _version(["git", "rev-parse", "HEAD"]),
             "git_dirty": _git_dirty(),
         },
-            "protocol": {"mode": mode, "clip_seconds": seconds, "algorithms": algorithms, "qim2_step": qim_step, "qim3_step": qim3_step, "control": "same H.264 CRF24 veryfast yuv420p", "human_review": "not performed"},
+            "protocol": {"mode": mode, "clip_seconds": seconds, "algorithms": algorithms, "qim2_step": qim_step, "qim3_step": qim3_step, "qim3_soft_decode": qim3_soft_decode, "token_seed": token_seed, "control": "same H.264 CRF24 veryfast yuv420p", "human_review": "not performed"},
         "limitations": ["SSIM is windowed Gaussian 11x11 on luminance; MS-SSIM is still a three-scale approximation", "VMAF and LPIPS require separate optional tooling", "neural checkpoints are not evaluated by this script", "visual detector confidence is not statistically calibrated"],
         "videos": [],
     }
@@ -176,7 +180,10 @@ def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms
             with source.open("rb") as stream:
                 for block in iter(lambda: stream.read(1024 * 1024), b""):
                     digest.update(block)
-            token, _claim = service.issue("benchmark-client", "benchmark-edge", len(report["videos"]), source.stem)
+            token = (
+                f"CDNWM4.benchmark.{token_seed}.{hashlib.sha256(source.as_posix().encode()).hexdigest()[:16]}"
+                if token_seed else service.issue("benchmark-client", "benchmark-edge", len(report["videos"]), source.stem)[0]
+            )
             entry = {"source": str(source), "sha256": digest.hexdigest(), "dataset_split": _split(source), "clip_probe": probe_video_limits(clip), "expected_marker": visual_marker(token), "algorithms": []}
             if artifact_root:
                 target = artifact_root / f"video-{len(report['videos'])}"
@@ -199,8 +206,8 @@ def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms
                     "algorithm": algorithm, "strength_or_step": step,
                     "quality_vs_control": quality,
                     "embed_seconds": round(embed_seconds, 3), "marked_size_bytes": marked.stat().st_size,
-                    "clean_detection": _detect(marked, service.secret_key, token, algorithm, step),
-                    "negative_detection": _detect(clip, service.secret_key, token, algorithm, step),
+                    "clean_detection": _detect(marked, service.secret_key, token, algorithm, step, qim3_soft_decode=qim3_soft_decode),
+                    "negative_detection": _detect(clip, service.secret_key, token, algorithm, step, qim3_soft_decode=qim3_soft_decode),
                     "attacks": [],
                 }
                 for name, filter_expr, codec, crf, severity in _attacks(mode):
@@ -210,7 +217,7 @@ def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms
                         _attack(marked, attacked, filter_expr, codec, crf)
                         if artifact_root and name in {"h264_crf23", "resize_75", "blur_light"}:
                             shutil.copy2(attacked, target / f"{algorithm}-{name}.mkv")
-                        item["attacks"].append({"name": name, "severity": severity, "codec": codec, "crf": crf, "encode_seconds": round(time.perf_counter() - start, 3), **_detect(attacked, service.secret_key, token, algorithm, step)})
+                        item["attacks"].append({"name": name, "severity": severity, "codec": codec, "crf": crf, "encode_seconds": round(time.perf_counter() - start, 3), **_detect(attacked, service.secret_key, token, algorithm, step, qim3_soft_decode=qim3_soft_decode)})
                     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError) as exc:
                         item["attacks"].append({"name": name, "severity": severity, "status": "UNAVAILABLE", "error": str(exc)[-300:]})
                 entry["algorithms"].append(item)
@@ -237,13 +244,15 @@ if __name__ == "__main__":
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--qim-step", type=float, default=20.0)
     parser.add_argument("--qim3-step", type=float, default=28.0)
+    parser.add_argument("--qim3-soft-decode", action="store_true", help="enable the experimental confidence-aware SECDED decoder")
+    parser.add_argument("--token-seed", help="deterministic visual-token seed for exact A/B detector comparisons")
     args = parser.parse_args()
     sources = list(args.input)
     if args.dataset_root:
         sources.extend(sorted(path for path in args.dataset_root.rglob("*") if path.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"})[:args.max_files])
     if not sources:
         sources = [Path("data/media/bigbuckbunny.mp4")]
-    report = run(sources, mode=args.mode, seconds=args.seconds, algorithms=tuple(args.algorithms), artifact_root=args.artifact_dir, qim_step=args.qim_step, qim3_step=args.qim3_step)
+    report = run(sources, mode=args.mode, seconds=args.seconds, algorithms=tuple(args.algorithms), artifact_root=args.artifact_dir, qim_step=args.qim_step, qim3_step=args.qim3_step, qim3_soft_decode=args.qim3_soft_decode, token_seed=args.token_seed)
     serialized = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

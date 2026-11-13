@@ -192,6 +192,22 @@ class MonitorService:
                         continue
                     claim = investigation["claim"]
                     leak["forensic_source"] = "visual-media"
+                    # In the simulator, an exact visual marker, a valid
+                    # CDNWM4 claim and a content match form a confirmed leak.
+                    # Only this fully authenticated path can affect the
+                    # blacklist; candidates and inconclusive media remain
+                    # pending for reanalysis.
+                    proof_token = self._watermark_service.registered_token_for_marker(
+                        investigation["evidence"].get("marker")
+                    )
+                    if not proof_token:
+                        raise ValueError("claim forense confirmado sem token registrado para blacklist")
+                    blacklist_entry = self._blacklist_service.report(
+                        proof_token,
+                        reason="vazamento autenticado por QIM3/CDNWM4 e correspondência de conteúdo",
+                        detected_by_server_id=server_id,
+                        trace_id=str(leak.get("trace_id") or ""),
+                    )
                 else:
                     raise ValueError("vazamento sem mídia não permite atribuição forense")
                 leak["processed"] = True
@@ -201,7 +217,7 @@ class MonitorService:
                 leak["review_status"] = "PENDING_REVIEW"
                 leak["detected_at"] = time.time()
                 leak["detected_by_server_id"] = server_id
-                detected.append({"leak_id": leak["leak_id"], "monitor_server_id": server_id, "claim": claim, "investigation_id": investigation["investigation_id"], "decision": "PENDING_REVIEW", "blacklist": None, "forensic_source": leak["forensic_source"]})
+                detected.append({"leak_id": leak["leak_id"], "monitor_server_id": server_id, "claim": claim, "investigation_id": investigation["investigation_id"], "decision": "PENDING_REVIEW", "blacklist": blacklist_entry.to_dict(), "forensic_source": leak["forensic_source"]})
             except (ValueError, KeyError, TypeError, OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
                 leak["processed"] = False
                 leak["attributed"] = False
