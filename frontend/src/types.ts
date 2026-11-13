@@ -316,7 +316,7 @@ export interface SimulationHistory {
 
 export interface LeakRecord {
   leak_id: string;
-  client_id: string;
+  client_id?: string;
   server_id: string;
   origin_server_id?: string;
   platform: string;
@@ -325,18 +325,25 @@ export interface LeakRecord {
   external_url?: string;
   created_at: number;
   processed: boolean;
+  analyzed?: boolean;
+  attributed?: boolean;
+  needs_reanalysis?: boolean;
+  analysis_count?: number;
+  next_analysis_at?: number;
+  review_status?: string;
   detected_at?: number;
   detected_by_server_id?: string;
   error?: string;
   trace_id?: string;
   request_id?: string;
+  forensic_status?: string;
+  investigation_id?: string;
 }
 
 export interface VideoChunk {
   chunk_id: string;
   content_type: string;
   payload: string;
-  watermark_token: string;
   server_id: string;
   client_id: string;
   issued_at: number;
@@ -348,6 +355,22 @@ export interface VideoChunk {
   end_to_end_ms?: number;
   routing_candidates?: Array<Record<string, unknown>>;
   routing_reason?: string;
+}
+
+export interface ForensicInvestigation {
+  investigation_id: string;
+  media_sha256: string;
+  forensic_status: string;
+  decision: "NOT_FOUND" | "INCONCLUSIVE" | "CANDIDATE" | "PENDING_REVIEW" | "REVIEWED" | "ERROR";
+  attribution: "AUTHENTICATED_SESSION" | "NONE";
+  content_id?: string | null;
+  session_id?: string | null;
+  watermark_id?: string | null;
+  claim?: Record<string, unknown> | null;
+  content_match?: { status: string; matched_frames?: number; fraction?: number } | null;
+  evidence: Record<string, unknown>;
+  administrative_action: string;
+  blacklist_changed: boolean;
 }
 
 export interface WatermarkDemo {
@@ -366,12 +389,14 @@ export interface WatermarkDemo {
     mime: string;
     resolution: string;
     size_bytes: number;
+    fps?: number;
     source: string;
     visual_transform: string;
   };
   chunk_number: number;
   original_payload_base64: string;
   watermarked_payload_base64: string;
+  payload_is_preview?: boolean;
   watermark_token: string;
   noise_hex: string;
   noise_source: string;
@@ -393,6 +418,21 @@ export interface WatermarkDemo {
   extracted_token: string;
   claim: Record<string, unknown>;
   round_trip_verified: boolean;
+  verification?: {
+    transport_token: string;
+    visual_embedded: boolean;
+    visual_detection?: string;
+    visual_authentication?: string;
+    forensic_status: string;
+  };
+  visual_detection?: {
+    status?: string;
+    confidence?: number;
+    frame_support?: number;
+    frames_sampled?: number;
+    authentication?: string;
+    reason?: string;
+  };
   payload_sha256: string;
   generated_at: number;
   key_fingerprint: string;
@@ -425,6 +465,24 @@ export interface WatermarkDemo {
     confidence_method?: string;
     survives: boolean;
   }>;
+}
+
+export interface WatermarkDetection {
+  status: "VALID" | "NOT_FOUND" | "INCONCLUSIVE" | "INVALID";
+  marker?: string | null;
+  confidence?: number;
+  sync_confidence?: number;
+  repetition_consistency?: number;
+  frame_support?: number;
+  frames_sampled?: number;
+  reason?: string;
+  error?: string;
+  claim?: Record<string, unknown>;
+  client_id?: string;
+  server_id?: string;
+  content_id?: string;
+  visual_hamming_distance?: number;
+  verification?: string;
 }
 
 export interface ManagementActionDefinition {
@@ -520,3 +578,38 @@ export interface ManagementState {
   feedback_latency_avg_ms: number;
 }
 
+export interface ForensicStudio {
+  pipeline: "CDNWM4";
+  algorithm: "qim2" | "qim3";
+  algorithm_id: string;
+  fingerprint_scheme: string;
+  video_label: string;
+  claim: Record<string, string | number>;
+  issued_marker: string;
+  visual_detection: {
+    status: string;
+    marker?: string;
+    confidence?: number;
+    ecc_status?: string;
+    ecc_corrected_bits?: number;
+    frames_sampled?: number;
+    forensic_status?: string;
+  };
+  ledger_status: string;
+  investigation: {
+    decision: string;
+    attribution: string;
+    content_match?: { status: string; matched_frames?: number };
+    administrative_action: string;
+  };
+  quality_vs_control: {
+    psnr_db: number;
+    ssim_windowed: number;
+    ms_ssim_3scale_approx: number;
+    region_mean_abs_luma_max: number;
+  };
+  robustness_checks: Array<{ filter: string; filter_id: string; status: string; survives: boolean; bits_correct: number; bits_total: number }>;
+  video_variants: Record<"original" | "control" | "watermarked" | "residual" | "difference" | "detection_map", string>;
+  video_alignment: { aligned: boolean; probes: Record<string, { duration_seconds: number; fps: number }> };
+  diagnostics: Record<string, string>;
+}

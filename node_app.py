@@ -1,24 +1,31 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import os
 import random
+import subprocess
 import threading
 import time
+import uuid
+from pathlib import Path
 from typing import Any
 
 import requests
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 
 from repositories.in_memory import NodeRepository
 from services.capacity_service import profile_for_tier, service_metrics, queue_wait_ms
-from services.content_provider import ContentProvider, HybridContentProvider, default_content_id
+from services.content_provider import ContentProvider, DatasetContentProvider, HybridContentProvider, DATASET_CONTENT_ID, default_content_id
 from services.watermark_service import WatermarkService
 from utils.geo import haversine_km
 from utils.latency import sleep_for_distance
 from utils.crypto import decrypt_payload, encrypt_payload, is_encrypted_payload
 from utils.video import encode_payload
 from utils.protocol import signed_headers, verify_headers
+from utils.video_watermark import VIDEO_STRENGTH, embed_video, probe_video_limits
+from utils.qim_watermark import QIM_STEP, QIM3_STEP
 
 
 class CapacityRejected(RuntimeError):
@@ -120,7 +127,64 @@ class CDNNode:
             **metrics,
         }
 
-    def stream(self, client_id: str, chunk_number: int, video_id: str | None = None) -> dict:
+    def _watermarked_media(self, video_id: str, chunk_number: int, token: str, content: bytes, content_type: str, algorithm: str = "adaptive-spread") -> bytes:
+        """Return a playable media payload with the visual marker in its frames.
+
+        The token is deliberately kept as response metadata. It is never
+        prepended to the MP4 bytes, because that would corrupt the container
+        and would not constitute a visual watermark. A disk cache prevents
+        concurrent/repeated requests from re-encoding the same asset.
+        """
+        if not content_type.startswith("video/"):
+            return content
+        resolver = getattr(self.content_provider, "resolve_asset", None)
+        source_path: Path | None = None
+        if resolver is not None:
+            try:
+                source_path, _resolved_type = resolver(video_id, chunk_number)
+            except (FileNotFoundError, KeyError, ValueError, OSError):
+                source_path = None
+        temporary_source: Path | None = None
+        try:
+            if source_path is None or not source_path.is_file():
+                runtime_root = Path(os.getenv("CDN_WATERMARK_CACHE_ROOT", "data/runtime/watermarked"))
+                runtime_root.mkdir(parents=True, exist_ok=True)
+                temporary_source = runtime_root / f"source-{hashlib.sha256(content).hexdigest()[:24]}.mp4"
+                if not temporary_source.exists():
+                    temporary_source.write_bytes(content)
+                source_path = temporary_source
+            source_stat = source_path.stat()
+            cache_root = Path(os.getenv("CDN_WATERMARK_CACHE_ROOT", "data/runtime/watermarked"))
+            cache_root.mkdir(parents=True, exist_ok=True)
+            cache_key = hashlib.sha256(
+                f"CDNWM6:{source_path.resolve()}:{source_stat.st_mtime_ns}:{source_stat.st_size}:"
+                f"{hashlib.sha256(self.secret_key.encode('utf-8')).hexdigest()}:{token}:"
+                f"{QIM3_STEP if algorithm == 'qim3' else QIM_STEP if algorithm == 'qim2' else VIDEO_STRENGTH}:{algorithm}".encode("utf-8")
+            ).hexdigest()[:32]
+            destination = cache_root / f"{cache_key}.mp4"
+            if not destination.is_file() or destination.stat().st_size == 0:
+                partial = destination.with_suffix(".part.mp4")
+                try:
+                    embed_video(
+                        source_path,
+                        partial,
+                        token,
+                        self.watermark_service.visual_secret_for_token(token),
+                        strength=QIM3_STEP if algorithm == "qim3" else QIM_STEP if algorithm == "qim2" else VIDEO_STRENGTH,
+                        adaptive=True,
+                        algorithm=algorithm,
+                    )
+                    partial.replace(destination)
+                finally:
+                    if partial.exists():
+                        partial.unlink()
+            return destination.read_bytes()
+        finally:
+            # The fallback source is content-addressed and can be reused; it
+            # is intentionally retained as a bounded runtime cache.
+            del temporary_source
+
+    def stream(self, client_id: str, chunk_number: int, video_id: str | None = None, viewer_session_id: str | None = None) -> dict:
         video_id = video_id or default_content_id()
         reservation = None
         failed = False
@@ -142,11 +206,38 @@ class CDNNode:
                 time.sleep(reservation["queue_wait_ms"] / 1000.0)
             if self.fault["extra_latency_ms"]:
                 time.sleep(self.fault["extra_latency_ms"] / 1000.0)
-            token, claim = self.watermark_service.issue(client_id, self.server_id, chunk_number)
             content, content_type = self.content_provider.get_chunk(video_id, chunk_number)
-            watermarked = token.encode("utf-8") + b"\n" + content
+            claim_content_id = video_id
+            algorithm = "adaptive-spread"
+            resolver = getattr(self.content_provider, "resolve_asset", None)
+            if resolver is not None:
+                try:
+                    source_path, _source_type = resolver(video_id, chunk_number)
+                    limits = probe_video_limits(source_path)
+                    if limits["width"] >= 640 and limits["height"] >= 360:
+                        algorithm = "qim3"
+                    if video_id == DATASET_CONTENT_ID:
+                        dataset = DatasetContentProvider()
+                        claim_content_id = dataset._content_id(source_path.resolve())
+                except (OSError, ValueError, FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                    pass
+            if os.getenv("CDN_FORENSIC_CLAIMS", "1").strip().lower() in {"1", "true", "yes", "on"}:
+                token, claim = self.watermark_service.issue_forensic_claim(
+                    client_id=client_id,
+                    server_id=self.server_id,
+                    content_id=claim_content_id,
+                    session_id=viewer_session_id or f"sess-{uuid.uuid4().hex}",
+                    segment_range=f"{chunk_number}-{chunk_number}",
+                    algorithm_id="dct-qim-v3" if algorithm == "qim3" else "dct-qim-v2" if algorithm == "qim2" else "adaptive-spread-v5",
+                )
+                chunk_id = claim.segment_range
+            else:
+                token, claim = self.watermark_service.issue(client_id, self.server_id, chunk_number, claim_content_id)
+                chunk_id = claim.chunk_id
+                algorithm = "adaptive-spread"
+            watermarked = self._watermarked_media(video_id, chunk_number, token, content, content_type, algorithm)
             result = {
-                "chunk_id": claim.chunk_id,
+                "chunk_id": chunk_id,
                 "content_type": content_type,
                 "payload": encode_payload(watermarked),
                 "watermark_token": token,
@@ -307,6 +398,8 @@ def create_node_app(node: CDNNode) -> Flask:
         client_id = request.args.get("client_id", "")
         try:
             auth_payload = {"client_id": client_id, "chunk": int(request.args.get("chunk", "0")), "video_id": request.args.get("video_id") or default_content_id()}
+            if request.args.get("viewer_session_id"):
+                auth_payload["viewer_session_id"] = request.args["viewer_session_id"]
         except ValueError:
             return jsonify({"error": "chunk deve ser inteiro"}), 400
         denied = authenticate(auth_payload)
@@ -318,7 +411,40 @@ def create_node_app(node: CDNNode) -> Flask:
         if not client_id:
             return jsonify({"error": "client_id é obrigatório"}), 400
         try:
-            return jsonify(node.stream(client_id, chunk_number, auth_payload["video_id"]))
+            return jsonify(node.stream(client_id, chunk_number, auth_payload["video_id"], auth_payload.get("viewer_session_id")))
+        except PermissionError as exc:
+            return jsonify({"error": str(exc)}), 403
+        except CapacityRejected as exc:
+            return jsonify({"error": str(exc)}), 429
+        except (FileNotFoundError, RuntimeError) as exc:
+            return jsonify({"error": str(exc)}), 503
+
+    @app.get("/internal/media")
+    def internal_media() -> Any:
+        """Deliver the same marked asset as valid binary media, not JSON text."""
+        client_id = request.args.get("client_id", "")
+        try:
+            auth_payload = {
+                "client_id": client_id,
+                "chunk": int(request.args.get("chunk", "0")),
+                "video_id": request.args.get("video_id") or default_content_id(),
+            }
+            if request.args.get("viewer_session_id"):
+                auth_payload["viewer_session_id"] = request.args["viewer_session_id"]
+        except ValueError:
+            return jsonify({"error": "chunk deve ser inteiro"}), 400
+        denied = authenticate(auth_payload)
+        if denied:
+            return denied
+        if auth_payload["chunk"] < 0 or not client_id:
+            return jsonify({"error": "client_id e chunk válidos são obrigatórios"}), 400
+        try:
+            result = node.stream(client_id, auth_payload["chunk"], auth_payload["video_id"], auth_payload.get("viewer_session_id"))
+            raw = base64.b64decode(result["payload"], validate=True)
+            response = Response(raw, mimetype=result["content_type"])
+            response.headers["X-CDN-Server"] = result["server_id"]
+            response.headers["X-Queue-Wait-Ms"] = str(result.get("queue_wait_ms", 0.0))
+            return response
         except PermissionError as exc:
             return jsonify({"error": str(exc)}), 403
         except CapacityRejected as exc:

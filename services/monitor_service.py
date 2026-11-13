@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import threading
+import subprocess
 import time
+from pathlib import Path
 from typing import Any, Dict, List
 
 from repositories.in_memory import SimulationRepository
 from services.blacklist_service import BlacklistService
+from services.forensic_investigation_service import ForensicInvestigationService
 from services.watermark_service import WatermarkService
-from utils.video import extract_watermark_token
 
 
 class MonitorService:
@@ -17,6 +19,7 @@ class MonitorService:
         self._repository = repository
         self._watermark_service = watermark_service
         self._blacklist_service = blacklist_service
+        self._investigations = ForensicInvestigationService(watermark_service)
         self._tick_interval_seconds = 2.5
         self._threads: Dict[str, threading.Thread] = {}
         self._stop_events: Dict[str, threading.Event] = {}
@@ -100,6 +103,7 @@ class MonitorService:
         for server_id in server_ids:
             result = self._last_results.get(server_id, {})
             pending = sum(1 for leak in state.leaks if not leak.get("processed") and leak.get("server_id") == server_id)
+            needs_reanalysis = sum(1 for leak in state.leaks if leak.get("needs_reanalysis") and leak.get("server_id") == server_id)
             per_server[server_id] = {
                 "server_id": server_id,
                 "automatic": self._threads.get(server_id) is not None and self._threads[server_id].is_alive(),
@@ -109,6 +113,7 @@ class MonitorService:
                 "last_detected": len(result.get("detected", [])),
                 "last_rejected": len(result.get("rejected", [])),
                 "pending_leaks": pending,
+                "needs_reanalysis": needs_reanalysis,
             }
         result_times = [item["last_scan_at"] for item in per_server.values() if item["last_scan_at"]]
         return {
@@ -119,6 +124,7 @@ class MonitorService:
             "last_detected": sum(item["last_detected"] for item in per_server.values()),
             "last_rejected": sum(item["last_rejected"] for item in per_server.values()),
             "pending_leaks": sum(item["pending_leaks"] for item in per_server.values()),
+            "needs_reanalysis": sum(item["needs_reanalysis"] for item in per_server.values()),
             "per_server": per_server,
         }
 
@@ -151,18 +157,54 @@ class MonitorService:
         state = self._repository.state_ref()
         detected: List[dict] = []
         rejected: List[dict] = []
-        candidates = [leak for leak in list(state.leaks) if not leak.get("processed") and leak.get("server_id") == server_id]
+        now = time.time()
+        candidates = [
+            leak for leak in list(state.leaks)
+            if not leak.get("processed") and leak.get("server_id") == server_id
+            and (not automatic or float(leak.get("next_analysis_at", 0)) <= now)
+        ]
         for leak in candidates:
+            leak["analyzed"] = True
+            leak["analysis_count"] = int(leak.get("analysis_count", 0)) + 1
+            leak["last_analyzed_at"] = time.time()
             try:
-                token = extract_watermark_token(leak.get("content", ""))
-                claim = self._watermark_service.verify(token)
-                entry = self._blacklist_service.report(token, detected_by_server_id=server_id, trace_id=leak.get("trace_id"))
+                media_path = leak.get("media_path")
+                if media_path:
+                    investigation = self._investigations.investigate_video(Path(media_path), source="simulated-platform")
+                    leak["forensic_status"] = investigation["forensic_status"]
+                    leak["forensic_evidence"] = investigation["evidence"]
+                    leak["investigation_id"] = investigation["investigation_id"]
+                    leak["investigated_media_sha256"] = investigation["media_sha256"]
+                    if investigation["decision"] != "PENDING_REVIEW":
+                        leak["processed"] = False
+                        leak["attributed"] = False
+                        leak["needs_reanalysis"] = True
+                        leak["next_analysis_at"] = time.time() + 300.0
+                        leak["detected_by_server_id"] = server_id
+                        rejected.append({
+                            "leak_id": leak.get("leak_id"),
+                            "monitor_server_id": server_id,
+                            "status": investigation["forensic_status"],
+                            "reason": investigation["evidence"].get("reason", "evidência visual não autenticada; nenhuma ação automática"),
+                        })
+                        continue
+                    claim = investigation["claim"]
+                    leak["forensic_source"] = "visual-media"
+                else:
+                    raise ValueError("vazamento sem mídia não permite atribuição forense")
                 leak["processed"] = True
+                leak["attributed"] = True
+                leak["attributed_client_id"] = claim["client_id"]
+                leak["needs_reanalysis"] = False
+                leak["review_status"] = "PENDING_REVIEW"
                 leak["detected_at"] = time.time()
                 leak["detected_by_server_id"] = server_id
-                detected.append({"leak_id": leak["leak_id"], "monitor_server_id": server_id, "claim": claim.to_dict(), "blacklist": entry.to_dict()})
-            except (ValueError, KeyError, TypeError) as exc:
-                leak["processed"] = True
+                detected.append({"leak_id": leak["leak_id"], "monitor_server_id": server_id, "claim": claim, "investigation_id": investigation["investigation_id"], "decision": "PENDING_REVIEW", "blacklist": None, "forensic_source": leak["forensic_source"]})
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
+                leak["processed"] = False
+                leak["attributed"] = False
+                leak["needs_reanalysis"] = True
+                leak["next_analysis_at"] = time.time() + 300.0
                 leak["error"] = str(exc)
                 leak["detected_by_server_id"] = server_id
                 rejected.append({"leak_id": leak.get("leak_id"), "monitor_server_id": server_id, "error": str(exc)})

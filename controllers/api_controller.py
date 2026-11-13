@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import time
 from typing import Any
 
@@ -24,6 +25,8 @@ class ApiController:
         watermark_service,
         watermark_demo_service: WatermarkDemoService,
         client_activity_service: ClientActivityService,
+        forensic_investigation_service=None,
+        hls_ab_service=None,
         management_engine=None,
     ) -> None:
         self.repository = repository
@@ -34,6 +37,8 @@ class ApiController:
         self.watermark_service = watermark_service
         self.watermark_demo_service = watermark_demo_service
         self.client_activity_service = client_activity_service
+        self.forensic_investigation_service = forensic_investigation_service
+        self.hls_ab_service = hls_ab_service
         self.management_engine = management_engine
 
     def initialize(self, payload: dict) -> dict:
@@ -156,7 +161,7 @@ class ApiController:
     def servers(self) -> list[dict]:
         return self.simulation_controller.refresh_servers()
 
-    def stream(self, client_id: str, chunk_number: int, request_id: str | None = None) -> dict:
+    def stream(self, client_id: str, chunk_number: int, request_id: str | None = None, viewer_session_id: str | None = None) -> dict:
         # This is a short mutation boundary: stream accounting and failover
         # status must be committed to the repository, unlike public snapshots.
         state = self.repository.state_ref()
@@ -165,7 +170,16 @@ class ApiController:
         client = state.clients.get(client_id)
         if client is None:
             raise KeyError(f"Cliente {client_id} não encontrado")
-        return self.stream_service.stream(client, state, chunk_number, request_id).to_dict()
+        return self.stream_service.stream(client, state, chunk_number, request_id, viewer_session_id=viewer_session_id).to_dict()
+
+    def stream_media(self, client_id: str, chunk_number: int, request_id: str | None = None, viewer_session_id: str | None = None) -> tuple[bytes, dict]:
+        """Return the playable bytes while retaining the JSON route for compatibility."""
+        result = self.stream(client_id, chunk_number, request_id, viewer_session_id)
+        try:
+            media = base64.b64decode(result["payload"], validate=True)
+        except (KeyError, ValueError) as exc:
+            raise RuntimeError("payload de mídia watermarkado inválido") from exc
+        return media, result
 
     def reset_metrics(self) -> dict:
         return self.simulation_controller.reset_metrics()
@@ -192,11 +206,17 @@ class ApiController:
         return [client.to_dict() for client in self.repository.client_sample(2_000)]
 
     def leaks(self) -> list[dict]:
-        return list(self.repository.snapshot().leaks)
+        return self.leak_summaries()
 
     def leak_summaries(self) -> list[dict]:
-        fields = ("leak_id", "client_id", "server_id", "origin_server_id", "platform", "platform_id", "platform_kind", "external_url", "created_at", "processed", "detected_at", "detected_by_server_id", "trace_id", "request_id", "error")
-        return [{key: leak.get(key) for key in fields if key in leak} for leak in self.repository.snapshot().leaks]
+        fields = ("leak_id", "server_id", "origin_server_id", "platform", "platform_id", "platform_kind", "external_url", "created_at", "processed", "analyzed", "attributed", "needs_reanalysis", "analysis_count", "last_analyzed_at", "next_analysis_at", "review_status", "detected_at", "detected_by_server_id", "trace_id", "request_id", "error", "forensic_status", "forensic_source", "media_sha256", "investigated_media_sha256")
+        summaries = []
+        for leak in self.repository.snapshot().leaks:
+            summary = {key: leak.get(key) for key in fields if key in leak}
+            if leak.get("attributed") and leak.get("attributed_client_id"):
+                summary["client_id"] = leak["attributed_client_id"]
+            summaries.append(summary)
+        return summaries
 
     def events(self) -> list[dict]:
         return list(self.repository.snapshot().events)
@@ -242,7 +262,44 @@ class ApiController:
         })
         return claim
 
+    def detect_watermark_image(self, image) -> dict:
+        return self.watermark_service.detect_image(image)
+
+    def detect_watermark_video(self, path) -> dict:
+        return self.watermark_service.detect_video(path)
+
     def watermark_demo(self, payload: dict) -> dict:
         return self.watermark_demo_service.run(payload)
+
+    def watermark_forensic_demo(self, payload: dict) -> dict:
+        return self.watermark_demo_service.run_forensic(payload)
+
+    def investigate_video(self, path, *, source: str = "authorized-upload", algorithm: str = "auto") -> dict:
+        if not self.forensic_investigation_service:
+            raise RuntimeError("serviço de investigação forense não configurado")
+        return self.forensic_investigation_service.investigate_video(path, source=source, algorithm=algorithm)
+
+    def review_investigation(self, investigation_id: str, payload: dict, reviewer: str) -> dict:
+        if not self.forensic_investigation_service:
+            raise RuntimeError("serviço de investigação forense não configurado")
+        return self.forensic_investigation_service.review(
+            investigation_id, str(payload.get("decision", "")), reviewer, str(payload.get("notes", ""))
+        )
+
+    def create_hls_session(self, client_id: str, viewer_session_id: str | None = None) -> dict:
+        if not self.hls_ab_service:
+            raise RuntimeError("HLS A/B não configurado")
+        state = self.repository.state_ref()
+        if not state.initialized or state.lifecycle == "ended":
+            raise RuntimeError("simulação não inicializada")
+        client = state.clients.get(client_id)
+        if client is None:
+            raise KeyError("cliente não encontrado")
+        if not client.active or not client.online or client_id in state.blacklist:
+            raise PermissionError("cliente indisponível")
+        server = next((item for item in state.servers.values() if item.status != "offline"), None)
+        if server is None:
+            raise RuntimeError("nenhum servidor disponível")
+        return self.hls_ab_service.create_session(client_id, server.server_id, str(state.config.get("video_id")), viewer_session_id=viewer_session_id)
 
 

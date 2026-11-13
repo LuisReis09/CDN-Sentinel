@@ -1,73 +1,43 @@
-import {
-  Fingerprint,
-  LockKeyhole,
-  ScanSearch,
-  ShieldCheck,
-} from "lucide-react";
-import type { ReactNode } from "react";
+import { BookOpenCheck, FlaskConical, KeyRound } from "lucide-react";
 import { WatermarkLab } from "../components/WatermarkLab";
+import { ForensicStudio } from "../components/ForensicStudio";
 import type { Overview } from "../types";
 
 export function WatermarkPage({
-  overview,
+  overview: _overview,
   onError,
 }: {
   overview: Overview;
   onError: (message: string) => void;
 }) {
   return (
-    <main className="page-content">
-      <header className="page-header">
+    <main className="page-content watermark-page">
+      <header className="watermark-page__hero">
         <div>
-          <p className="eyebrow">CRYPTOGRAPHIC CONTENT PROTECTION</p>
-          <h1>Watermark studio</h1>
+          <p className="eyebrow">WATERMARKING · AMBIENTE DE ESTUDO</p>
+          <h1>Watermark Lab</h1>
           <p className="page-lead">
-            Uma visão didática do ciclo de vida da cifra e assinatura forense sem expor
-            a chave secreta.
+            Um espaço independente para observar como uma marca visual é criada,
+            recuperada e verificada em um clipe real, sem representar a interface da CDN.
           </p>
         </div>
+        <div className="watermark-page__hero-notes" aria-label="Escopo do laboratório">
+          <span><FlaskConical size={15} /> sessão local controlada</span>
+          <span><BookOpenCheck size={15} /> roteiro e métricas explicados</span>
+          <span><KeyRound size={15} /> parâmetros de teste visíveis</span>
+        </div>
       </header>
-      <section className="watermark-story">
-        <StoryCard
-          icon={<LockKeyhole />}
-          title="Emitir"
-          text="A CDN cria um token único usando cliente, servidor, timestamp e chunk."
-        />
-        <StoryCard
-          icon={<Fingerprint />}
-          title="Assinar"
-          text="AES-256-GCM cifra o claim; HMAC-SHA256 assina o envelope e detecta adulteração."
-        />
-        <StoryCard
-          icon={<ScanSearch />}
-          title="Extrair"
-          text="O monitor extrai o prefixo CDNWM2 e descriptografa o claim dos bytes redistribuídos."
-        />
-        <StoryCard
-          icon={<ShieldCheck />}
-          title="Governar"
-          text="A prova válida identifica o assinante e dispara o gossip de blacklist."
-        />
-      </section>
-      <WatermarkLab onError={onError} />
-    </main>
-  );
-}
 
-function StoryCard({
-  icon,
-  title,
-  text,
-}: {
-  icon: ReactNode;
-  title: string;
-  text: string;
-}) {
-  return (
-    <article className="story-card">
-      <span>{icon}</span>
-      <h3>{title}</h3>
-      <p>{text}</p>
-    </article>
+      <ForensicStudio onError={onError} />
+
+      <details className="watermark-page__legacy">
+        <summary>Laboratório legado CDNWM3 <span>opcional</span></summary>
+        <p>
+          Este painel mantém o experimento histórico Adaptive Spread. Ele não representa
+          o fluxo CDNWM4 e não deve ser usado para interpretar uma sessão forense atual.
+        </p>
+        <WatermarkLab onError={onError} />
+      </details>
+    </main>
   );
 }

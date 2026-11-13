@@ -2,20 +2,35 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import os
 import re
 import subprocess
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Tuple
 
 from services.content_provider import DatasetContentProvider, default_content_id
-from utils.robust_watermark import marker_bits, signal_rects
+from utils.video_watermark import VIDEO_STRENGTH, embed_video, transcode_video, probe_video_limits
+from utils.qim_watermark import qim_detection_map
+from PIL import Image
+from utils.image_watermark import (
+    ADAPTIVE_MASK_FLOOR,
+    CARRIER_CANONICAL_SIZE,
+    CODED_DATA_BITS,
+    DATA_BITS,
+    DATA_REPETITIONS,
+    SYNC_BITS,
+    SYNC_REPETITIONS,
+    visual_marker,
+)
 
 
 MEDIA_ROOT = Path(__file__).resolve().parents[1] / "data" / "media"
 GENERATED_ROOT = MEDIA_ROOT / "generated"
-VISUAL_WATERMARK_VERSION = "subtle-v5-validated-gray-difference"
+VISUAL_WATERMARK_VERSION = "independent-v10-adaptive-perceptual-spread-48bit-secded"
+VISUAL_WATERMARK_ALGORITHM = "adaptive-spread"
 VIDEO_CATALOG = (
     ("bigbuckbunny", "Big Buck Bunny · clipe real", "bigbuckbunny.mp4"),
     ("cdn_sentinel_demo", "CDN-Sentinel demo · original", "cdn-sentinel-demo-original.mp4"),
@@ -113,9 +128,9 @@ def choose_video_example(exclude_video_id: str | None = None) -> dict[str, str]:
 def _generated_variant_path(generated_id: str, variant: str) -> Path:
     if not _SAFE_GENERATED_ID.fullmatch(generated_id):
         raise ValueError("identificador de variante gerada inválido")
-    if variant not in {"watermarked", "difference"}:
+    if variant not in {"original", "control", "watermarked", "residual", "difference", "detection_map"}:
         raise ValueError("variante gerada inválida")
-    path = GENERATED_ROOT / f"{generated_id}-{variant}.mp4"
+    path = GENERATED_ROOT / f"{generated_id}-{variant}.{'png' if variant == 'detection_map' else 'mp4'}"
     if not path.is_file():
         raise FileNotFoundError(f"variante gerada não encontrada: {generated_id}/{variant}")
     if variant == "difference" and not _difference_is_valid(path):
@@ -131,7 +146,7 @@ def get_video_asset(
     """Resolve a named MP4 asset and MIME type without allowing path traversal."""
     video_id = video_id or default_content_id()
     if generated_id:
-        return _generated_variant_path(generated_id, variant), "video/mp4"
+        return _generated_variant_path(generated_id, variant), "image/png" if variant == "detection_map" else "video/mp4"
     dataset_provider = DatasetContentProvider()
     if dataset_provider.supports(video_id):
         return dataset_provider.resolve_asset(video_id)
@@ -184,45 +199,40 @@ def _difference_is_valid(path: Path) -> bool:
     return average < 128 and max(frame) - min(frame) >= 8
 
 
-def generate_visual_variants(video_id: str, token: str) -> str:
-    """Create cached MP4 variants with the HMAC-derived signal embedded in frames."""
+def generate_visual_variants(video_id: str, token: str, secret_key: str | None = None) -> str:
+    """Create cached MP4 variants with the keyed visual marker embedded in frames."""
     source, _ = get_video_asset(video_id, "original")
     generated_id = hashlib.sha256(
-        f"{VISUAL_WATERMARK_VERSION}:{source}:{source.stat().st_mtime_ns}:{token}".encode()
+        f"{VISUAL_WATERMARK_VERSION}:{VISUAL_WATERMARK_ALGORITHM}:{VIDEO_STRENGTH}:"
+        f"{ADAPTIVE_MASK_FLOOR}:{CARRIER_CANONICAL_SIZE}:{DATA_BITS}:{SYNC_BITS}:{SYNC_REPETITIONS}:{DATA_REPETITIONS}:{CODED_DATA_BITS}:"
+        f"diagnostic-lut8:{source}:{source.stat().st_mtime_ns}:{token}".encode()
     ).hexdigest()[:16]
     watermarked = GENERATED_ROOT / f"{generated_id}-watermarked.mp4"
     difference = GENERATED_ROOT / f"{generated_id}-difference.mp4"
     if watermarked.is_file() and difference.is_file() and _difference_is_valid(difference):
         return generated_id
 
-    width, height = _probe_dimensions(source)
-    bits = marker_bits(hashlib.sha256(token.encode("utf-8")).hexdigest()[:16])
-    filters = []
-    for bit, (x, y, block_width, block_height) in zip(bits, signal_rects(width, height)):
-        # Keep the client-facing signal below the level where the 8x8 grid
-        # becomes visually distracting; the forensic difference view remains
-        # amplified separately below.
-        color = "white@0.015" if bit else "black@0.015"
-        filters.append(f"drawbox=x={x}:y={y}:w={block_width}:h={block_height}:color={color}:t=fill")
-    watermark_filter = ",".join(filters + ["format=yuv420p"])
-    signal_filters = ["format=gray", "lut=y=0"]
-    for bit, (x, y, block_width, block_height) in zip(bits, signal_rects(width, height)):
-        color = "white" if bit else "black"
-        signal_filters.append(
-            f"drawbox=x={x}:y={y}:w={block_width}:h={block_height}:color={color}:t=fill"
-        )
-    difference_filter = ",".join(signal_filters + ["format=yuv420p"])
     GENERATED_ROOT.mkdir(parents=True, exist_ok=True)
     partial_watermarked = watermarked.with_suffix(".part.mp4")
     partial_difference = difference.with_suffix(".part.mp4")
+    partial_control = watermarked.with_suffix(".control.part.mp4")
     try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-vf", watermark_filter, "-map", "0:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-c:a", "aac", "-movflags", "+faststart", str(partial_watermarked)],
-            check=True,
-            capture_output=True,
+        embed_video(
+            source,
+            partial_watermarked,
+            token,
+            secret_key or os.getenv("CDN_SECRET_KEY", "local-development-secret"),
+            strength=VIDEO_STRENGTH,
+            adaptive=True,
+            algorithm=VISUAL_WATERMARK_ALGORITHM,
         )
+        transcode_video(source, partial_control, crf=24, preset="veryfast")
         subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), "-vf", difference_filter, "-map", "0:v:0", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(partial_difference)],
+            [
+                "ffmpeg", "-y", "-loglevel", "error", "-i", str(partial_control), "-i", str(partial_watermarked),
+                "-filter_complex", "[1:v][0:v]blend=all_mode=difference,format=gray,lut=y=val*8[diff]",
+                "-map", "[diff]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(partial_difference),
+            ],
             check=True,
             capture_output=True,
         )
@@ -231,15 +241,92 @@ def generate_visual_variants(video_id: str, token: str) -> str:
         partial_watermarked.replace(watermarked)
         partial_difference.replace(difference)
     finally:
-        for partial in (partial_watermarked, partial_difference):
+        for partial in (partial_watermarked, partial_difference, partial_control):
             if partial.exists():
                 partial.unlink()
     return generated_id
 
 
+def generate_forensic_variants(video_id: str, token: str, secret_key: str, algorithm: str) -> str:
+    """Create synchronized diagnostic assets from a real CDNWM4 embedding.
+
+    The residual is captured before H.264 inside embed_video. The difference
+    compares separately encoded control and marked streams. Both displays
+    apply an 8x gain and are diagnostics, not source media.
+    """
+    if algorithm not in {"qim2", "qim3"}:
+        raise ValueError("algoritmo QIM desconhecido")
+    source, _ = get_video_asset(video_id, "original")
+    if probe_video_limits(source)["duration_seconds"] < 3:
+        raise ValueError("o Studio forense requer ao menos 3 s para conferir o conteudo")
+    generated_id = hashlib.sha256(
+        f"CDNWM4-studio-v2:{algorithm}:{source.resolve()}:{source.stat().st_mtime_ns}:{token}".encode()
+    ).hexdigest()[:16]
+    variants = ("original", "control", "watermarked", "residual", "difference", "detection_map")
+    if all((GENERATED_ROOT / f"{generated_id}-{variant}.{'png' if variant == 'detection_map' else 'mp4'}").is_file() for variant in variants):
+        return generated_id
+    GENERATED_ROOT.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="forensic-studio-", dir=GENERATED_ROOT) as temporary:
+        root = Path(temporary)
+        clip = root / "original.mp4"
+        control = root / "control.mp4"
+        marked = root / "watermarked.mp4"
+        residual = root / "residual.mp4"
+        difference = root / "difference.mp4"
+        detection_map = root / "detection_map.png"
+        source_fps = probe_video_limits(source)["fps"]
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(source), "-t", "4", "-map", "0:v:0", "-map", "0:a?",
+             "-vf", f"fps={source_fps:.6f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", str(clip)],
+            check=True, capture_output=True, timeout=180,
+        )
+        transcode_video(clip, control, crf=24, preset="veryfast")
+        embed_video(clip, marked, token, secret_key, algorithm=algorithm,
+                    diagnostic_residual_path=residual)
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(control), "-i", str(marked),
+             "-filter_complex", "[0:v]format=gbrp[a];[1:v]format=gbrp[b];[a][b]blend=all_expr='min(255,abs(A-B)*8)'[diff]",
+             "-map", "[diff]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(difference)],
+            check=True, capture_output=True, timeout=180,
+        )
+        frame = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(marked), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
+            check=True, capture_output=True, timeout=30,
+        ).stdout
+        with Image.open(io.BytesIO(frame)) as image:
+            qim_detection_map(image, secret_key, visual_marker(token),
+                              version="v3" if algorithm == "qim3" else "v2").save(detection_map)
+        if not _difference_is_valid(difference):
+            raise RuntimeError("a diferenca apos codec nao tem variacao visual valida")
+        for variant in variants:
+            source_file = root / f"{variant}.{'png' if variant == 'detection_map' else 'mp4'}"
+            source_file.replace(GENERATED_ROOT / f"{generated_id}-{variant}{source_file.suffix}")
+    return generated_id
+
+
+def video_frame_timestamps(path: Path) -> list[float]:
+    """Decode presentation timestamps for Studio alignment checks."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time",
+         "-of", "csv=p=0", str(path)],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    return [float(line.split(",", 1)[0]) for line in result.stdout.splitlines() if line.split(",", 1)[0].strip()]
+
+
 def get_video_chunk(chunk_number: int = 0, video_id: str | None = None) -> Tuple[bytes, str]:
-    """Return the deterministic local MP4 as a transport sample."""
-    del chunk_number
+    """Legacy whole-asset compatibility for chunk zero only.
+
+    Temporal segments are served by the HLS path; returning the same whole MP4
+    for every chunk number would silently misrepresent the delivery contract.
+    """
+    if chunk_number != 0:
+        raise ValueError("legacy whole-asset route has no temporal chunks; use HLS")
+    return get_video_asset_bytes(video_id)
+
+
+def get_video_asset_bytes(video_id: str | None = None) -> Tuple[bytes, str]:
+    """Read a complete local asset for the explicitly legacy demo."""
     path, content_type = get_video_asset(video_id, "original")
     return path.read_bytes(), content_type
 
@@ -252,6 +339,6 @@ def extract_watermark_token(encoded_payload: str) -> str:
     """Extract the forensic prefix from a Base64 encoded leaked chunk."""
     raw = base64.b64decode(encoded_payload.encode("ascii"), validate=True)
     token = raw.split(b"\n", 1)[0].decode("utf-8")
-    if not token.startswith(("CDNWM1.", "CDNWM2.")):
+    if not token.startswith(("CDNWM1.", "CDNWM2.", "CDNWM3.")):
         raise ValueError("chunk não contém prefixo de watermark")
     return token

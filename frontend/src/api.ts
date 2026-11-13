@@ -6,24 +6,28 @@ import type {
   SimulationStatus,
   VideoChunk,
   WatermarkDemo,
+  WatermarkDetection,
+  ForensicInvestigation,
+  ForensicStudio,
 } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").replace(
   /\/$/,
   "",
 );
-const CONTROL_TOKEN = import.meta.env.VITE_CONTROL_TOKEN ?? "";
+let csrfToken = "";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
+      credentials: "same-origin",
+      ...options,
       headers: {
         "Content-Type": "application/json",
-        ...(CONTROL_TOKEN ? { "X-CDN-Control-Token": CONTROL_TOKEN } : {}),
+        ...(csrfToken && options?.method && options.method !== "GET" ? { "X-CDN-CSRF": csrfToken } : {}),
         ...(options?.headers ?? {}),
       },
-      ...options,
     });
   } catch {
     throw new Error(
@@ -44,6 +48,25 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  authSession: async (): Promise<{ username: string; role: string } | null> => {
+    const response = await fetch(`${API_BASE}/auth/session`, { credentials: "same-origin" });
+    if (response.status === 404) return null; // Explicit local academic mode.
+    if (!response.ok) throw new Error("Sessão de operador necessária.");
+    const session = await response.json();
+    csrfToken = session.csrf;
+    return session;
+  },
+  login: async (username: string, password: string) => {
+    const session = await request<{ username: string; role: string; csrf: string }>("/auth/login", {
+      method: "POST", body: JSON.stringify({ username, password }),
+    });
+    csrfToken = session.csrf;
+    return session;
+  },
+  logout: async () => {
+    await request("/auth/logout", { method: "POST" });
+    csrfToken = "";
+  },
   overview: () => request<Overview>("/observability/overview"),
   realtimeUrl: () => `${API_BASE}/observability/realtime/stream`,
   status: () => request<SimulationStatus>("/control/simulation/status"),
@@ -108,8 +131,46 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ token }),
     }),
+  detectWatermark: async (file: File): Promise<WatermarkDetection> => {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(`${API_BASE}/security/watermark/detect`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: csrfToken ? { "X-CDN-CSRF": csrfToken } : undefined,
+      body: form,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok && !body.status) {
+      throw new Error(body.error ?? `HTTP ${response.status}.`);
+    }
+    return body as WatermarkDetection;
+  },
+  investigateVideo: async (file: File): Promise<ForensicInvestigation> => {
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(`${API_BASE}/monitor/investigations`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: csrfToken ? { "X-CDN-CSRF": csrfToken } : undefined,
+      body: form,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}.`);
+    return body as ForensicInvestigation;
+  },
+  reviewInvestigation: (id: string, decision: "ACCEPT" | "REJECT" | "INCONCLUSIVE") =>
+    request<Record<string, unknown>>(`/monitor/investigations/${encodeURIComponent(id)}/review`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    }),
   watermarkDemo: (payload: Record<string, unknown> = {}) =>
     request<WatermarkDemo>("/security/watermark/demo", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  forensicStudio: (payload: { algorithm: "qim2" | "qim3"; video_id?: string }) =>
+    request<ForensicStudio>("/security/watermark/demo/forensic", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

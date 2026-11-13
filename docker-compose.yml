@@ -5,12 +5,18 @@ services:
       dockerfile: Dockerfile
     environment:
       CDN_SECRET_KEY: ${CDN_SECRET_KEY:-local-development-secret}
+      CDN_AUTH_MODE: ${CDN_AUTH_MODE:-local}
+      CDN_BIND_HOST: 0.0.0.0
+      CDN_LOCAL_BIND_ACK: I_UNDERSTAND_LOCAL_MODE_HAS_NO_AUTH
+      CDN_OPERATOR_ACCOUNTS: ${CDN_OPERATOR_ACCOUNTS:-}
+      CDN_VIEWER_SESSION_SECRET: ${CDN_VIEWER_SESSION_SECRET:-}
+      CDN_CORS_ORIGINS: ${CDN_CORS_ORIGINS:-}
       USE_BIGBUCKBUNNY_DATASET: ${USE_BIGBUCKBUNNY_DATASET:-0}
       CDN_DATASET_ROOT: /app/data/datasets/youtube_clipped_videos
     volumes:
       - ${CDN_DATASET_DIR:-./data/datasets/youtube_clipped_videos}:/app/data/datasets/youtube_clipped_videos:ro
     ports:
-      - "${BACKEND_PORT:-5000}:5000"
+      - "127.0.0.1:${BACKEND_PORT:-5000}:5000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=2)"]
       interval: 10s
@@ -26,4 +32,4 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"

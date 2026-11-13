@@ -1,5 +1,7 @@
 # CDN-Sentinel
 
+**Estado da reengenharia (12/11/2026):** há correções de estados forenses, autenticação administrativa opcional e CI, mas o merge seguro segue bloqueado por ECC, robustez, Studio CDNWM4 e E2E/CI completos. Consulte [o checklist de fechamento](docs/watermark-finalization-status.md). O modo acadêmico padrão deve ficar no localhost. Nunca coloque segredos em variáveis `VITE_*`: elas entram no bundle público.
+
 ## Dataset de clipes do YouTube
 
 O backend e o Watermark Studio usam automaticamente os vídeos locais do
@@ -27,7 +29,7 @@ serviços.
 
 Protótipo acadêmico de uma control room para Engenharia de Sistemas Distribuídos e Segurança Computacional. A aplicação torna observáveis, em processos locais reais, roteamento por distância, failover, watermarking forense AES-GCM/HMAC, monitoramento de vazamentos, blacklist idempotente, gossip hierárquico cifrado, retry e métricas de requisição.
 
-> Escopo da Entrega 2: execução local, armazenamento em memória, Big Buck Bunny real versionado para a demonstração e conteúdo fallback determinístico. O dataset Hugging Face é opcional e baixado explicitamente; não há Supabase/PostgreSQL, broker, Kubernetes, serviço externo ou credencial paga obrigatória.
+> Escopo da Entrega 2 e da reengenharia experimental: execução local, topologia/telemetria em memória e ledger forense SQLite. Big Buck Bunny está versionado; o dataset Hugging Face é opcional e baixado explicitamente. Não há Supabase/PostgreSQL, broker, Kubernetes, serviço externo ou credencial paga obrigatória.
 
 ## O que existe
 
@@ -74,7 +76,7 @@ React/TypeScript ── REST ──> Flask controller
                     │             │             │
                     └── gossip hierárquico cifrado + ACK/retry ──┘
 
-LeakService → plataforma externa simulada → MonitorService → prova HMAC → blacklist
+LeakService → plataforma externa simulada → MonitorService → investigação visual + ledger + conteúdo → revisão explícita
 ```
 
 O repositório do controller e o repositório de cada nó são independentes e em memória. Snapshots públicos são cópias isoladas; eventos, tráfego, leaks e scans ficam limitados a 500 itens.
@@ -135,7 +137,7 @@ npm run dev
 Pop-Location
 ```
 
-O Vite usa `/api` por padrão. Para outro backend, use `VITE_API_BASE_URL`. Se o backend estiver com autenticação de controle, configure também `VITE_CONTROL_TOKEN`. O mapa usa tiles MapTiler Streets com rótulos em português quando `frontend/.env` define `VITE_MAPTILER_KEY`; o código mantém OpenStreetMap como fallback visual quando a chave ainda não foi configurada. Para habilitar exemplos adicionais já instalados pelo `scikit-video`, sem download automático, configure `USE_BIGBUCKBUNNY_DATASET=1`.
+O Vite usa `/api` por padrão. Para outro backend, use `VITE_API_BASE_URL`. Em `CDN_AUTH_MODE=secure`, o painel usa login no backend, cookie HttpOnly e CSRF. O mapa usa tiles MapTiler Streets com rótulos em português quando `frontend/.env` define `VITE_MAPTILER_KEY`; o código mantém OpenStreetMap como fallback visual quando a chave ainda não foi configurada. Para habilitar exemplos adicionais já instalados pelo `scikit-video`, sem download automático, configure `USE_BIGBUCKBUNNY_DATASET=1`.
 
 Após uma mutação no mapa, o console faz uma leitura nova do control plane mesmo que uma consulta periódica esteja em andamento. Assim, clientes e servidores criados por clique aparecem no próximo snapshot, sem depender de uma requisição antiga.
 
@@ -144,7 +146,7 @@ Após uma mutação no mapa, o console faz uma leitura nova do control plane mes
 - Endpoints de controle/mutação aceitam `X-CDN-Control-Token` quando `CDN_CONTROL_TOKEN` está configurado. Com a variável vazia, o comportamento é explicitamente **demo local**; CORS continua limitado a `CDN_CORS_ORIGINS` (por padrão, localhost nas portas 5173).
 - Mensagens internas usam envelope AES-256-GCM e HMAC sobre o ciphertext, método e path, com timestamp, nonce e TTL de 30 segundos. Nonces já usados são rejeitados; payloads POST internos sem envelope cifrado são recusados.
 - Uma blacklist só é aceita por um nó quando o token HMAC da prova corresponde a `client_id`, servidor emissor e assinatura. Mensagens sem credencial/prova são rejeitadas.
-- O claim do watermark usa AES-256-GCM para confidencialidade e HMAC-SHA256 para a assinatura do envelope; o sinal visual de 64 bits é derivado do digest e aplicado com FFmpeg nos frames reais. O estúdio gera amostras MP4 H.264 de 1s com blur, ruído, resize e diferentes CRFs, depois mede os bits recuperados pelo detector. Isso é uma demonstração didática, não uma garantia de robustez de produção. O anti-replay implementado é do protocolo interno, com nonce/TTL/estado local.
+- O claim forense CDNWM4 usa AES-256-GCM, HMAC-SHA256, HKDF e `kid`; o ledger SQLite associa o marcador visual de 48 bits a uma sessão. O nó usa QIM2 para fontes >=640×360 e spread adaptativo abaixo disso. A detecção forense exige marcador exato, claim autenticado e comparação com o conteúdo alegado; a revisão não aplica blacklist. A avaliação atual permanece experimental. O anti-replay implementado é do protocolo interno, com nonce/TTL/estado local.
 
 ## Fluxo rápido da API
 
@@ -165,11 +167,16 @@ Endpoints principais:
 | Controle | `POST /api/control/fault/{server_id}` | offline, latência extra ou perda local |
 | Controle | `POST /api/control/metrics/reset` | zera telemetria sem apagar topologia/blacklist |
 | Controle | `POST /api/control/simulation/end` | encerra processos/workers e arquiva a simulacao |
-| Dados | `GET /api/clients/{id}/stream?chunk=0` | roteia, faz failover e entrega chunk watermarkado |
+| Dados | `GET /api/clients/{id}/stream?chunk=0` | roteia, faz failover e entrega o MP4 Base64 com marca visual nos frames |
+| Dados | `GET /api/clients/{id}/media?chunk=0` | entrega o MP4 watermarkado como mídia binária reproduzível |
+| Dados | `POST /api/clients/{id}/viewer-sessions` | operador emite autorização temporária de espectador quando o modo autenticado está ativo |
+| Dados | `POST /api/clients/{id}/hls/sessions` | prepara ou reutiliza variantes A/B e cria playlist por sessão; extração A/B ainda experimental |
 | Dados | `POST /api/clients/{id}/feedback` | registra like/nota e relaciona a percepção à latência observada |
 | Topologia | `GET/POST /api/topology/servers` | observa/adiciona nós |
 | Segurança | `POST /api/security/watermark/verify` | descriptografa e valida token AES-GCM/HMAC sem expor chave |
 | Monitor | `POST /api/monitor/scan` | dispara varredura manual |
+| Monitor | `POST /api/monitor/investigations` | recebe vídeo autorizado e registra evidência sem bloqueio automático |
+| Monitor | `POST /api/monitor/investigations/{id}/review` | registra revisão explícita da evidência |
 | Observabilidade | `GET /api/observability/overview` | snapshot agregado para o console |
 | Observabilidade | `GET /api/observability/realtime/stream` | stream SSE persistente para estado, telemetria e gestão |
 | Observabilidade | `GET /api/observability/history` | lista historicos completos arquivados |
@@ -181,7 +188,7 @@ Uma resposta de stream distingue `artificial_latency_ms`, `http_rtt_ms` e `end_t
 1. Faça um stream e abra a decisão de routing no Command Center/Network Lab.
 2. Desligue o nó selecionado no Network Lab; a próxima chamada deve escolher o próximo candidato saudável e registrar a razão.
 3. Injete latência ou perda; observe requests, erros, in-flight, retry e eventos.
-4. No Security Observatory, acompanhe cliente → chunk → plataforma simulada → monitor → prova → blacklist → gossip/ACK.
+4. No Security Observatory, acompanhe cliente → chunk → plataforma simulada → monitor → investigação → revisão. A marca não gera blacklist automática.
 5. No Watermark Studio, reproduza o Big Buck Bunny original, o MP4 entregue ao cliente e a diferença em escala de cinza; confira a descriptografia do claim e as amostras reais de resistência. Depois altere um caractere do token: a prova adulterada deve ser rejeitada.
 
 O roteiro completo está em [`docs/demo-script.md`](./docs/demo-script.md).
@@ -200,12 +207,26 @@ O smoke E2E local inicia processos CDN e verifica inicialização, stream e over
 
 ## Decisões e limitações
 
-- A persistência é em memória; interfaces permitem um adaptador futuro para Supabase/PostgreSQL, que não faz parte desta etapa.
+- Topologia e telemetria permanecem em memória; claims, sessões A/B e eventos forenses usam SQLite local. PostgreSQL, retenção, backup e distribuição do ledger não fazem parte desta etapa.
 - O Big Buck Bunny é um asset local de demonstração, atribuído à Blender Foundation sob CC-BY-3.0; ele continua como fallback. O dataset `kishan51/youtube_clipped_videos` é baixado explicitamente pelo script documentado acima e fica fora do Git; licenças e termos de uso dos clipes devem ser verificados antes de uma distribuição pública.
 - Clientes pequenos podem ter processos locais observaveis; populacoes grandes usam clientes virtuais e lotes de telemetria, evitando milhares de processos ociosos.
 - Custos mensais, capacidade por nó e latência de fila são cenários didáticos estimados, nunca fatos de produção.
 - O monitor é separado por escopo de nó, mas continua coordenado pelo controller no mesmo aplicativo Flask.
-- O watermark visual é um canal experimental derivado do HMAC e aplicado com FFmpeg sobre frames reais; o prefixo nos bytes carrega o claim AES-GCM/HMAC cifrado. A série `metrics_history` é limitada a 500 amostras e fica em memória junto com o restante da simulação.
+- O watermark forense atual usa marcador keyed de 48 bits nos frames e claim cifrado apenas no ledger; os bytes públicos são MP4 sem prefixo de token. A série `metrics_history` é limitada a 500 amostras e fica em memória.
+
+## Reengenharia forense experimental
+
+Requisitos: Python 3.12, FFmpeg/FFprobe no `PATH`, Node 20 para a interface. Instale o backend com `python -m pip install -r requirements.txt`, execute `python app.py` e o frontend com `cd frontend; npm ci; npm run dev`. O HLS A/B é preparado sob `data/runtime/hls-ab` na primeira sessão. Para o modo seguro de uma instância, configure `CDN_AUTH_MODE=secure`, `CDN_SECRET_KEY`, `CDN_VIEWER_SESSION_SECRET` e `CDN_OPERATOR_ACCOUNTS`; use HTTPS e um proxy de mesma origem. Gere hashes de senha no backend com `python -c "from services.operator_auth_service import hash_password; print(hash_password('uma-senha-longa-e-aleatoria'))"` e forneça JSON como `{"alice":{"role":"operator","password_hash":"pbkdf2_sha256$..."}}` em `CDN_OPERATOR_ACCOUNTS`. O modo seguro ainda depende de autenticação externa da conta de espectador e de uma única instância de API.
+
+Para exigir autorização de espectador, configure também `CDN_REQUIRE_VIEWER_AUTH=1` e `CDN_VIEWER_SESSION_SECRET` com material aleatório distinto. O backend recusa iniciar esse modo sem `CDN_CONTROL_TOKEN`. Após autenticar a conta em um sistema externo, o operador chama `POST /api/clients/{id}/viewer-sessions` com `X-CDN-Control-Token`; a resposta contém um bearer curto. O espectador envia `Authorization: Bearer <token>` em `/media`, `/stream` e nas rotas HLS. O token vincula cliente, conteúdo e execução atual. Esse mecanismo **não é um provedor de identidade**, exige HTTPS fora do localhost e não substitui autenticação real da conta. Players HLS que não enviam headers precisam de uma integração de autenticação própria. No modo demo padrão, as rotas de mídia continuam abertas.
+
+Requisições repetidas da mesma sessão autenticada, conteúdo, segmento e nó reutilizam o claim e o MP4 em cache. Uma nova sessão ainda exige codificação integral na rota MP4; a preparação HLS A/B é o caminho segmentado experimental. Vazamentos inconclusivos permanecem disponíveis para reanálise manual e não aparecem como atribuídos no resumo público.
+
+Documentos desta rodada: [arquitetura](docs/watermark-architecture.md), [comparação de algoritmos](docs/watermark-algorithm-comparison.md), [ameaças](docs/watermark-threat-model.md), [resultados e comandos](docs/watermark-benchmark-results.md), [fluxo de investigação](docs/watermark-forensic-workflow.md) e [relatório de implementação](docs/watermark-implementation-report.md). A auditoria histórica permanece em [watermark-security-validation.md](docs/watermark-security-validation.md).
+
+## Uso de ferramentas de IA
+
+O registro acadêmico de ferramentas está em [docs/ai-tools.md](docs/ai-tools.md). Esta reengenharia foi implementada com assistência de Codex; as medições relatadas são saídas de comandos executados localmente. A avaliação cega com participantes, a conferência das licenças do dataset e a aprovação para eventual uso real dependem de revisão humana e ainda não ocorreram.
 
 Checklist, C4, ADR, padrões, plano de testes e pendência de equipe:
 

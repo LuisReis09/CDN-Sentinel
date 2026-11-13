@@ -100,6 +100,16 @@ class WatermarkClaim:
     issued_at: float
     chunk_id: str
     signature: str
+    content_id: str | None = None
+    version: str = "CDNWM2"
+    watermark_id: str | None = None
+    session_id: str | None = None
+    valid_from: float | None = None
+    valid_until: float | None = None
+    algorithm_id: str | None = None
+    key_id: str | None = None
+    fingerprint_scheme: str | None = None
+    segment_range: str | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

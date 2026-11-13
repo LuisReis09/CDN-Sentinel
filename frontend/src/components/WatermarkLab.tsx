@@ -9,12 +9,14 @@ import {
   Fingerprint,
   KeyRound,
   LockKeyhole,
+  Pause,
   Play,
+  RotateCcw,
   ScanSearch,
   ShieldCheck,
   UnlockKeyhole,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { NoiseVideoPreview } from "./NoiseVideoPreview";
 import type { WatermarkDemo } from "../types";
@@ -25,10 +27,96 @@ export function WatermarkLab({
   onError: (message: string) => void;
 }) {
   const [demo, setDemo] = useState<WatermarkDemo | null>(null);
+  const videoVariants = demo?.video_variants;
   const [busy, setBusy] = useState(false);
+  const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const [duration, setDuration] = useState(1);
+  const [syncWarning, setSyncWarning] = useState("");
+  const durations = useRef<Record<string, number>>({});
+  const [zoom, setZoom] = useState(false);
+  const lastClockUpdate = useRef(0);
+
+  useEffect(() => {
+    let frame = 0;
+    const synchronize = () => {
+      const master = videoRefs.current.original;
+      if (master && !master.paused) {
+        let drift = 0;
+        for (const key of ["watermarked", "difference"]) {
+          const follower = videoRefs.current[key];
+          if (!follower || follower.readyState < 2) continue;
+          const delta = Math.abs(follower.currentTime - master.currentTime);
+          drift = Math.max(drift, delta);
+          if (delta > 0.07) follower.currentTime = master.currentTime;
+          if (follower.paused) void follower.play().catch(() => undefined);
+        }
+        if (performance.now() - lastClockUpdate.current > 200) {
+          setPlaybackTime(master.currentTime);
+          lastClockUpdate.current = performance.now();
+        }
+        setSyncWarning(drift > 0.25 ? `Diferença temporal corrigida: ${drift.toFixed(2)} s` : "");
+      }
+      frame = requestAnimationFrame(synchronize);
+    };
+    frame = requestAnimationFrame(synchronize);
+    return () => cancelAnimationFrame(frame);
+  }, [videoVariants?.original, videoVariants?.watermarked, videoVariants?.difference]);
+
+  function metadata(variant: string, value: number) {
+    if (!Number.isFinite(value)) return;
+    durations.current[variant] = value;
+    if (variant === "original") setDuration(value);
+    const known = Object.values(durations.current);
+    if (known.length >= 2 && Math.max(...known) - Math.min(...known) > 0.1) {
+      setSyncWarning("As variantes têm durações diferentes; a comparação pode perder correspondência temporal.");
+    }
+  }
+
+  function eachVideo(callback: (video: HTMLVideoElement) => void) {
+    Object.values(videoRefs.current).forEach((video) => {
+      if (video) callback(video);
+    });
+  }
+
+  function playAll() {
+    const master = videoRefs.current.original;
+    const target = master?.currentTime ?? playbackTime;
+    eachVideo((video) => {
+      video.currentTime = target;
+      void video.play().catch(() => undefined);
+    });
+  }
+
+  function pauseAll() {
+    eachVideo((video) => video.pause());
+  }
+
+  function restartAll() {
+    eachVideo((video) => {
+      video.currentTime = 0;
+    });
+    setPlaybackTime(0);
+  }
+
+  function seekAll(value: number) {
+    eachVideo((video) => {
+      if (Number.isFinite(video.duration)) video.currentTime = value;
+    });
+    setPlaybackTime(value);
+  }
+
+  function stepFrame(direction: number) {
+    pauseAll();
+    const fps = demo?.video_metadata?.fps && Number(demo.video_metadata.fps) > 0 ? Number(demo.video_metadata.fps) : 30;
+    seekAll(Math.max(0, Math.min(duration, (videoRefs.current.original?.currentTime ?? playbackTime) + direction / fps)));
+  }
 
   async function simulate() {
     setBusy(true);
+    pauseAll();
+    durations.current = {};
+    setSyncWarning("");
     try {
       setDemo(
         await api.watermarkDemo({
@@ -43,7 +131,6 @@ export function WatermarkLab({
     }
   }
 
-  const videoVariants = demo?.video_variants;
   const process = demo?.cryptographic_process;
   const claim = demo?.claim_before_encoding ?? {};
 
@@ -51,15 +138,15 @@ export function WatermarkLab({
     <section className="panel watermark-lab">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">FORENSIC WATERMARK LAB / STANDALONE</p>
+          <p className="eyebrow">LEGACY CDNWM3 / ADAPTIVE SPREAD</p>
           <h2>Estúdio de watermark</h2>
         </div>
         <Fingerprint size={20} className="accent" />
       </div>
       <p className="panel-subtitle">
-        Siga uma execução completa. O claim é cifrado e assinado antes de ser
-        inserido no chunk; o canal robusto experimental testa se um sinal espalhado
-        continuaria detectável após filtros visuais.
+        Siga a geração do claim e a marca visual em frames reais. O claim fica
+        no registro; o MP4 carrega somente o sinal visual. As transformações
+        medem se o marcador de 48 bits foi recuperado exatamente.
       </p>
       <div className="lab-toolbar">
         <span className="standalone-badge">
@@ -74,26 +161,69 @@ export function WatermarkLab({
         </button>
       </div>
       {videoVariants ? (
-        <div className="noise-preview-grid noise-preview-grid--triple">
+        <>
+          <div className="watermark-sync-toolbar" aria-label="Controles sincronizados dos vídeos">
+            <button className="button button-secondary" type="button" onClick={playAll}>
+              <Play size={14} /> Reproduzir os três
+            </button>
+            <button className="button button-secondary" type="button" onClick={pauseAll}>
+              <Pause size={14} /> Pausar
+            </button>
+            <button className="button button-secondary" type="button" onClick={restartAll}>
+              <RotateCcw size={14} /> Reiniciar
+            </button>
+            <button className="button button-secondary" type="button" onClick={() => stepFrame(-1)} aria-label="Frame anterior">−1 frame</button>
+            <button className="button button-secondary" type="button" onClick={() => stepFrame(1)} aria-label="Próximo frame">+1 frame</button>
+            <button className="button button-secondary" type="button" onClick={() => setZoom((value) => !value)}>{zoom ? "Zoom 1×" : "Zoom 2×"}</button>
+            <label>
+              <span>posição sincronizada {playbackTime.toFixed(1)}s</span>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(1, duration)}
+                step={0.1}
+                value={playbackTime}
+                onChange={(event) => seekAll(Number(event.target.value))}
+              />
+            </label>
+          </div>
+          {syncWarning && <p role="alert" className="panel-subtitle">{syncWarning}</p>}
+          <div className={`noise-preview-grid noise-preview-grid--triple ${zoom ? "watermark-preview-zoom" : ""}`}>
           <NoiseVideoPreview
             videoUrl={videoVariants.original}
             variant="original"
+            videoRef={(node) => {
+              videoRefs.current.original = node;
+            }}
+            onTimeUpdate={setPlaybackTime}
+            onLoadedMetadata={(value) => metadata("original", value)}
+            onPlay={playAll}
+            onPause={pauseAll}
             label="1 · Vídeo original"
             description="MP4 local versionado; mesmo vídeo de referência"
           />
           <NoiseVideoPreview
             videoUrl={videoVariants.watermarked}
             variant="watermarked"
+            videoRef={(node) => {
+              videoRefs.current.watermarked = node;
+            }}
+            onLoadedMetadata={(value) => metadata("watermarked", value)}
             label="2 · Sinal sutil"
             description="vídeo entregue ao cliente; sinal de luminância imperceptível"
           />
           <NoiseVideoPreview
             videoUrl={videoVariants.difference}
             variant="difference"
+            videoRef={(node) => {
+              videoRefs.current.difference = node;
+            }}
+            onLoadedMetadata={(value) => metadata("difference", value)}
             label="3 · Sinal destacado"
-            description="escala de cinza sobre fundo preto; somente o sinal amplificado"
+            description="diferença amplificada para auditoria; não é o vídeo entregue ao cliente"
           />
-        </div>
+          </div>
+        </>
       ) : (
         <div className="watermark-empty-state">
           <Play size={20} />
@@ -105,14 +235,19 @@ export function WatermarkLab({
         <div className="demo-result">
           <Check size={16} />
           <strong>
-            {demo.round_trip_verified
-              ? "Extração e validação confirmadas"
-              : "Validação pendente"}
+            {demo.verification?.forensic_status === "VALID"
+              ? "Marca legada recuperada; sem autenticacao forense CDNWM4"
+              : "Watermark visual pendente ou inconclusiva"}
           </strong>
           <span>
-            {demo.video_label} · chunk {demo.chunk_number} · SHA-256{" "}
+            {demo.video_label} · ensaio {demo.chunk_number} · SHA-256{" "}
             {demo.payload_sha256.slice(0, 18)}…
           </span>
+          <small>
+            Token de transporte: {demo.verification?.transport_token ?? "—"} ·{" "}
+            inserção visual: {demo.verification?.visual_embedded ? "confirmada" : "pendente"} ·{" "}
+            detecção: {demo.verification?.visual_detection ?? "—"}
+          </small>
         </div>
       )}
 
@@ -123,8 +258,8 @@ export function WatermarkLab({
           tone="cyan"
         >
           <p>
-            O claim didático carrega exatamente estes campos. Na transmissão, ele
-            fica cifrado; esta versão legível aparece apenas para explicar o laboratório.
+            Este claim didático aparece apenas na tela do laboratório. Na entrega
+            normal, o vídeo não contém o JSON ou o token cifrado.
           </p>
           <CodeBlock
             value={
@@ -154,8 +289,9 @@ export function WatermarkLab({
           tone="green"
         >
           <p>
-            Extrai o prefixo, valida HMAC e tag GCM, descriptografa o claim e só
-            então atribui cliente, servidor e horário.
+            Valida o claim no registro com HMAC e GCM e, separadamente, recupera o
+            marcador visual do vídeo. Só uma associação exata no registro atribui
+            cliente, servidor e horário.
           </p>
           <code>compare_digest + AESGCM.decrypt</code>
           <small>
@@ -175,21 +311,21 @@ export function WatermarkLab({
             <ArrowRight className="flow-arrow" size={17} />
             <Step
               icon={<Code2 size={17} />}
-              title="2. Cifrar + assinar"
+              title="2. Cifrar + autenticar"
               value={`${demo.encoded_claim.length} chars Base64URL`}
               mono
             />
             <ArrowRight className="flow-arrow" size={17} />
             <Step
               icon={<Eye size={17} />}
-              title="3. Inserir no chunk"
-              value={`${demo.watermarked_payload_base64.length} chars Base64`}
+              title="3. Inserir visualmente no vídeo"
+              value={`${demo.noise_hex.length * 4} bits visuais no MP4`}
             />
             <ArrowRight className="flow-arrow" size={17} />
             <Step
               icon={<UnlockKeyhole size={17} />}
               title="4. Descriptografar + validar"
-              value="GCM + HMAC válidos · round trip OK"
+              value={demo.verification?.forensic_status === "VALID" ? "claim e marcador exatos" : "evidência inconclusiva"}
               valid
             />
           </div>
@@ -198,7 +334,7 @@ export function WatermarkLab({
             <code>{demo.encoded_claim}</code>
             <span>assinatura HMAC</span>
             <code>{demo.signature}</code>
-            <span>prefixo físico</span>
+            <span>transporte físico</span>
             <code>{demo.payload_prefix}</code>
             <span>chave usada</span>
             <code>secreta · fingerprint SHA-256 {demo.key_fingerprint}</code>
@@ -283,11 +419,11 @@ function RobustnessTable({
         <span>amostras MP4 H.264 + detector visual</span>
       </div>
       <p>
-        O HMAC/AES continua sendo a prova criptográfica do payload. A métrica
-        abaixo é calculada pelo detector visual: bits do marcador recuperados
-        corretamente em cada bloco 8×8, depois que amostras MP4 reais recebem
-        blur, ruído, resize e re-encode em diferentes intensidades. O limite
-        didático de aprovação é 90%.
+        HMAC/AES continua sendo a prova criptográfica do payload. A métrica
+        abaixo mostra duas grandezas distintas: consistência do detector e bits
+        corretos contra o marcador conhecido neste experimento. A recuperação
+        só é exata quando todos os 48 bits coincidem; autenticação exige ainda
+        consulta ao registro. A diferença amplificada é apenas diagnóstico.
       </p>
       <div className="robustness-table">
         {checks.map((check) => (
@@ -297,11 +433,11 @@ function RobustnessTable({
               {check.intensity && <small>{check.intensity}</small>}
             </span>
             <code>
-              {Math.round(check.confidence * 100)}% ·{" "}
-              {check.bits_correct ?? "—"}/{check.bits_total ?? "—"} bits
+              consistência {(check.confidence * 100).toFixed(1)}% ·{" "}
+              {check.bits_correct ?? "—"}/{check.bits_total ?? "—"} bits conhecidos
             </code>
             <strong className={check.survives ? "robust-ok" : "robust-fail"}>
-              {check.survives ? "detectável" : "perdeu sinal"}
+              {check.survives ? "marcador exato" : "não recuperado exatamente"}
             </strong>
             {check.sample_generated && <em>amostra real</em>}
           </div>

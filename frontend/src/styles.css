@@ -1967,6 +1967,26 @@ label {
   gap: 12px;
   padding: 0 20px 19px;
 }
+.watermark-sync-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 20px 12px;
+}
+.watermark-sync-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 190px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.watermark-sync-toolbar input[type="range"] {
+  min-width: 120px;
+  accent-color: var(--cyan);
+}
 .noise-video {
   position: relative;
   overflow: hidden;
@@ -2124,6 +2144,45 @@ label {
 .watermark-empty-state span {
   max-width: 360px;
   font-size: 10px;
+}
+.watermark-detection-panel {
+  margin-top: 18px;
+}
+.watermark-file-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.watermark-file-input input {
+  max-width: 220px;
+}
+.watermark-detection-result {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(8, 17, 31, 0.55);
+}
+.watermark-detection-result--valid {
+  border-color: rgba(101, 216, 155, 0.55);
+}
+.watermark-detection-result--invalid {
+  border-color: rgba(255, 97, 119, 0.55);
+}
+.watermark-detection-result--inconclusive {
+  border-color: rgba(255, 205, 91, 0.55);
+}
+.watermark-detection-result code {
+  overflow-wrap: anywhere;
+  color: var(--muted);
 }
 .crypto-overview {
   display: grid;
@@ -2908,6 +2967,14 @@ label {
   }
   .lab-toolbar {
     flex-direction: column;
+  }
+  .watermark-sync-toolbar {
+    align-items: stretch;
+    padding: 0 14px 12px;
+  }
+  .watermark-sync-toolbar label {
+    min-width: 100%;
+    margin-left: 0;
   }
   .lab-toolbar select {
     max-width: none;
@@ -3827,3 +3894,219 @@ label {
   }
 }
 
+.watermark-preview-zoom .noise-video__frame { overflow: hidden; }
+.watermark-preview-zoom .noise-video__source { transform: scale(2); transform-origin: center; }
+.watermark-page { max-width: 1240px; }
+.watermark-page__hero,
+.forensic-studio__intro {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 28px;
+}
+.watermark-page__hero { margin-bottom: 26px; }
+.watermark-page__hero h1,
+.forensic-studio__intro h2,
+.forensic-studio__result-heading h3,
+.forensic-studio__comparison h3,
+.forensic-studio__detection-map h4 { margin: 0; color: #eef8ff; }
+.watermark-page__hero-notes {
+  display: grid;
+  gap: 8px;
+  flex: 0 1 290px;
+  color: #9bb0c5;
+  font: 10px "DM Mono", monospace;
+}
+.watermark-page__hero-notes span,
+.forensic-studio__independent,
+.forensic-studio__section-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.watermark-page__hero-notes span { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.forensic-studio {
+  overflow: hidden;
+  border: 1px solid rgba(112, 178, 231, 0.2);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(17, 34, 55, 0.84), rgba(8, 20, 34, 0.94));
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.16);
+}
+.forensic-studio__intro { padding: 28px 30px 22px; }
+.forensic-studio__intro h2 { font-size: 25px; letter-spacing: -0.045em; }
+.forensic-studio__intro p:not(.eyebrow) { max-width: 660px; margin: 10px 0 0; color: #9bb0c5; font-size: 13px; line-height: 1.7; }
+.forensic-studio__independent {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(69, 217, 255, 0.22);
+  border-radius: 999px;
+  color: #8ee7ff;
+  font: 10px "DM Mono", monospace;
+}
+.forensic-studio__setup {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 20px;
+  padding: 20px 30px;
+  border-block: 1px solid var(--line);
+  background: rgba(3, 10, 19, 0.2);
+}
+.forensic-studio__algorithm { display: grid; gap: 10px; }
+.forensic-studio__section-label { color: #7890aa; font: 10px "DM Mono", monospace; text-transform: uppercase; letter-spacing: .08em; }
+.forensic-studio__algorithm-options { display: flex; gap: 8px; }
+.forensic-studio__algorithm-options label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  align-items: center;
+  min-width: 185px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  color: #9bb0c5;
+}
+.forensic-studio__algorithm-options label.is-selected { border-color: rgba(69, 217, 255, 0.55); background: rgba(69, 217, 255, 0.08); color: #eaf9ff; }
+.forensic-studio__algorithm-options input { grid-row: span 2; accent-color: var(--cyan); }
+.forensic-studio__algorithm-options strong { font-size: 12px; }
+.forensic-studio__algorithm-options small { color: #7890aa; font-size: 10px; }
+.forensic-studio__run { flex: 0 0 auto; }
+.forensic-studio__guide {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 23px 30px;
+}
+.forensic-studio__guide > div { min-width: 0; }
+.forensic-studio__guide > div > span {
+  display: grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+  color: #05111d;
+  background: var(--cyan);
+  font: 11px "DM Mono", monospace;
+}
+.forensic-studio__guide strong { display: block; color: #dff2ff; font-size: 12px; }
+.forensic-studio__guide p { margin: 5px 0 0; color: #7890aa; font-size: 10px; line-height: 1.5; }
+.forensic-studio__guide > svg { color: #49667e; }
+.forensic-studio__method,
+.forensic-studio__details,
+.watermark-page__legacy {
+  border-top: 1px solid var(--line);
+}
+.forensic-studio__method { padding: 0 30px; background: rgba(3, 10, 19, 0.18); }
+.forensic-studio__method summary,
+.forensic-studio__details summary,
+.watermark-page__legacy summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 0;
+  color: #cce1ef;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  list-style: none;
+}
+.forensic-studio__method summary svg,
+.forensic-studio__details summary svg { transition: transform .2s ease; }
+.forensic-studio__method[open] summary svg,
+.forensic-studio__details[open] summary svg { transform: rotate(90deg); }
+.forensic-studio__method-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding-bottom: 12px; }
+.forensic-studio__method-grid > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.018);
+}
+.forensic-studio__method-grid span { color: var(--cyan); }
+.forensic-studio__method-grid small,
+.forensic-studio__metrics span,
+.forensic-studio__session-data dt { color: #7890aa; font: 10px "DM Mono", monospace; }
+.forensic-studio__method-grid strong { color: #c7d9e8; font-size: 10px; font-weight: 500; line-height: 1.55; }
+.forensic-studio__method-grid .is-sensitive { border-color: rgba(255, 184, 107, .38); }
+.forensic-studio__method-grid code { overflow-wrap: anywhere; color: #ffcf97; font-size: 10px; }
+.forensic-studio__method-note { margin: 0; padding: 0 0 16px; color: #7790a7; font-size: 10px; line-height: 1.6; }
+.forensic-studio__method-note code { color: #a5cce6; }
+.forensic-studio__empty { display: grid; place-items: center; gap: 8px; min-height: 190px; padding: 25px; color: #7890aa; text-align: center; }
+.forensic-studio__empty svg { color: var(--cyan); }
+.forensic-studio__empty strong { color: #d8e9f5; font-size: 13px; }
+.forensic-studio__empty span { font-size: 11px; }
+.forensic-studio__result-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px 30px 18px; }
+.forensic-studio__result-heading h3 { font-size: 18px; }
+.forensic-studio__result-heading p:not(.eyebrow) { margin: 6px 0 0; color: #7890aa; font: 10px "DM Mono", monospace; overflow-wrap: anywhere; }
+.forensic-studio__result-ok,
+.forensic-studio__result-pending { display: inline-flex; align-items: center; gap: 7px; padding: 8px 10px; border-radius: 7px; font: 10px "DM Mono", monospace; }
+.forensic-studio__result-ok { color: #b9f99c; background: rgba(158, 255, 108, .09); border: 1px solid rgba(158, 255, 108, .22); }
+.forensic-studio__result-pending { color: #ffd19c; background: rgba(255, 184, 107, .09); border: 1px solid rgba(255, 184, 107, .22); }
+.forensic-studio__status { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 0 30px 24px; }
+.forensic-studio__status article { display: grid; gap: 5px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255, 255, 255, .02); }
+.forensic-studio__status article > span { color: var(--cyan); }
+.forensic-studio__status small { color: #7890aa; font: 10px "DM Mono", monospace; }
+.forensic-studio__status strong { color: #e2f2fb; font-size: 12px; overflow-wrap: anywhere; }
+.forensic-studio__status p { min-height: 28px; margin: 0; color: #7890aa; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.forensic-studio__comparison { padding: 25px 30px 30px; border-top: 1px solid var(--line); background: rgba(3, 10, 19, .22); }
+.forensic-studio__comparison-heading { display: flex; justify-content: space-between; align-items: end; gap: 15px; }
+.forensic-studio__comparison h3 { font-size: 19px; }
+.forensic-studio__comparison-heading p:not(.eyebrow) { margin: 5px 0 0; color: #7890aa; font-size: 11px; }
+.forensic-studio__comparison-heading > span { color: #a5cce6; font: 10px "DM Mono", monospace; white-space: nowrap; }
+.forensic-studio__variant-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 17px 0 12px; }
+.forensic-studio__variant-tabs button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; color: #90a9bf; background: transparent; font-size: 11px; }
+.forensic-studio__variant-tabs button.is-active { color: #eaffff; background: rgba(69, 217, 255, .12); border-color: rgba(69, 217, 255, .42); }
+.forensic-studio__media-stage { position: relative; overflow: hidden; aspect-ratio: 16 / 9; border: 1px solid rgba(69, 217, 255, .22); border-radius: 10px; background: #02070c; }
+.forensic-studio__media-stage video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; opacity: 0; pointer-events: none; transition: opacity .16s ease; }
+.forensic-studio__media-stage video.is-active { opacity: 1; pointer-events: auto; }
+.forensic-studio__playback { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.forensic-studio__playback label { display: grid; grid-template-columns: auto minmax(130px, 1fr); align-items: center; flex: 1; gap: 10px; color: #7890aa; font: 10px "DM Mono", monospace; }
+.forensic-studio__playback input { width: 100%; accent-color: var(--cyan); }
+.forensic-studio__detection-map { display: grid; grid-template-columns: minmax(180px, .75fr) minmax(250px, 1.25fr); align-items: center; gap: 22px; margin-top: 22px; padding: 16px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, .018); }
+.forensic-studio__detection-map h4 { font-size: 14px; }
+.forensic-studio__detection-map p:not(.eyebrow) { margin: 7px 0 0; color: #7890aa; font-size: 10px; line-height: 1.6; }
+.forensic-studio__detection-map img { display: block; width: 100%; max-height: 250px; object-fit: contain; border-radius: 5px; background: #07101d; }
+.forensic-studio__details { padding: 0 30px 23px; }
+.forensic-studio__metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-bottom: 14px; }
+.forensic-studio__metrics div { display: grid; gap: 4px; padding: 10px; border-radius: 7px; background: rgba(255, 255, 255, .028); }
+.forensic-studio__metrics strong { color: #d8edf9; font-size: 12px; overflow-wrap: anywhere; }
+.forensic-studio__checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding-bottom: 14px; }
+.forensic-studio__checks div { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+.forensic-studio__checks strong { color: #bfd5e5; font-size: 10px; }
+.forensic-studio__checks span { color: #7890aa; font: 9px "DM Mono", monospace; text-align: right; }
+.forensic-studio__session-data { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.forensic-studio__session-data div { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; }
+.forensic-studio__session-data dt { margin-bottom: 5px; }
+.forensic-studio__session-data dd { margin: 0; color: #abc7d8; font: 9px/1.55 "DM Mono", monospace; overflow-wrap: anywhere; }
+.watermark-page__legacy { margin-top: 18px; padding: 0 20px 20px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .015); }
+.watermark-page__legacy summary { padding-bottom: 11px; }
+.watermark-page__legacy summary span { padding: 3px 6px; border-radius: 4px; color: #7890aa; background: rgba(255,255,255,.05); font: 9px "DM Mono", monospace; }
+.watermark-page__legacy > p { max-width: 760px; margin: 0; color: #7890aa; font-size: 11px; line-height: 1.6; }
+.watermark-page__legacy .watermark-lab { margin-top: 20px; }
+@media (max-width: 900px) {
+  .watermark-page__hero, .forensic-studio__intro, .forensic-studio__setup, .forensic-studio__result-heading { align-items: start; flex-direction: column; }
+  .watermark-page__hero-notes { width: 100%; max-width: none; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .forensic-studio__guide { grid-template-columns: repeat(4, 1fr); }
+  .forensic-studio__guide > svg { display: none; }
+  .forensic-studio__method-grid, .forensic-studio__status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .forensic-studio__detection-map { grid-template-columns: 1fr; }
+}
+@media (max-width: 620px) {
+  .forensic-studio__intro, .forensic-studio__setup, .forensic-studio__comparison, .forensic-studio__result-heading { padding-inline: 18px; }
+  .forensic-studio__method, .forensic-studio__details { padding-inline: 18px; }
+  .forensic-studio__status { padding-inline: 18px; }
+  .watermark-page__hero-notes, .forensic-studio__guide, .forensic-studio__method-grid, .forensic-studio__status, .forensic-studio__metrics, .forensic-studio__checks, .forensic-studio__session-data { grid-template-columns: 1fr; }
+  .forensic-studio__algorithm-options { width: 100%; flex-direction: column; }
+  .forensic-studio__algorithm-options label { min-width: 0; }
+  .forensic-studio__run { width: 100%; justify-content: center; }
+  .forensic-studio__playback { align-items: stretch; flex-wrap: wrap; }
+  .forensic-studio__playback label { flex-basis: 100%; grid-template-columns: 1fr; gap: 4px; }
+  .forensic-studio__checks div { display: grid; }
+  .forensic-studio__checks span { text-align: left; }
+}
