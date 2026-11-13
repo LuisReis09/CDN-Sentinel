@@ -52,6 +52,7 @@ class HLSABTests(unittest.TestCase):
             self.assertNotEqual(first_record["fingerprint"], second_record["fingerprint"])
             self.assertIn("#EXT-X-ENDLIST", hls.manifest(first["session_id"], "client-a"))
             self.assertFalse(first["attribution_ready"])
+            self.assertEqual(first["watermark_algorithm"], "dct-qim-v3")
             self.assertEqual(len(list((root / "cache" / hls.prepare("synthetic")["cache_id"] / "A").glob("*.ts"))), 3)
             for index in range(3):
                 segment = hls.segment(first["session_id"], "client-a", index)

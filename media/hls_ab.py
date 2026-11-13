@@ -54,7 +54,7 @@ class HLSABService:
 
     def _cache_id(self, source: Path, content_id: str) -> str:
         stat = source.stat()
-        raw = f"CDNHLSAB1|{source}|{stat.st_mtime_ns}|{stat.st_size}|{content_id}|{self.segment_seconds}|{hashlib.sha256(self.watermark_service.secret_key.encode()).hexdigest()}"
+        raw = f"CDNHLSAB2-QIM3|{source}|{stat.st_mtime_ns}|{stat.st_size}|{content_id}|{self.segment_seconds}|{hashlib.sha256(self.watermark_service.secret_key.encode()).hexdigest()}"
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     def prepare(self, content_id: str) -> dict:
@@ -98,7 +98,7 @@ class HLSABService:
                     for variant in ("A", "B"):
                         token = f"CDNAB1|{content_id}|{index}|{variant}"
                         marked = staged / variant / f"{index:04d}.mp4"
-                        embed_video(segment, marked, token, self.watermark_service.secret_key)
+                        embed_video(segment, marked, token, self.watermark_service.secret_key, algorithm="qim3")
                         transport = staged / variant / f"{index:04d}.ts"
                         subprocess.run([
                             "ffmpeg", "-y", "-v", "error", "-i", str(marked), "-map", "0:v:0", "-map", "0:a?",
@@ -128,6 +128,7 @@ class HLSABService:
                         "attribution_ready": False,
                         "manifest_url": f"/api/clients/{client_id}/hls/{viewer_session_id}/index.m3u8",
                         "algorithm_id": "hls-ab-v1",
+                        "watermark_algorithm": "dct-qim-v3",
                     }
             for _ in range(32):
                 session_id = viewer_session_id or f"hls-{uuid.uuid4().hex}"
@@ -153,6 +154,7 @@ class HLSABService:
             "attribution_ready": False,
             "manifest_url": f"/api/clients/{client_id}/hls/{session_id}/index.m3u8",
             "algorithm_id": "hls-ab-v1",
+            "watermark_algorithm": "dct-qim-v3",
         }
 
     def manifest(self, session_id: str, client_id: str) -> str:
@@ -181,7 +183,7 @@ class HLSABService:
         return path
 
     def detect_segment_variant(self, path: Path, content_id: str, index: int) -> dict:
-        evidence = detect_video(path, self.watermark_service.secret_key)
+        evidence = detect_video(path, self.watermark_service.secret_key, algorithm="qim3")
         if evidence.get("status") != "CANDIDATE":
             return {"status": "INCONCLUSIVE", "index": index, "detector_status": evidence.get("status")}
         for variant in ("A", "B"):
