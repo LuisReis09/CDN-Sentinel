@@ -168,6 +168,9 @@ class StreamService:
             "network_latency_ms": round(artificial_latency_ms, 3),
             "queue_wait_ms": round(queue_wait_ms, 3),
             "liked": None,
+            "watermark_version": result.get("watermark_version", "CDNWM4"),
+            "watermark_algorithm": result.get("watermark_algorithm", "dct-qim-v3"),
+            "watermark_id": result.get("watermark_id"),
         }
         client.watch_history.append(watch_record)
         client.watch_history = client.watch_history[-100:]
@@ -203,7 +206,9 @@ class StreamService:
                 "end_to_end_ms": round(end_to_end_ms, 3),
                 "protocol": "HTTP/1.1",
                 "routing": "Haversine / nearest healthy CDN",
-                "watermark_algorithm": "AES-256-GCM + HMAC-SHA256",
+                "watermark_algorithm": result.get("watermark_algorithm", "dct-qim-v3"),
+                "watermark_version": result.get("watermark_version", "CDNWM4"),
+                "watermark_id": result.get("watermark_id"),
                 "chunk_id": result["chunk_id"],
                 "content_id": state.config.get("video_id") or default_content_id(),
                 "content_title": state.config.get("video_id") or default_content_id(),

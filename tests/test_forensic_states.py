@@ -3,7 +3,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from models.entities import CDNServer, SimulationState
+from repositories.in_memory import SimulationRepository
 from services.forensic_investigation_service import ForensicInvestigationService
+from services.monitor_service import MonitorService
 from services.watermark_service import WatermarkService
 from services.watermark_registry import WatermarkRegistry
 
@@ -38,6 +41,25 @@ class FakeWatermarkService:
 
 
 class ForensicStatesTests(unittest.TestCase):
+    def test_monitor_requests_only_the_current_qim3_detector(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            media = Path(temporary) / "leak.mp4"
+            media.write_bytes(b"test")
+            repository = SimulationRepository()
+            repository.replace(SimulationState(
+                initialized=True,
+                servers={"edge-a": CDNServer("edge-a", "127.0.0.1", 5101, 0, 0, "A")},
+                leaks=[{"leak_id": "leak-a", "server_id": "edge-a", "media_path": str(media), "processed": False}],
+            ))
+            service = WatermarkService("monitor-current-secret-2026", WatermarkRegistry(Path(temporary) / "ledger.sqlite3"))
+            monitor = MonitorService(repository, service, None)
+            with patch.object(monitor._investigations, "investigate_video", return_value={
+                "forensic_status": "NOT_FOUND", "decision": "NOT_FOUND", "evidence": {"reason": "not_found"}
+            }) as investigate:
+                result = monitor.scan("edge-a")
+            self.assertEqual(result["scanned"], 1)
+            self.assertEqual(investigate.call_args.kwargs["algorithm"], "qim3")
+
     def test_detector_prefers_inconclusive_to_not_found_and_never_maps_unknown_to_absence(self):
         with tempfile.TemporaryDirectory() as temporary:
             service = WatermarkService("state-test-secret-with-entropy-2026", WatermarkRegistry(Path(temporary) / "ledger.sqlite3"))

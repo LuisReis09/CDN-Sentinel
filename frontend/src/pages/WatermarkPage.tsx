@@ -1,5 +1,4 @@
 import { BookOpenCheck, FlaskConical, KeyRound } from "lucide-react";
-import { WatermarkLab } from "../components/WatermarkLab";
 import { ForensicStudio } from "../components/ForensicStudio";
 import type { Overview } from "../types";
 
@@ -30,14 +29,6 @@ export function WatermarkPage({
 
       <ForensicStudio onError={onError} />
 
-      <details className="watermark-page__legacy">
-        <summary>Laboratório legado CDNWM3 <span>opcional</span></summary>
-        <p>
-          Este painel mantém o experimento histórico Adaptive Spread. Ele não representa
-          o fluxo CDNWM4 e não deve ser usado para interpretar uma sessão forense atual.
-        </p>
-        <WatermarkLab onError={onError} />
-      </details>
     </main>
   );
 }

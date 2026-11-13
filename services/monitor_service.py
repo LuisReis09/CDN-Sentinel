@@ -170,7 +170,9 @@ class MonitorService:
             try:
                 media_path = leak.get("media_path")
                 if media_path:
-                    investigation = self._investigations.investigate_video(Path(media_path), source="simulated-platform")
+                    investigation = self._investigations.investigate_video(
+                        Path(media_path), source="simulated-platform", algorithm="qim3"
+                    )
                     leak["forensic_status"] = investigation["forensic_status"]
                     leak["forensic_evidence"] = investigation["evidence"]
                     leak["investigation_id"] = investigation["investigation_id"]
@@ -228,7 +230,7 @@ class MonitorService:
             "monitor_server_id": server_id,
             "detected": len(detected),
             "rejected": len(rejected),
-            "proof_algorithm": "AES-256-GCM + HMAC-SHA256",
+            "proof_algorithm": "CDNWM4 / DCT-QIM3 + AES-256-GCM + HMAC-SHA256",
             "source": "embedded chunk bytes",
             "automatic": automatic,
         })

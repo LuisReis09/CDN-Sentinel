@@ -24,8 +24,8 @@ from utils.latency import sleep_for_distance
 from utils.crypto import decrypt_payload, encrypt_payload, is_encrypted_payload
 from utils.video import encode_payload
 from utils.protocol import signed_headers, verify_headers
-from utils.video_watermark import VIDEO_STRENGTH, embed_video, probe_video_limits
-from utils.qim_watermark import QIM_STEP, QIM3_STEP
+from utils.video_watermark import embed_video, probe_video_limits
+from utils.qim_watermark import QIM3_STEP
 
 
 class CapacityRejected(RuntimeError):
@@ -127,7 +127,7 @@ class CDNNode:
             **metrics,
         }
 
-    def _watermarked_media(self, video_id: str, chunk_number: int, token: str, content: bytes, content_type: str, algorithm: str = "adaptive-spread") -> bytes:
+    def _watermarked_media(self, video_id: str, chunk_number: int, token: str, content: bytes, content_type: str, algorithm: str = "qim3") -> bytes:
         """Return a playable media payload with the visual marker in its frames.
 
         The token is deliberately kept as response metadata. It is never
@@ -157,9 +157,9 @@ class CDNNode:
             cache_root = Path(os.getenv("CDN_WATERMARK_CACHE_ROOT", "data/runtime/watermarked"))
             cache_root.mkdir(parents=True, exist_ok=True)
             cache_key = hashlib.sha256(
-                f"CDNWM6:{source_path.resolve()}:{source_stat.st_mtime_ns}:{source_stat.st_size}:"
+                f"CDNWM7-QIM3:{source_path.resolve()}:{source_stat.st_mtime_ns}:{source_stat.st_size}:"
                 f"{hashlib.sha256(self.secret_key.encode('utf-8')).hexdigest()}:{token}:"
-                f"{QIM3_STEP if algorithm == 'qim3' else QIM_STEP if algorithm == 'qim2' else VIDEO_STRENGTH}:{algorithm}".encode("utf-8")
+                f"{QIM3_STEP}:{algorithm}".encode("utf-8")
             ).hexdigest()[:32]
             destination = cache_root / f"{cache_key}.mp4"
             if not destination.is_file() or destination.stat().st_size == 0:
@@ -170,7 +170,7 @@ class CDNNode:
                         partial,
                         token,
                         self.watermark_service.visual_secret_for_token(token),
-                        strength=QIM3_STEP if algorithm == "qim3" else QIM_STEP if algorithm == "qim2" else VIDEO_STRENGTH,
+                        strength=QIM3_STEP,
                         adaptive=True,
                         algorithm=algorithm,
                     )
@@ -208,39 +208,38 @@ class CDNNode:
                 time.sleep(self.fault["extra_latency_ms"] / 1000.0)
             content, content_type = self.content_provider.get_chunk(video_id, chunk_number)
             claim_content_id = video_id
-            algorithm = "adaptive-spread"
+            # CDNWM4/QIM3 is the only delivery watermark for new media.  The
+            # legacy adaptive spread path remains readable by old evidence
+            # tools, but is never selected by CDN nodes.
+            algorithm = "qim3"
             resolver = getattr(self.content_provider, "resolve_asset", None)
             if resolver is not None:
                 try:
                     source_path, _source_type = resolver(video_id, chunk_number)
                     limits = probe_video_limits(source_path)
-                    if limits["width"] >= 640 and limits["height"] >= 360:
-                        algorithm = "qim3"
                     if video_id == DATASET_CONTENT_ID:
                         dataset = DatasetContentProvider()
                         claim_content_id = dataset._content_id(source_path.resolve())
                 except (OSError, ValueError, FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
                     pass
-            if os.getenv("CDN_FORENSIC_CLAIMS", "1").strip().lower() in {"1", "true", "yes", "on"}:
-                token, claim = self.watermark_service.issue_forensic_claim(
-                    client_id=client_id,
-                    server_id=self.server_id,
-                    content_id=claim_content_id,
-                    session_id=viewer_session_id or f"sess-{uuid.uuid4().hex}",
-                    segment_range=f"{chunk_number}-{chunk_number}",
-                    algorithm_id="dct-qim-v3" if algorithm == "qim3" else "dct-qim-v2" if algorithm == "qim2" else "adaptive-spread-v5",
-                )
-                chunk_id = claim.segment_range
-            else:
-                token, claim = self.watermark_service.issue(client_id, self.server_id, chunk_number, claim_content_id)
-                chunk_id = claim.chunk_id
-                algorithm = "adaptive-spread"
+            token, claim = self.watermark_service.issue_forensic_claim(
+                client_id=client_id,
+                server_id=self.server_id,
+                content_id=claim_content_id,
+                session_id=viewer_session_id or f"sess-{uuid.uuid4().hex}",
+                segment_range=f"{chunk_number}-{chunk_number}",
+                algorithm_id="dct-qim-v3",
+            )
+            chunk_id = claim.segment_range
             watermarked = self._watermarked_media(video_id, chunk_number, token, content, content_type, algorithm)
             result = {
                 "chunk_id": chunk_id,
                 "content_type": content_type,
                 "payload": encode_payload(watermarked),
                 "watermark_token": token,
+                "watermark_version": "CDNWM4",
+                "watermark_algorithm": "dct-qim-v3",
+                "watermark_id": claim.watermark_id,
                 "server_id": self.server_id,
                 "issued_at": claim.issued_at,
             }

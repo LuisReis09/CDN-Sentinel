@@ -1,5 +1,8 @@
 import copy
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
 
 import requests
@@ -14,6 +17,34 @@ from utils.security import create_watermark_token
 
 
 class Delivery2SecurityTests(unittest.TestCase):
+    def test_node_delivery_issues_cdnwm4_qim3_claim(self):
+        class LocalVideo:
+            def get_chunk(self, content_id, chunk_number):
+                return b"synthetic-video", "video/mp4"
+
+            def resolve_asset(self, content_id, chunk_number=0):
+                raise FileNotFoundError(content_id)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            previous = os.environ.get("CDN_WATERMARK_REGISTRY_PATH")
+            os.environ["CDN_WATERMARK_REGISTRY_PATH"] = str(Path(temporary) / "ledger.sqlite3")
+            try:
+                node = CDNNode("cdn-current", "127.0.0.1", 59990, 0, 0, "Test", "current-watermark-secret-2026", 0, content_provider=LocalVideo())
+                node._watermarked_media = Mock(return_value=b"marked-video")
+                result = node.stream("client-current", 2, "youtube_clipped_videos/videos/clip.mp4")
+                self.assertTrue(result["watermark_token"].startswith("CDNWM4."))
+                self.assertEqual(result["watermark_version"], "CDNWM4")
+                self.assertEqual(result["watermark_algorithm"], "dct-qim-v3")
+                self.assertTrue(result["watermark_id"])
+                node._watermarked_media.assert_called_once()
+                self.assertEqual(node._watermarked_media.call_args.args[-1], "qim3")
+            finally:
+                node._retry_stop.set()
+                if previous is None:
+                    os.environ.pop("CDN_WATERMARK_REGISTRY_PATH", None)
+                else:
+                    os.environ["CDN_WATERMARK_REGISTRY_PATH"] = previous
+
     def test_internal_protocol_has_timestamp_nonce_and_replay_protection(self):
         seen = set()
 

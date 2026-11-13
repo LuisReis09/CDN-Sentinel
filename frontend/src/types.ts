@@ -580,7 +580,7 @@ export interface ManagementState {
 
 export interface ForensicStudio {
   pipeline: "CDNWM4";
-  algorithm: "qim2" | "qim3";
+  algorithm: "qim3";
   algorithm_id: string;
   fingerprint_scheme: string;
   video_label: string;
@@ -609,6 +609,25 @@ export interface ForensicStudio {
     region_mean_abs_luma_max: number;
   };
   robustness_checks: Array<{ filter: string; filter_id: string; status: string; survives: boolean; bits_correct: number; bits_total: number }>;
+  forensic_envelope: {
+    format: string;
+    token: string;
+    version: string;
+    key_id: string;
+    algorithm: string;
+    algorithm_key: string;
+    nonce_base64url: string;
+    ciphertext_and_tag_base64url: string;
+    hmac_sha256: string;
+    metadata: Record<string, string | number>;
+    claim_before_encryption: Record<string, string | number>;
+    claim_after_decryption: Record<string, string | number>;
+  };
+  media_payloads: {
+    original: { sha256: string; size_bytes: number; prefix_base64: string };
+    watermarked: { sha256: string; size_bytes: number; prefix_base64: string };
+    note: string;
+  };
   video_variants: Record<"original" | "control" | "watermarked" | "residual" | "difference" | "detection_map", string>;
   video_alignment: { aligned: boolean; probes: Record<string, { duration_seconds: number; fps: number }> };
   diagnostics: Record<string, string>;

@@ -3955,20 +3955,17 @@ label {
 .forensic-studio__algorithm { display: grid; gap: 10px; }
 .forensic-studio__section-label { color: #7890aa; font: 10px "DM Mono", monospace; text-transform: uppercase; letter-spacing: .08em; }
 .forensic-studio__algorithm-options { display: flex; gap: 8px; }
-.forensic-studio__algorithm-options label {
+.forensic-studio__algorithm-options > div {
   display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 8px;
+  gap: 3px;
   align-items: center;
   min-width: 185px;
   padding: 9px 11px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  cursor: pointer;
   color: #9bb0c5;
 }
-.forensic-studio__algorithm-options label.is-selected { border-color: rgba(69, 217, 255, 0.55); background: rgba(69, 217, 255, 0.08); color: #eaf9ff; }
-.forensic-studio__algorithm-options input { grid-row: span 2; accent-color: var(--cyan); }
+.forensic-studio__algorithm-options > div.is-selected { border-color: rgba(69, 217, 255, 0.55); background: rgba(69, 217, 255, 0.08); color: #eaf9ff; }
 .forensic-studio__algorithm-options strong { font-size: 12px; }
 .forensic-studio__algorithm-options small { color: #7890aa; font-size: 10px; }
 .forensic-studio__run { flex: 0 0 auto; }
@@ -3995,14 +3992,12 @@ label {
 .forensic-studio__guide p { margin: 5px 0 0; color: #7890aa; font-size: 10px; line-height: 1.5; }
 .forensic-studio__guide > svg { color: #49667e; }
 .forensic-studio__method,
-.forensic-studio__details,
-.watermark-page__legacy {
+.forensic-studio__details {
   border-top: 1px solid var(--line);
 }
 .forensic-studio__method { padding: 0 30px; background: rgba(3, 10, 19, 0.18); }
 .forensic-studio__method summary,
-.forensic-studio__details summary,
-.watermark-page__legacy summary {
+.forensic-studio__details summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4080,15 +4075,17 @@ label {
 .forensic-studio__checks div { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
 .forensic-studio__checks strong { color: #bfd5e5; font-size: 10px; }
 .forensic-studio__checks span { color: #7890aa; font: 9px "DM Mono", monospace; text-align: right; }
-.forensic-studio__session-data { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.forensic-studio__session-data { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
 .forensic-studio__session-data div { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 7px; }
 .forensic-studio__session-data dt { margin-bottom: 5px; }
 .forensic-studio__session-data dd { margin: 0; color: #abc7d8; font: 9px/1.55 "DM Mono", monospace; overflow-wrap: anywhere; }
-.watermark-page__legacy { margin-top: 18px; padding: 0 20px 20px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .015); }
-.watermark-page__legacy summary { padding-bottom: 11px; }
-.watermark-page__legacy summary span { padding: 3px 6px; border-radius: 4px; color: #7890aa; background: rgba(255,255,255,.05); font: 9px "DM Mono", monospace; }
-.watermark-page__legacy > p { max-width: 760px; margin: 0; color: #7890aa; font-size: 11px; line-height: 1.6; }
-.watermark-page__legacy .watermark-lab { margin-top: 20px; }
+.forensic-studio__evidence { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.forensic-studio__evidence h4 { margin: 0 0 9px; color: #c9dfed; font-size: 11px; }
+.forensic-studio__evidence dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.forensic-studio__evidence dl > div { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: rgba(255, 255, 255, .018); }
+.forensic-studio__evidence dt { margin-bottom: 5px; color: #7890aa; font: 9px "DM Mono", monospace; }
+.forensic-studio__evidence dd { margin: 0; }
+.forensic-studio__evidence code { display: block; max-height: 88px; overflow: auto; color: #b6d4e6; font: 9px/1.5 "DM Mono", monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
 @media (max-width: 900px) {
   .watermark-page__hero, .forensic-studio__intro, .forensic-studio__setup, .forensic-studio__result-heading { align-items: start; flex-direction: column; }
   .watermark-page__hero-notes { width: 100%; max-width: none; grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -4101,9 +4098,9 @@ label {
   .forensic-studio__intro, .forensic-studio__setup, .forensic-studio__comparison, .forensic-studio__result-heading { padding-inline: 18px; }
   .forensic-studio__method, .forensic-studio__details { padding-inline: 18px; }
   .forensic-studio__status { padding-inline: 18px; }
-  .watermark-page__hero-notes, .forensic-studio__guide, .forensic-studio__method-grid, .forensic-studio__status, .forensic-studio__metrics, .forensic-studio__checks, .forensic-studio__session-data { grid-template-columns: 1fr; }
+  .watermark-page__hero-notes, .forensic-studio__guide, .forensic-studio__method-grid, .forensic-studio__status, .forensic-studio__metrics, .forensic-studio__checks, .forensic-studio__session-data, .forensic-studio__evidence dl { grid-template-columns: 1fr; }
   .forensic-studio__algorithm-options { width: 100%; flex-direction: column; }
-  .forensic-studio__algorithm-options label { min-width: 0; }
+  .forensic-studio__algorithm-options > div { min-width: 0; }
   .forensic-studio__run { width: 100%; justify-content: center; }
   .forensic-studio__playback { align-items: stretch; flex-wrap: wrap; }
   .forensic-studio__playback label { flex-basis: 100%; grid-template-columns: 1fr; gap: 4px; }

@@ -26,6 +26,11 @@ class ForensicStudioE2ETests(unittest.TestCase):
                 else:
                     self.assertEqual(body["video_id"], "bigbuckbunny")
                 self.assertEqual(body["claim"]["version"], "CDNWM4")
+                self.assertEqual(body["forensic_envelope"]["version"], "CDNWM4")
+                self.assertEqual(body["forensic_envelope"]["claim_before_encryption"], body["forensic_envelope"]["claim_after_decryption"])
+                self.assertTrue(body["forensic_envelope"]["nonce_base64url"])
+                self.assertTrue(body["forensic_envelope"]["ciphertext_and_tag_base64url"])
+                self.assertNotEqual(body["media_payloads"]["original"]["sha256"], body["media_payloads"]["watermarked"]["sha256"])
                 self.assertEqual(body["visual_detection"]["marker"], body["issued_marker"])
                 self.assertEqual(body["ledger_status"], "VALID")
                 self.assertEqual(body["investigation"]["decision"], "PENDING_REVIEW")

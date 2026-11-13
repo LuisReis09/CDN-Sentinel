@@ -169,7 +169,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  forensicStudio: (payload: { algorithm: "qim2" | "qim3"; video_id?: string }) =>
+  forensicStudio: (payload: { algorithm: "qim3"; video_id?: string }) =>
     request<ForensicStudio>("/security/watermark/demo/forensic", {
       method: "POST",
       body: JSON.stringify(payload),

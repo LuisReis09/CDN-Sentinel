@@ -22,15 +22,14 @@ const videoKeys = ["original", "control", "watermarked", "residual", "difference
 type VideoKey = (typeof videoKeys)[number];
 
 const variants: Record<VideoKey, { label: string; description: string }> = {
-  original: { label: "Original", description: "Referência do clipe de teste." },
-  control: { label: "Controle", description: "Mesmo codec, sem watermark." },
-  watermarked: { label: "Marcado", description: "Versão entregue pelo laboratório." },
-  residual: { label: "Resíduo", description: "Sinal antes da compressão, ampliado 8×." },
-  difference: { label: "Diferença", description: "Diferença após codec, ampliada 8×." },
+  original: { label: "Original", description: "Os quatro segundos-base do clipe, antes da codificação comparativa e sem marca." },
+  control: { label: "Controle", description: "O mesmo clipe, recomprimido em H.264/CRF24 sem watermark. Ele isola o efeito normal do codec." },
+  watermarked: { label: "Marcado", description: "A mesma codificação do controle, com o marcador CDNWM4/QIM3 gravado nos coeficientes DCT." },
+  residual: { label: "Resíduo", description: "A diferença original→marcado antes do H.264, em escala 8×: onde o QIM3 alterou pixels para carregar bits." },
+  difference: { label: "Diferença", description: "A diferença controle→marcado depois de ambas as codificações, em escala 8×: o sinal que sobrevive ao codec." },
 };
 
 export function ForensicStudio({ onError }: { onError: (message: string) => void }) {
-  const [algorithm, setAlgorithm] = useState<"qim2" | "qim3">("qim3");
   const [result, setResult] = useState<StudioResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -62,7 +61,7 @@ export function ForensicStudio({ onError }: { onError: (message: string) => void
     setPlaying(false);
     setSelectedVariant("watermarked");
     try {
-      setResult(await api.forensicStudio({ algorithm }));
+      setResult(await api.forensicStudio({ algorithm: "qim3" }));
       setTime(0);
     } catch (error) {
       onError(error instanceof Error ? error.message : "Falha no Studio CDNWM4.");
@@ -114,16 +113,11 @@ export function ForensicStudio({ onError }: { onError: (message: string) => void
 
       <div className="forensic-studio__setup">
         <div className="forensic-studio__algorithm">
-          <span className="forensic-studio__section-label"><SlidersHorizontal size={14} /> Método do ensaio</span>
-          <div className="forensic-studio__algorithm-options" role="radiogroup" aria-label="Método de watermark">
-            <label className={algorithm === "qim3" ? "is-selected" : ""}>
-              <input type="radio" name="algorithm" value="qim3" checked={algorithm === "qim3"} disabled={busy} onChange={() => setAlgorithm("qim3")} />
-              <strong>QIM3</strong><small>Máscara perceptual + ECC SECDED</small>
-            </label>
-            <label className={algorithm === "qim2" ? "is-selected" : ""}>
-              <input type="radio" name="algorithm" value="qim2" checked={algorithm === "qim2"} disabled={busy} onChange={() => setAlgorithm("qim2")} />
-              <strong>QIM2</strong><small>Base histórica sem ECC</small>
-            </label>
+          <span className="forensic-studio__section-label"><SlidersHorizontal size={14} /> Método atual do ensaio</span>
+          <div className="forensic-studio__algorithm-options" aria-label="Método de watermark em uso">
+            <div className="is-selected">
+              <strong>QIM3</strong><small>Máscara perceptual + ECC SECDED · CDNWM4</small>
+            </div>
           </div>
         </div>
         <button className="button button-primary forensic-studio__run" type="button" onClick={() => void run()} disabled={busy}>
@@ -147,11 +141,11 @@ export function ForensicStudio({ onError }: { onError: (message: string) => void
           <MethodItem icon={<Video size={16} />} label="Mídia" value="Youtube Clipped Videos quando disponível; Big Buck Bunny como fallback" />
           <MethodItem icon={<Eye size={16} />} label="Comparação" value="Original, controle CRF24, marcado e dois diagnósticos 8×" />
           <MethodItem icon={<ScanSearch size={16} />} label="Verificação" value="Até 24 frames, marcador exato, ledger e conteúdo" />
-          <MethodItem icon={<KeyRound size={16} />} label="Chave padrão local" value="local-development-secret" sensitive />
+          <MethodItem icon={<KeyRound size={16} />} label="Dados de sessão" value="Claim, chave, nonce e payloads aparecem no resultado" sensitive />
         </div>
         <p className="forensic-studio__method-note">
-          A chave é exibida aqui porque este é um laboratório independente. Ela corresponde ao valor padrão local;
-          uma instalação que defina <code>CDN_SECRET_KEY</code> usa seu próprio segredo no backend.
+          O Studio é independente da entrega da CDN. Ao fim do ensaio ele mostra o claim e o envelope
+          realmente usados: chave, nonce, ciphertext, HMAC e a recuperação autenticada.
         </p>
       </details>
 
@@ -201,7 +195,7 @@ export function ForensicStudio({ onError }: { onError: (message: string) => void
         </section>
 
         <details className="forensic-studio__details">
-          <summary>Métricas, resistência e dados técnicos <ChevronRight size={15} /></summary>
+          <summary>Evidências, payloads e métricas técnicas <ChevronRight size={15} /></summary>
           <div className="forensic-studio__metrics">
             <Metric label="PSNR" value={`${result.quality_vs_control.psnr_db.toFixed(2)} dB`} />
             <Metric label="SSIM janelado" value={result.quality_vs_control.ssim_windowed.toFixed(4)} />
@@ -216,8 +210,24 @@ export function ForensicStudio({ onError }: { onError: (message: string) => void
           <dl className="forensic-studio__session-data">
             <div><dt>Sessão</dt><dd>{String(result.claim.session_id)}</dd></div>
             <div><dt>Marcador emitido</dt><dd>{result.issued_marker}</dd></div>
-            <div><dt>Diagnóstico</dt><dd>{result.diagnostics.residual}</dd></div>
+            <div><dt>Marcador recuperado</dt><dd>{detection?.marker ?? "não recuperado"}</dd></div>
+            <div><dt>Ruído / resíduo</dt><dd>{result.diagnostics.residual}</dd></div>
           </dl>
+          <EvidenceGroup title="Claim e envelope criptográfico" fields={[
+            ["Payload antes da criptografia", JSON.stringify(result.forensic_envelope.claim_before_encryption)],
+            ["Chave usada no ensaio", result.forensic_envelope.algorithm_key],
+            ["Nonce AES-GCM", result.forensic_envelope.nonce_base64url],
+            ["Ciphertext + tag", result.forensic_envelope.ciphertext_and_tag_base64url],
+            ["HMAC-SHA256", result.forensic_envelope.hmac_sha256],
+            ["Payload recuperado", JSON.stringify(result.forensic_envelope.claim_after_decryption)],
+          ]} />
+          <EvidenceGroup title="Payload de mídia: antes e depois" fields={[
+            ["Original (SHA-256 / bytes)", `${result.media_payloads.original.sha256} / ${result.media_payloads.original.size_bytes}`],
+            ["Original: primeiros 48 bytes (Base64)", result.media_payloads.original.prefix_base64],
+            ["Marcado (SHA-256 / bytes)", `${result.media_payloads.watermarked.sha256} / ${result.media_payloads.watermarked.size_bytes}`],
+            ["Marcado: primeiros 48 bytes (Base64)", result.media_payloads.watermarked.prefix_base64],
+            ["Como ler o ruído", result.media_payloads.note],
+          ]} />
         </details>
       </>}
     </section>
@@ -238,4 +248,11 @@ function StatusCard({ icon, label, value, detail }: { icon: ReactNode; label: st
 
 function Metric({ label, value }: { label: string; value: string }) {
   return <div><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function EvidenceGroup({ title, fields }: { title: string; fields: Array<[string, string]> }) {
+  return <section className="forensic-studio__evidence">
+    <h4>{title}</h4>
+    <dl>{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd><code>{value}</code></dd></div>)}</dl>
+  </section>;
 }

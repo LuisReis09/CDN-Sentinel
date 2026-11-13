@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import time
 import uuid
@@ -20,6 +21,7 @@ from utils.video import (
     video_frame_timestamps,
 )
 from utils.video_watermark import assess_video_robustness, probe_video_limits
+from watermark.claims import claim_metadata, verify_claim_token
 
 
 class WatermarkDemoService:
@@ -63,6 +65,11 @@ class WatermarkDemoService:
         original, _ = get_video_asset(video_id, "original", generated_id)
         residual, _ = get_video_asset(video_id, "residual", generated_id)
         difference, _ = get_video_asset(video_id, "difference", generated_id)
+        verified_claim = verify_claim_token(token, self._watermark_service.secret_key, allow_expired=True)
+        token_version, token_key_id, encoded_envelope, token_mac = token.split(".", 3)
+        envelope = base64.urlsafe_b64decode(encoded_envelope + "=" * (-len(encoded_envelope) % 4))
+        original_bytes = original.read_bytes()
+        marked_bytes = marked.read_bytes()
         investigation = self._investigator.investigate_video(marked, source="studio-local-demonstration", algorithm=algorithm)
         detection = investigation.get("evidence", {})
         quality = _quality(_read_frames(control, max_frames=8), _read_frames(marked, max_frames=8))
@@ -99,6 +106,33 @@ class WatermarkDemoService:
             "investigation": {key: value for key, value in investigation.items() if key != "evidence"},
             "quality_vs_control": quality, "video_variants": variants,
             "robustness_checks": robustness,
+            "forensic_envelope": {
+                "format": "CDNWM4.<key_id>.<nonce+ciphertext+tag base64url>.<HMAC-SHA256 hex>",
+                "token": token,
+                "version": token_version,
+                "key_id": token_key_id,
+                "algorithm": "AES-256-GCM + HMAC-SHA256 (HKDF-SHA256)",
+                "algorithm_key": self._watermark_service.secret_key,
+                "nonce_base64url": base64.urlsafe_b64encode(envelope[:12]).decode("ascii").rstrip("="),
+                "ciphertext_and_tag_base64url": base64.urlsafe_b64encode(envelope[12:]).decode("ascii").rstrip("="),
+                "hmac_sha256": token_mac,
+                "metadata": claim_metadata(token),
+                "claim_before_encryption": claim.to_dict(),
+                "claim_after_decryption": verified_claim.to_dict(),
+            },
+            "media_payloads": {
+                "original": {
+                    "sha256": hashlib.sha256(original_bytes).hexdigest(),
+                    "size_bytes": len(original_bytes),
+                    "prefix_base64": base64.b64encode(original_bytes[:48]).decode("ascii"),
+                },
+                "watermarked": {
+                    "sha256": hashlib.sha256(marked_bytes).hexdigest(),
+                    "size_bytes": len(marked_bytes),
+                    "prefix_base64": base64.b64encode(marked_bytes[:48]).decode("ascii"),
+                },
+                "note": "Os prefixes representam apenas o cabeçalho MP4. O ruído é inserido nos coeficientes DCT dos frames, não como texto anexado ao arquivo.",
+            },
             "video_alignment": {"aligned": aligned, "probes": probes,
                                 "frame_count": frame_count, "max_timestamp_drift_ms": round(maximum_timestamp_drift * 1000, 3)},
             "diagnostics": {
