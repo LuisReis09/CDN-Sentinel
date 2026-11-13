@@ -361,7 +361,7 @@ export interface ForensicInvestigation {
   investigation_id: string;
   media_sha256: string;
   forensic_status: string;
-  decision: "PENDING_REVIEW" | "INCONCLUSIVE" | "NO_WATERMARK";
+  decision: "NOT_FOUND" | "INCONCLUSIVE" | "CANDIDATE" | "PENDING_REVIEW" | "REVIEWED" | "ERROR";
   attribution: "AUTHENTICATED_SESSION" | "NONE";
   content_id?: string | null;
   session_id?: string | null;
@@ -389,6 +389,7 @@ export interface WatermarkDemo {
     mime: string;
     resolution: string;
     size_bytes: number;
+    fps?: number;
     source: string;
     visual_transform: string;
   };

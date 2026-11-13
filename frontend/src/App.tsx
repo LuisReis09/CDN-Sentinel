@@ -11,7 +11,7 @@ import {
   Wifi,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Link, NavLink, Route, Routes } from "react-router-dom";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -21,9 +21,31 @@ import { NetworkLabPage } from "./pages/NetworkLabPage";
 import { SecurityPage } from "./pages/SecurityPage";
 import { WatermarkPage } from "./pages/WatermarkPage";
 import { useDashboardData } from "./hooks/useDashboardData";
+import { api } from "./api";
 
 export function App() {
   const data = useDashboardData();
+  const [auth, setAuth] = useState<"loading" | "local" | "login" | "authenticated">("loading");
+  const [operator, setOperator] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  useEffect(() => {
+    api.authSession().then((session) => {
+      setAuth(session ? "authenticated" : "local");
+    }).catch(() => setAuth("login"));
+  }, []);
+  const submitLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setAuthError("");
+    try {
+      await api.login(operator, password);
+      setPassword("");
+      setAuth("authenticated");
+      await data.refresh();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Falha de autenticação.");
+    }
+  };
   const [notice, setNotice] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mode, setMode] = useState<"orchestration" | "gamification">(() => {
@@ -46,6 +68,18 @@ export function App() {
       // Local storage is optional; the selector still works for this session.
     }
   }
+  if (auth === "loading") return <main role="status">Verificando sessão de operador…</main>;
+  if (auth === "login") return (
+    <main className="app-shell" style={{ display: "grid", placeItems: "center", minHeight: "100vh" }}>
+      <form onSubmit={submitLogin} style={{ display: "grid", gap: 12, minWidth: 300 }}>
+        <h1>Entrar no painel</h1>
+        <label>Operador <input autoComplete="username" value={operator} onChange={(event) => setOperator(event.target.value)} required /></label>
+        <label>Senha <input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+        {authError && <p role="alert">{authError}</p>}
+        <button type="submit">Entrar</button>
+      </form>
+    </main>
+  );
   return (
     <div className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
@@ -112,6 +146,7 @@ export function App() {
             <em>operations</em>
           </Link>
           <div className="topbar-actions">
+            {auth === "authenticated" && <button onClick={() => api.logout().then(() => setAuth("login"))}>Sair</button>}
             <div className="mode-switch" aria-label="Modo de operação">
               <button
                 className={mode === "orchestration" ? "mode-switch__active" : ""}
