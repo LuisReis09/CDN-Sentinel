@@ -8,6 +8,7 @@ import type {
   WatermarkDemo,
   WatermarkDetection,
   ForensicInvestigation,
+  ForensicStudio,
 } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api").replace(
@@ -165,6 +166,11 @@ export const api = {
     }),
   watermarkDemo: (payload: Record<string, unknown> = {}) =>
     request<WatermarkDemo>("/security/watermark/demo", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  forensicStudio: (payload: { algorithm: "qim2" | "qim3"; video_id?: string }) =>
+    request<ForensicStudio>("/security/watermark/demo/forensic", {
       method: "POST",
       body: JSON.stringify(payload),
     }),

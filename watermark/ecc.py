@@ -10,6 +10,58 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+class Secded55Codec:
+    """Extended Hamming (55, 48): correct one bit, detect two bits.
+
+    Positions are one-based. Six Hamming parity positions cover 54 bits and
+    position 55 is the overall parity bit. This adds seven bits to the 48-bit
+    visual marker without changing its ledger collision bound.
+    """
+
+    data_bits = 48
+    code_bits = 55
+    parity_positions = (1, 2, 4, 8, 16, 32)
+
+    def encode(self, bits: list[int]) -> list[int]:
+        if len(bits) != self.data_bits or any(bit not in (0, 1) for bit in bits):
+            raise ValueError("SECDED55 requires exactly 48 bits")
+        code = [0] * (self.code_bits + 1)
+        positions = [position for position in range(1, 55) if position not in self.parity_positions]
+        for position, bit in zip(positions, bits):
+            code[position] = bit
+        for parity_position in self.parity_positions:
+            code[parity_position] = sum(code[position] for position in range(1, 55) if position & parity_position) & 1
+        code[55] = sum(code[1:55]) & 1
+        return code[1:]
+
+    def decode(self, bits: list[int]) -> tuple[list[int] | None, int, str]:
+        if len(bits) != self.code_bits or any(bit not in (0, 1) for bit in bits):
+            raise ValueError("SECDED55 requires exactly 55 bits")
+        code = [0] + list(bits)
+        syndrome = sum(
+            parity_position
+            for parity_position in self.parity_positions
+            if sum(code[position] for position in range(1, 55) if position & parity_position) & 1
+        )
+        overall = sum(code[1:]) & 1
+        corrected = 0
+        if syndrome and overall:
+            if syndrome > 54:
+                return None, 0, "UNCORRECTABLE"
+            code[syndrome] ^= 1
+            corrected = 1
+        elif syndrome and not overall:
+            return None, 0, "UNCORRECTABLE"
+        elif overall:
+            code[55] ^= 1
+            corrected = 1
+        positions = [position for position in range(1, 55) if position not in self.parity_positions]
+        data = [code[position] for position in positions]
+        if self.encode(data) != code[1:]:
+            return None, 0, "UNCORRECTABLE"
+        return data, corrected, "CORRECTED" if corrected else "CLEAN"
+
+
 def _mul(a: int, b: int) -> int:
     result = 0
     while b:

@@ -140,6 +140,7 @@ def register_api_routes(api, controller: ApiController) -> None:
             "chunk": fields.Integer(description="Número do chunk, opcional", default=0, min=0),
             "video_id": fields.String(description="Exemplo real específico, opcional"),
             "exclude_video_id": fields.String(description="Evita repetir o exemplo anterior"),
+            "algorithm": fields.String(description="Algoritmo visual CDNWM4 do Studio", enum=["qim2", "qim3"]),
         },
     )
     review_model = api.model(
@@ -525,6 +526,18 @@ def register_api_routes(api, controller: ApiController) -> None:
             except (FileNotFoundError, OSError, RuntimeError) as exc:
                 return {"error": str(exc), "hint": "a variante visual não pôde ser gerada; tente novamente com o clipe local"}, 503
 
+    @security.route("/watermark/demo/forensic")
+    class WatermarkForensicStudioResource(Resource):
+        @security.doc(description="Executa emissao CDNWM4, marca visual, resolucao no ledger e investigacao do conteudo.")
+        @security.expect(demo_model, validate=True)
+        def post(self):
+            try:
+                return controller.watermark_forensic_demo(request.get_json(silent=True) or {})
+            except (TypeError, ValueError) as exc:
+                return {"error": str(exc)}, 400
+            except (FileNotFoundError, OSError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                return {"error": str(exc)}, 503
+
     @security.route("/watermark/demo/video")
     class WatermarkDemoVideoResource(Resource):
         @security.doc(description="Entrega o vídeo real Big Buck Bunny usado pelo laboratório independente.")
@@ -533,8 +546,8 @@ def register_api_routes(api, controller: ApiController) -> None:
             try:
                 video_id = request.args.get("video_id", "cdn_sentinel_demo")
                 variant = request.args.get("variant", "original")
-                if variant not in {"original", "watermarked", "difference"}:
-                    return {"error": "variant deve ser original, watermarked ou difference"}, 400
+                if variant not in {"original", "control", "watermarked", "residual", "difference", "detection_map"}:
+                    return {"error": "variante desconhecida"}, 400
                 path, content_type = get_video_asset(video_id, variant, request.args.get("generated_id"))
                 response = send_file(path, mimetype=content_type, conditional=True, etag=True, download_name=path.name)
                 response.headers["X-CDN-Content-Source"] = "versioned-local-demo" if video_id.startswith("cdn_sentinel_demo") else "scikit-video-local-opt-in"

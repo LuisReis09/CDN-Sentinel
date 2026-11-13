@@ -111,7 +111,7 @@ def create_app() -> Flask:
             reviewer_access = path.startswith("/api/monitor/investigations/") and path.endswith("/review")
             if role != "operator" and not ((role == "investigator" and investigator_access) or (role == "reviewer" and reviewer_access) or path.startswith("/api/auth/")):
                 return jsonify({"error": "role is not authorized"}), 403
-            expensive = (investigator_access or reviewer_access or path in {"/api/security/watermark/demo", "/api/monitor/scan"} or path.endswith("/viewer-sessions"))
+            expensive = (investigator_access or reviewer_access or path in {"/api/security/watermark/demo", "/api/security/watermark/demo/forensic", "/api/monitor/scan"} or path.endswith("/viewer-sessions"))
             if expensive and request.method in {"POST", "PATCH", "PUT", "DELETE"} and not operator_auth.allow_processing(identity["username"]):
                 return jsonify({"error": "processing rate limit exceeded"}), 429
             return None
@@ -146,7 +146,7 @@ def create_app() -> Flask:
     forensic_investigation_service = ForensicInvestigationService(watermark_service)
     hls_ab_service = HLSABService(watermark_service)
     leak_service = LeakService(repository, stream_service)
-    watermark_demo_service = WatermarkDemoService(watermark_service)
+    watermark_demo_service = WatermarkDemoService(watermark_service, forensic_investigation_service)
     management_engine = ManagementEngine(repository, simulation_controller)
     client_activity_service.set_on_tick(management_engine.tick)
     controller = ApiController(repository, simulation_controller, stream_service, monitor_service, leak_service, watermark_service, watermark_demo_service, client_activity_service, forensic_investigation_service, hls_ab_service, management_engine)

@@ -4,8 +4,9 @@ import {
   ScanSearch,
   ShieldCheck,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { WatermarkLab } from "../components/WatermarkLab";
+import { ForensicStudio } from "../components/ForensicStudio";
 import type { Overview } from "../types";
 
 export function WatermarkPage({
@@ -15,6 +16,7 @@ export function WatermarkPage({
   overview: Overview;
   onError: (message: string) => void;
 }) {
+  const [showLegacy, setShowLegacy] = useState(false);
   return (
     <main className="page-content">
       <header className="page-header">
@@ -49,12 +51,13 @@ export function WatermarkPage({
           text="Uma sessão associada vira evidência para revisão; não determina automaticamente a autoria da cópia."
         />
       </section>
-      <p role="note" className="panel-subtitle">
-        O laboratorio abaixo executa apenas o caminho legado CDNWM3 / Adaptive Spread.
-        Um resultado VALID ali nao autentica uma sessao forense CDNWM4 / QIM2.
-        A atribuicao CDNWM4 depende do ledger, da verificacao do conteudo e da revisao.
-      </p>
-      <WatermarkLab onError={onError} />
+      <ForensicStudio onError={onError} />
+      <section className="forensic-studio__legacy">
+        <button type="button" onClick={() => setShowLegacy((current) => !current)}>
+          {showLegacy ? "Fechar laboratório legado CDNWM3" : "Abrir laboratório legado CDNWM3"}
+        </button>
+        {showLegacy && <><p role="note" className="panel-subtitle">Este laboratório usa CDNWM3 / Adaptive Spread. O resultado não autentica uma sessão CDNWM4.</p><WatermarkLab onError={onError} /></>}
+      </section>
     </main>
   );
 }

@@ -271,6 +271,9 @@ class ApiController:
     def watermark_demo(self, payload: dict) -> dict:
         return self.watermark_demo_service.run(payload)
 
+    def watermark_forensic_demo(self, payload: dict) -> dict:
+        return self.watermark_demo_service.run_forensic(payload)
+
     def investigate_video(self, path, *, source: str = "authorized-upload", algorithm: str = "auto") -> dict:
         if not self.forensic_investigation_service:
             raise RuntimeError("serviço de investigação forense não configurado")

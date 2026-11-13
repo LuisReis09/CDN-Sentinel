@@ -62,12 +62,23 @@ def _luma(frame: np.ndarray) -> np.ndarray:
 
 
 def _ssim(left: np.ndarray, right: np.ndarray) -> float:
-    c1, c2 = 6.5025, 58.5225
-    mean_left, mean_right = left.mean(), right.mean()
-    var_left, var_right = left.var(), right.var()
-    covariance = float(np.mean((left - mean_left) * (right - mean_right)))
+    """Windowed SSIM on luminance, Gaussian 11x11, data range 255."""
+    from scipy.ndimage import gaussian_filter
+
+    if left.shape != right.shape or min(left.shape) < 11:
+        raise ValueError("SSIM requires aligned images at least 11 pixels wide")
+    left, right = left.astype(np.float64), right.astype(np.float64)
+    kwargs = {"sigma": 1.5, "truncate": 3.5, "mode": "reflect"}
+    mean_left = gaussian_filter(left, **kwargs)
+    mean_right = gaussian_filter(right, **kwargs)
+    correction = 121.0 / 120.0
+    var_left = correction * (gaussian_filter(left * left, **kwargs) - mean_left * mean_left)
+    var_right = correction * (gaussian_filter(right * right, **kwargs) - mean_right * mean_right)
+    covariance = correction * (gaussian_filter(left * right, **kwargs) - mean_left * mean_right)
+    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+    numerator = (2 * mean_left * mean_right + c1) * (2 * covariance + c2)
     denominator = (mean_left**2 + mean_right**2 + c1) * (var_left + var_right + c2)
-    return float(((2 * mean_left * mean_right + c1) * (2 * covariance + c2)) / max(1e-12, denominator))
+    return float(np.mean((numerator / np.maximum(denominator, 1e-12))[5:-5, 5:-5]))
 
 
 def _downsample(values: np.ndarray, scale: int) -> np.ndarray:

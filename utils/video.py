@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import os
 import re
 import subprocess
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Tuple
 
 from services.content_provider import DatasetContentProvider, default_content_id
-from utils.video_watermark import VIDEO_STRENGTH, embed_video, transcode_video
+from utils.video_watermark import VIDEO_STRENGTH, embed_video, transcode_video, probe_video_limits
+from utils.qim_watermark import qim_detection_map
+from PIL import Image
 from utils.image_watermark import (
     ADAPTIVE_MASK_FLOOR,
     CARRIER_CANONICAL_SIZE,
@@ -19,6 +23,7 @@ from utils.image_watermark import (
     DATA_REPETITIONS,
     SYNC_BITS,
     SYNC_REPETITIONS,
+    visual_marker,
 )
 
 
@@ -123,9 +128,9 @@ def choose_video_example(exclude_video_id: str | None = None) -> dict[str, str]:
 def _generated_variant_path(generated_id: str, variant: str) -> Path:
     if not _SAFE_GENERATED_ID.fullmatch(generated_id):
         raise ValueError("identificador de variante gerada inválido")
-    if variant not in {"watermarked", "difference"}:
+    if variant not in {"original", "control", "watermarked", "residual", "difference", "detection_map"}:
         raise ValueError("variante gerada inválida")
-    path = GENERATED_ROOT / f"{generated_id}-{variant}.mp4"
+    path = GENERATED_ROOT / f"{generated_id}-{variant}.{'png' if variant == 'detection_map' else 'mp4'}"
     if not path.is_file():
         raise FileNotFoundError(f"variante gerada não encontrada: {generated_id}/{variant}")
     if variant == "difference" and not _difference_is_valid(path):
@@ -141,7 +146,7 @@ def get_video_asset(
     """Resolve a named MP4 asset and MIME type without allowing path traversal."""
     video_id = video_id or default_content_id()
     if generated_id:
-        return _generated_variant_path(generated_id, variant), "video/mp4"
+        return _generated_variant_path(generated_id, variant), "image/png" if variant == "detection_map" else "video/mp4"
     dataset_provider = DatasetContentProvider()
     if dataset_provider.supports(video_id):
         return dataset_provider.resolve_asset(video_id)
@@ -240,6 +245,73 @@ def generate_visual_variants(video_id: str, token: str, secret_key: str | None =
             if partial.exists():
                 partial.unlink()
     return generated_id
+
+
+def generate_forensic_variants(video_id: str, token: str, secret_key: str, algorithm: str) -> str:
+    """Create synchronized diagnostic assets from a real CDNWM4 embedding.
+
+    The residual is captured before H.264 inside embed_video. The difference
+    compares separately encoded control and marked streams. Both displays
+    apply an 8x gain and are diagnostics, not source media.
+    """
+    if algorithm not in {"qim2", "qim3"}:
+        raise ValueError("algoritmo QIM desconhecido")
+    source, _ = get_video_asset(video_id, "original")
+    if probe_video_limits(source)["duration_seconds"] < 3:
+        raise ValueError("o Studio forense requer ao menos 3 s para conferir o conteudo")
+    generated_id = hashlib.sha256(
+        f"CDNWM4-studio-v2:{algorithm}:{source.resolve()}:{source.stat().st_mtime_ns}:{token}".encode()
+    ).hexdigest()[:16]
+    variants = ("original", "control", "watermarked", "residual", "difference", "detection_map")
+    if all((GENERATED_ROOT / f"{generated_id}-{variant}.{'png' if variant == 'detection_map' else 'mp4'}").is_file() for variant in variants):
+        return generated_id
+    GENERATED_ROOT.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="forensic-studio-", dir=GENERATED_ROOT) as temporary:
+        root = Path(temporary)
+        clip = root / "original.mp4"
+        control = root / "control.mp4"
+        marked = root / "watermarked.mp4"
+        residual = root / "residual.mp4"
+        difference = root / "difference.mp4"
+        detection_map = root / "detection_map.png"
+        source_fps = probe_video_limits(source)["fps"]
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(source), "-t", "4", "-map", "0:v:0", "-map", "0:a?",
+             "-vf", f"fps={source_fps:.6f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-pix_fmt", "yuv420p", "-c:a", "aac", str(clip)],
+            check=True, capture_output=True, timeout=180,
+        )
+        transcode_video(clip, control, crf=24, preset="veryfast")
+        embed_video(clip, marked, token, secret_key, algorithm=algorithm,
+                    diagnostic_residual_path=residual)
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(control), "-i", str(marked),
+             "-filter_complex", "[0:v]format=gbrp[a];[1:v]format=gbrp[b];[a][b]blend=all_expr='min(255,abs(A-B)*8)'[diff]",
+             "-map", "[diff]", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(difference)],
+            check=True, capture_output=True, timeout=180,
+        )
+        frame = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(marked), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"],
+            check=True, capture_output=True, timeout=30,
+        ).stdout
+        with Image.open(io.BytesIO(frame)) as image:
+            qim_detection_map(image, secret_key, visual_marker(token),
+                              version="v3" if algorithm == "qim3" else "v2").save(detection_map)
+        if not _difference_is_valid(difference):
+            raise RuntimeError("a diferenca apos codec nao tem variacao visual valida")
+        for variant in variants:
+            source_file = root / f"{variant}.{'png' if variant == 'detection_map' else 'mp4'}"
+            source_file.replace(GENERATED_ROOT / f"{generated_id}-{variant}{source_file.suffix}")
+    return generated_id
+
+
+def video_frame_timestamps(path: Path) -> list[float]:
+    """Decode presentation timestamps for Studio alignment checks."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time",
+         "-of", "csv=p=0", str(path)],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    return [float(line.split(",", 1)[0]) for line in result.stdout.splitlines() if line.split(",", 1)[0].strip()]
 
 
 def get_video_chunk(chunk_number: int = 0, video_id: str | None = None) -> Tuple[bytes, str]:

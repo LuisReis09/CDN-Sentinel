@@ -28,7 +28,8 @@ if __package__ in {None, ""}:
 from services.watermark_registry import WatermarkRegistry
 from services.watermark_service import WatermarkService
 from tools.watermark_perceptual_experiments import _quality, _read_frames
-from utils.image_watermark import marker_bits, visual_marker
+from utils.image_watermark import SYNC_BITS, SYNC_MARKER, marker_bits, visual_marker
+from watermark.ecc import Secded55Codec
 from utils.video_watermark import detect_video, embed_video, transcode_video, probe_video_limits
 
 
@@ -58,6 +59,15 @@ def _attacks(mode: str) -> list[tuple[str, str | None, str, int, str]]:
     ]
     if mode == "quick":
         return attacks
+    if mode == "refinement":
+        return attacks + [
+            ("h264_crf28", None, "libx264", 28, "moderate"),
+            ("resize_50", "scale=iw*0.5:ih*0.5,scale=iw*2:ih*2", "libx264", 23, "moderate"),
+            ("noise_light", "noise=alls=4:allf=u:all_seed=2026", "libx264", 23, "moderate"),
+            ("grayscale", "format=gray", "libx264", 23, "moderate"),
+            ("crop_moderate", "crop=iw*0.9:ih*0.9,scale=iw/0.9:ih/0.9", "libx264", 23, "moderate"),
+            ("resize_blur_reencode", "scale=iw*0.75:ih*0.75,boxblur=1:1,scale=iw/0.75:ih/0.75", "libx264", 28, "severe"),
+        ]
     attacks.extend((f"h264_crf{crf}", None, "libx264", crf, "benign" if crf <= 28 else "severe") for crf in (18, 28, 35, 40))
     attacks.extend((f"h265_crf{crf}", None, "libx265", crf, "moderate" if crf <= 28 else "severe") for crf in (23, 35))
     attacks.extend([
@@ -107,9 +117,23 @@ def _detect(path: Path, secret: str, token: str, algorithm: str, step: float) ->
     recovered = evidence.get("marker")
     exact = evidence.get("status") == "CANDIDATE" and recovered == expected
     bits = sum(a == b for a, b in zip(marker_bits(str(recovered)), marker_bits(expected))) if recovered else None
+    scores = evidence.get("scores")
+    raw_errors = None
+    raw_total = None
+    if algorithm in {"qim2", "qim3"} and isinstance(scores, list):
+        expected_bits = marker_bits(SYNC_MARKER, SYNC_BITS) + (
+            Secded55Codec().encode(marker_bits(expected)) if algorithm == "qim3" else marker_bits(expected)
+        )
+        if len(scores) == len(expected_bits):
+            raw_total = len(scores)
+            raw_errors = sum(int((score < 0) != bool(bit)) for score, bit in zip(scores, expected_bits))
     return {
         "status": evidence.get("status"), "marker_exact": exact, "bits_correct_known_truth": bits,
-        "bits_total": 48, "confidence_uncalibrated": evidence.get("confidence"),
+        "bits_total": 48, "marker_ber_known_truth": round((48 - bits) / 48, 4) if bits is not None else None,
+        "raw_channel_bit_errors_known_truth": raw_errors, "raw_channel_bits": raw_total,
+        "raw_channel_ber_known_truth": round(raw_errors / raw_total, 4) if raw_total else None,
+        "ecc_status": evidence.get("ecc_status"), "ecc_corrected_bits": evidence.get("ecc_corrected_bits", 0),
+        "confidence_uncalibrated": evidence.get("confidence"),
         "frames_sampled": evidence.get("frames_sampled"), "elapsed_seconds": round(time.perf_counter() - started, 3),
     }
 
@@ -119,19 +143,19 @@ def _split(path: Path) -> str:
     return "development" if bucket < 6 else ("calibration" if bucket < 8 else "final")
 
 
-def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms: tuple[str, ...] = ("adaptive-spread", "dct", "qim2"), artifact_root: Path | None = None, qim_step: float = 20.0) -> dict:
+def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms: tuple[str, ...] = ("adaptive-spread", "dct", "qim2", "qim3"), artifact_root: Path | None = None, qim_step: float = 20.0, qim3_step: float = 28.0) -> dict:
     if not inputs:
         raise ValueError("nenhum vídeo disponível")
     report = {
-        "schema_version": 2,
+        "schema_version": 4,
         "environment": {
             "python": platform.python_version(), "platform": platform.platform(),
             "ffmpeg": _version(["ffmpeg", "-version"]),
             "git_commit": _version(["git", "rev-parse", "HEAD"]),
             "git_dirty": _git_dirty(),
         },
-            "protocol": {"mode": mode, "clip_seconds": seconds, "algorithms": algorithms, "qim_step": qim_step, "control": "same H.264 CRF24 veryfast yuv420p", "human_review": "not performed"},
-        "limitations": ["SSIM/MS-SSIM here use global approximations from watermark_perceptual_experiments.py", "VMAF and LPIPS require separate optional tooling", "neural checkpoints are not evaluated by this script", "visual detector confidence is not statistically calibrated"],
+            "protocol": {"mode": mode, "clip_seconds": seconds, "algorithms": algorithms, "qim2_step": qim_step, "qim3_step": qim3_step, "control": "same H.264 CRF24 veryfast yuv420p", "human_review": "not performed"},
+        "limitations": ["SSIM is windowed Gaussian 11x11 on luminance; MS-SSIM is still a three-scale approximation", "VMAF and LPIPS require separate optional tooling", "neural checkpoints are not evaluated by this script", "visual detector confidence is not statistically calibrated"],
         "videos": [],
     }
     with tempfile.TemporaryDirectory(prefix="cdn-forensic-benchmark-") as temporary:
@@ -160,7 +184,7 @@ def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms
                 shutil.copy2(clip, target / "source.mp4")
                 shutil.copy2(control, target / "control.mp4")
             for algorithm in algorithms:
-                step = {"adaptive-spread": 24.0, "dct": 10.0, "qim2": qim_step}[algorithm]
+                step = {"adaptive-spread": 24.0, "dct": 10.0, "qim2": qim_step, "qim3": qim3_step}[algorithm]
                 marked = video_root / f"{algorithm}.mp4"
                 start = time.perf_counter()
                 embed_video(clip, marked, token, service.secret_key, strength=step, algorithm=algorithm)
@@ -169,8 +193,8 @@ def run(inputs: list[Path], *, mode: str = "quick", seconds: int = 3, algorithms
                 embed_seconds = time.perf_counter() - start
                 marked_frames = _read_frames(marked, max_frames=8)
                 quality = _quality(reference_frames, marked_frames)
-                quality["ssim_global_approx"] = quality.pop("ssim")
-                quality["ms_ssim_global_approx"] = quality.pop("ms_ssim")
+                quality["ssim_windowed"] = quality.pop("ssim")
+                quality["ms_ssim_3scale_approx"] = quality.pop("ms_ssim")
                 item = {
                     "algorithm": algorithm, "strength_or_step": step,
                     "quality_vs_control": quality,
@@ -206,19 +230,20 @@ if __name__ == "__main__":
     parser.add_argument("--input", type=Path, action="append", default=[])
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--max-files", type=int, default=8)
-    parser.add_argument("--mode", choices=("quick", "full"), default="quick")
+    parser.add_argument("--mode", choices=("quick", "refinement", "full"), default="quick")
     parser.add_argument("--seconds", type=int, default=3)
-    parser.add_argument("--algorithms", nargs="+", choices=("adaptive-spread", "dct", "qim2"), default=["adaptive-spread", "dct", "qim2"])
+    parser.add_argument("--algorithms", nargs="+", choices=("adaptive-spread", "dct", "qim2", "qim3"), default=["adaptive-spread", "dct", "qim2", "qim3"])
     parser.add_argument("--output", type=Path)
     parser.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--qim-step", type=float, default=20.0)
+    parser.add_argument("--qim3-step", type=float, default=28.0)
     args = parser.parse_args()
     sources = list(args.input)
     if args.dataset_root:
         sources.extend(sorted(path for path in args.dataset_root.rglob("*") if path.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"})[:args.max_files])
     if not sources:
         sources = [Path("data/media/bigbuckbunny.mp4")]
-    report = run(sources, mode=args.mode, seconds=args.seconds, algorithms=tuple(args.algorithms), artifact_root=args.artifact_dir, qim_step=args.qim_step)
+    report = run(sources, mode=args.mode, seconds=args.seconds, algorithms=tuple(args.algorithms), artifact_root=args.artifact_dir, qim_step=args.qim_step, qim3_step=args.qim3_step)
     serialized = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

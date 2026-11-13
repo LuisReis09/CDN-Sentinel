@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import time
+import uuid
 
+from services.forensic_investigation_service import ForensicInvestigationService
 from services.watermark_service import WatermarkService
+from tools.watermark_perceptual_experiments import _quality, _read_frames
 from utils.image_watermark import visual_marker
 from utils.security import watermark_encryption_metadata
 from utils.video import (
     choose_video_example,
     encode_payload,
     generate_visual_variants,
+    generate_forensic_variants,
     get_video_asset,
     get_video_asset_bytes,
     list_video_examples,
+    video_frame_timestamps,
 )
 from utils.video_watermark import assess_video_robustness, probe_video_limits
 
@@ -20,8 +25,83 @@ from utils.video_watermark import assess_video_robustness, probe_video_limits
 class WatermarkDemoService:
     """Standalone forensic watermark demonstration independent of simulation state."""
 
-    def __init__(self, watermark_service: WatermarkService) -> None:
+    def __init__(self, watermark_service: WatermarkService, investigator: ForensicInvestigationService | None = None) -> None:
         self._watermark_service = watermark_service
+        self._investigator = investigator or ForensicInvestigationService(watermark_service)
+
+    def run_forensic(self, payload: dict | None = None) -> dict:
+        """Run the CDNWM4 issue, embed, ledger resolution and content gate."""
+        payload = payload or {}
+        video_id = str(payload.get("video_id") or "bigbuckbunny")
+        algorithm = str(payload.get("algorithm") or "qim3")
+        if algorithm not in {"qim2", "qim3"}:
+            raise ValueError("algorithm deve ser qim2 ou qim3")
+        video = next((item for item in list_video_examples() if item["video_id"] == video_id), None)
+        if video is None:
+            raise ValueError("video_id local invalido")
+        source, _ = get_video_asset(video_id)
+        limits = probe_video_limits(source)
+        if limits["duration_seconds"] < 3:
+            raise ValueError("o Studio forense requer um clipe de pelo menos 3 s")
+        if limits["width"] > 1920 or limits["height"] > 1080 or limits["fps"] > 60:
+            raise ValueError("o clipe excede o limite do Studio (1080p, 60 fps)")
+        algorithm_id = "dct-qim-v3" if algorithm == "qim3" else "dct-qim-v2"
+        token, claim = self._watermark_service.issue_forensic_claim(
+            client_id=str(payload.get("client_id") or "studio-viewer")[:80],
+            server_id="studio-origin", content_id=video_id,
+            session_id=uuid.uuid4().hex, segment_range="0-4s", algorithm_id=algorithm_id,
+        )
+        generated_id = generate_forensic_variants(video_id, token, self._watermark_service.secret_key, algorithm)
+        marked, _ = get_video_asset(video_id, "watermarked", generated_id)
+        control, _ = get_video_asset(video_id, "control", generated_id)
+        original, _ = get_video_asset(video_id, "original", generated_id)
+        residual, _ = get_video_asset(video_id, "residual", generated_id)
+        difference, _ = get_video_asset(video_id, "difference", generated_id)
+        investigation = self._investigator.investigate_video(marked, source="studio-local-demonstration", algorithm=algorithm)
+        detection = investigation.get("evidence", {})
+        quality = _quality(_read_frames(control, max_frames=8), _read_frames(marked, max_frames=8))
+        quality["ssim_windowed"] = quality.pop("ssim")
+        quality["ms_ssim_3scale_approx"] = quality.pop("ms_ssim")
+        robustness = assess_video_robustness(original, marked, token, self._watermark_service.secret_key,
+                                             algorithm=algorithm)
+        paths = {"original": original, "control": control, "marked": marked, "residual": residual, "difference": difference}
+        probes = {name: probe_video_limits(path) for name, path in paths.items()}
+        timestamps = {name: video_frame_timestamps(path) for name, path in paths.items()}
+        frame_count = len(timestamps["original"])
+        maximum_timestamp_drift = max(
+            (abs(left - right) for values in timestamps.values() for left, right in zip(timestamps["original"], values)),
+            default=0.0,
+        )
+        aligned = (
+            all(probe["width"] == probes["original"]["width"] and probe["height"] == probes["original"]["height"]
+                and abs(probe["fps"] - probes["original"]["fps"]) < 0.02
+                and abs(probe["duration_seconds"] - probes["original"]["duration_seconds"]) < 0.12
+                for probe in probes.values())
+            and frame_count > 0 and all(len(values) == frame_count for values in timestamps.values())
+            and maximum_timestamp_drift < 0.25 / probes["original"]["fps"]
+        )
+        variants = {
+            variant: f"/api/security/watermark/demo/video?video_id={video_id}&variant={variant}&generated_id={generated_id}"
+            for variant in ("original", "control", "watermarked", "residual", "difference", "detection_map")
+        }
+        return {
+            "demo": True, "pipeline": "CDNWM4", "algorithm": algorithm,
+            "algorithm_id": algorithm_id, "fingerprint_scheme": claim.fingerprint_scheme,
+            "video_id": video_id, "video_label": video["label"], "source": video.get("source"),
+            "claim": claim.to_dict(), "issued_marker": visual_marker(token),
+            "visual_detection": detection, "ledger_status": detection.get("forensic_status"),
+            "investigation": {key: value for key, value in investigation.items() if key != "evidence"},
+            "quality_vs_control": quality, "video_variants": variants,
+            "robustness_checks": robustness,
+            "video_alignment": {"aligned": aligned, "probes": probes,
+                                "frame_count": frame_count, "max_timestamp_drift_ms": round(maximum_timestamp_drift * 1000, 3)},
+            "diagnostics": {
+                "residual": "absolute pixel difference before video encode, grayscale, display gain 8x",
+                "difference": "per-channel absolute RGB difference of separately encoded control and marked video, display gain 8x",
+                "detection_map": "first marked frame; coefficient correlation against issued marker, green agrees, red disagrees, gray masked; claim-conditioned diagnostic, not blind detector result",
+            },
+            "generated_at": time.time(),
+        }
 
     def run(self, payload: dict | None = None) -> dict:
         payload = payload or {}

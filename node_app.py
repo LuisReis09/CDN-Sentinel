@@ -25,7 +25,7 @@ from utils.crypto import decrypt_payload, encrypt_payload, is_encrypted_payload
 from utils.video import encode_payload
 from utils.protocol import signed_headers, verify_headers
 from utils.video_watermark import VIDEO_STRENGTH, embed_video, probe_video_limits
-from utils.qim_watermark import QIM_STEP
+from utils.qim_watermark import QIM_STEP, QIM3_STEP
 
 
 class CapacityRejected(RuntimeError):
@@ -159,7 +159,7 @@ class CDNNode:
             cache_key = hashlib.sha256(
                 f"CDNWM6:{source_path.resolve()}:{source_stat.st_mtime_ns}:{source_stat.st_size}:"
                 f"{hashlib.sha256(self.secret_key.encode('utf-8')).hexdigest()}:{token}:"
-                f"{QIM_STEP if algorithm == 'qim2' else VIDEO_STRENGTH}:{algorithm}".encode("utf-8")
+                f"{QIM3_STEP if algorithm == 'qim3' else QIM_STEP if algorithm == 'qim2' else VIDEO_STRENGTH}:{algorithm}".encode("utf-8")
             ).hexdigest()[:32]
             destination = cache_root / f"{cache_key}.mp4"
             if not destination.is_file() or destination.stat().st_size == 0:
@@ -170,7 +170,7 @@ class CDNNode:
                         partial,
                         token,
                         self.watermark_service.visual_secret_for_token(token),
-                        strength=QIM_STEP if algorithm == "qim2" else VIDEO_STRENGTH,
+                        strength=QIM3_STEP if algorithm == "qim3" else QIM_STEP if algorithm == "qim2" else VIDEO_STRENGTH,
                         adaptive=True,
                         algorithm=algorithm,
                     )
@@ -215,7 +215,7 @@ class CDNNode:
                     source_path, _source_type = resolver(video_id, chunk_number)
                     limits = probe_video_limits(source_path)
                     if limits["width"] >= 640 and limits["height"] >= 360:
-                        algorithm = "qim2"
+                        algorithm = "qim3"
                     if video_id == DATASET_CONTENT_ID:
                         dataset = DatasetContentProvider()
                         claim_content_id = dataset._content_id(source_path.resolve())
@@ -228,7 +228,7 @@ class CDNNode:
                     content_id=claim_content_id,
                     session_id=viewer_session_id or f"sess-{uuid.uuid4().hex}",
                     segment_range=f"{chunk_number}-{chunk_number}",
-                    algorithm_id="dct-qim-v2" if algorithm == "qim2" else "adaptive-spread-v5",
+                    algorithm_id="dct-qim-v3" if algorithm == "qim3" else "dct-qim-v2" if algorithm == "qim2" else "adaptive-spread-v5",
                 )
                 chunk_id = claim.segment_range
             else:

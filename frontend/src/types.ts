@@ -578,3 +578,38 @@ export interface ManagementState {
   feedback_latency_avg_ms: number;
 }
 
+export interface ForensicStudio {
+  pipeline: "CDNWM4";
+  algorithm: "qim2" | "qim3";
+  algorithm_id: string;
+  fingerprint_scheme: string;
+  video_label: string;
+  claim: Record<string, string | number>;
+  issued_marker: string;
+  visual_detection: {
+    status: string;
+    marker?: string;
+    confidence?: number;
+    ecc_status?: string;
+    ecc_corrected_bits?: number;
+    frames_sampled?: number;
+    forensic_status?: string;
+  };
+  ledger_status: string;
+  investigation: {
+    decision: string;
+    attribution: string;
+    content_match?: { status: string; matched_frames?: number };
+    administrative_action: string;
+  };
+  quality_vs_control: {
+    psnr_db: number;
+    ssim_windowed: number;
+    ms_ssim_3scale_approx: number;
+    region_mean_abs_luma_max: number;
+  };
+  robustness_checks: Array<{ filter: string; filter_id: string; status: string; survives: boolean; bits_correct: number; bits_total: number }>;
+  video_variants: Record<"original" | "control" | "watermarked" | "residual" | "difference" | "detection_map", string>;
+  video_alignment: { aligned: boolean; probes: Record<string, { duration_seconds: number; fps: number }> };
+  diagnostics: Record<string, string>;
+}

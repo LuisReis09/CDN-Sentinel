@@ -16,13 +16,16 @@ from PIL import Image
 from scipy.fft import dctn, idctn
 
 from utils.image_watermark import DATA_BITS, SYNC_BITS, SYNC_MARKER, _luminance, _rgb_delta, marker_bits, visual_marker
+from watermark.ecc import Secded55Codec
 
 
 QIM_STEP = 20.0
+QIM3_STEP = 28.0
 QIM_MIN_CORRELATION = 0.15
 QIM_WIDTH = 640
 QIM_BLOCK = 8
 QIM_BITS = DATA_BITS + SYNC_BITS
+QIM3_BITS = Secded55Codec.code_bits + SYNC_BITS
 PAIR = ((1, 2), (2, 1))
 
 
@@ -42,8 +45,8 @@ def _blocks(luma: np.ndarray) -> tuple[np.ndarray, int, int]:
     return blocks, rows, cols
 
 
-def _order(secret: str, rows: int, cols: int) -> tuple[np.ndarray, np.ndarray]:
-    digest = hashlib.sha256(f"CDN-Sentinel/qim-v2/{rows}x{cols}/{secret}".encode()).digest()
+def _order(secret: str, rows: int, cols: int, version: str = "v2") -> tuple[np.ndarray, np.ndarray]:
+    digest = hashlib.sha256(f"CDN-Sentinel/qim-{version}/{rows}x{cols}/{secret}".encode()).digest()
     rng = np.random.default_rng(int.from_bytes(digest[:8], "big"))
     order = rng.permutation(rows * cols)
     flips = rng.integers(0, 2, size=rows * cols, dtype=np.uint8)
@@ -118,3 +121,140 @@ def detect_image_qim(image: Image.Image, secret: str, step: float = QIM_STEP) ->
         return {**_decode_score_vector(scores), "canonical_size": [width, height], "step": step, "spatial_repetitions_min": len(order) // QIM_BITS}
     except ValueError as exc:
         return {"status": "INCONCLUSIVE", "marker": None, "reason": str(exc), "supported": False, "confidence": 0.0}
+
+
+def _perceptual_block_mask(blocks: np.ndarray) -> np.ndarray:
+    """Exclude flat, very dark/bright and sharp-edge 8x8 blocks.
+
+    The same coarse mask can be recomputed from received pixels. It is not a
+    semantic text detector; recovery and visual impact must be benchmarked.
+    """
+    mean = blocks.mean(axis=(-2, -1))
+    texture = blocks.std(axis=(-2, -1))
+    edge_peak = np.maximum(
+        np.max(np.abs(np.diff(blocks, axis=-1)), axis=(-2, -1)),
+        np.max(np.abs(np.diff(blocks, axis=-2)), axis=(-2, -1)),
+    )
+    return (mean >= 24) & (mean <= 232) & (texture >= 2.5) & (edge_peak <= 110)
+
+
+def _decode_qim3_score_vector(scores: np.ndarray) -> dict:
+    if len(scores) != QIM3_BITS:
+        raise ValueError("QIM3 score vector has wrong length")
+    recovered = (scores < 0).astype(np.uint8).tolist()
+    expected_sync = marker_bits(SYNC_MARKER, SYNC_BITS)
+    sync_correct = sum(int(a == b) for a, b in zip(recovered[:SYNC_BITS], expected_sync))
+    marker_bits_value, corrected, ecc_status = Secded55Codec().decode(recovered[SYNC_BITS:])
+    marker = None
+    if marker_bits_value is not None:
+        marker = bytes(
+            sum(marker_bits_value[i + j] << j for j in range(8))
+            for i in range(0, DATA_BITS, 8)
+        ).hex()
+    strength = float(np.mean(np.abs(scores)))
+    status = (
+        "NOT_FOUND" if sync_correct < 5 else
+        "CANDIDATE" if sync_correct >= 7 and strength >= QIM_MIN_CORRELATION and marker is not None else
+        "INCONCLUSIVE"
+    )
+    return {
+        "status": status, "marker": marker, "sync_confidence": sync_correct / SYNC_BITS,
+        "confidence": round(strength, 4), "confidence_kind": "uncalibrated-mean-qim-correlation",
+        "ecc": "SECDED-Hamming-55-48-v1", "ecc_status": ecc_status,
+        "ecc_corrected_bits": corrected, "coded_bits": Secded55Codec.code_bits,
+        "scores": scores.tolist(), "supported": True,
+    }
+
+
+def embed_image_qim3(image: Image.Image, token: str, secret: str, step: float = QIM3_STEP) -> tuple[Image.Image, dict]:
+    """Versioned QIM with a real one-bit-correcting visual code and block mask."""
+    if step <= 0 or step > 40:
+        raise ValueError("passo QIM fora do intervalo")
+    canonical, width, height = _canonical(image)
+    luma, _mode, _alpha = _luminance(canonical)
+    blocks, rows, cols = _blocks(luma)
+    coefficients = dctn(blocks.astype(np.float64) - 128.0, axes=(-2, -1), norm="ortho").reshape(rows * cols, 8, 8)
+    order, flips = _order(secret, rows, cols, "v3")
+    count = len(order)
+    if count < QIM3_BITS * 8:
+        raise ValueError("menos de oito repetições por bit QIM3")
+    marker = visual_marker(token)
+    payload = marker_bits(SYNC_MARKER, SYNC_BITS) + Secded55Codec().encode(marker_bits(marker, DATA_BITS))
+    indices = np.arange(count) % QIM3_BITS
+    carried = np.bitwise_xor(np.asarray(payload, dtype=np.uint8)[indices], flips)
+    left, right = PAIR
+    selected = coefficients[order]
+    difference = selected[:, left[0], left[1]] - selected[:, right[0], right[1]]
+    target = np.rint((difference - carried * step) / (2 * step)) * (2 * step) + carried * step
+    enabled = _perceptual_block_mask(blocks).reshape(-1)[order]
+    adjustment = (target - difference) * 0.5 * enabled
+    coefficients[order, left[0], left[1]] += adjustment
+    coefficients[order, right[0], right[1]] -= adjustment
+    transformed = idctn(coefficients.reshape(rows, cols, 8, 8), axes=(-2, -1), norm="ortho") + 128.0
+    watermarked_luma = transformed.transpose(0, 2, 1, 3).reshape(height, width)
+    residual = watermarked_luma - luma
+    resized_residual = np.asarray(Image.fromarray(residual.astype(np.float32), mode="F").resize(image.size, Image.Resampling.BICUBIC), dtype=np.float32)
+    original_luma, _mode, _alpha = _luminance(image)
+    result = _rgb_delta(image, original_luma, original_luma + resized_residual)
+    return result, {
+        "version": "CDNIMG-QIM3", "marker": marker, "bits": DATA_BITS,
+        "coded_bits": Secded55Codec.code_bits, "sync_bits": SYNC_BITS,
+        "ecc": "SECDED-Hamming-55-48-v1", "spatial_repetitions_min": count // QIM3_BITS,
+        "active_block_fraction": round(float(np.mean(enabled)), 4),
+        "canonical_size": [width, height], "step": step,
+    }
+
+
+def detect_image_qim3(image: Image.Image, secret: str, step: float = QIM3_STEP) -> dict:
+    try:
+        canonical, width, height = _canonical(image)
+        luma, _mode, _alpha = _luminance(canonical)
+        blocks, rows, cols = _blocks(luma)
+        coefficients = dctn(blocks.astype(np.float64) - 128.0, axes=(-2, -1), norm="ortho").reshape(rows * cols, 8, 8)
+        order, flips = _order(secret, rows, cols, "v3")
+        if len(order) < QIM3_BITS * 8:
+            raise ValueError("menos de oito repetições por bit QIM3")
+        left, right = PAIR
+        difference = coefficients[order, left[0], left[1]] - coefficients[order, right[0], right[1]]
+        correlations = np.cos(np.pi * difference / step) * (1 - 2 * flips.astype(np.int8))
+        # Received-image mask is deliberately soft: a block that changed class
+        # after reencode contributes weak evidence instead of disappearing.
+        weights = np.where(_perceptual_block_mask(blocks).reshape(-1)[order], 1.0, 0.1)
+        slots = np.arange(len(order)) % QIM3_BITS
+        scores = np.bincount(slots, weights=correlations * weights, minlength=QIM3_BITS) / np.bincount(slots, weights=weights, minlength=QIM3_BITS)
+        return {**_decode_qim3_score_vector(scores), "canonical_size": [width, height], "step": step, "spatial_repetitions_min": len(order) // QIM3_BITS}
+    except ValueError as exc:
+        return {"status": "INCONCLUSIVE", "marker": None, "reason": str(exc), "supported": False, "confidence": 0.0}
+
+
+def qim_detection_map(image: Image.Image, secret: str, marker: str, *, version: str = "v3", step: float | None = None) -> Image.Image:
+    """Visualize per-block QIM correlation against an issued claim's marker.
+
+    This claim-conditioned diagnostic is not the blind detector result. Green
+    blocks agree with the expected codeword and red blocks disagree. Gray
+    blocks are excluded by the v3 perceptual mask.
+    """
+    if version not in {"v2", "v3"}:
+        raise ValueError("unknown QIM diagnostic version")
+    step = step if step is not None else (QIM3_STEP if version == "v3" else QIM_STEP)
+    canonical, width, height = _canonical(image)
+    luma, _mode, _alpha = _luminance(canonical)
+    blocks, rows, cols = _blocks(luma)
+    coefficients = dctn(blocks.astype(np.float64) - 128.0, axes=(-2, -1), norm="ortho").reshape(rows * cols, 8, 8)
+    order, flips = _order(secret, rows, cols, version)
+    bits = (
+        marker_bits(SYNC_MARKER, SYNC_BITS) + Secded55Codec().encode(marker_bits(marker, DATA_BITS))
+        if version == "v3" else
+        marker_bits(SYNC_MARKER, SYNC_BITS) + marker_bits(marker, DATA_BITS)
+    )
+    left, right = PAIR
+    difference = coefficients[order, left[0], left[1]] - coefficients[order, right[0], right[1]]
+    correlation = np.cos(np.pi * difference / step) * (1 - 2 * flips.astype(np.int8))
+    expected = 1 - 2 * np.asarray(bits, dtype=np.int8)[np.arange(len(order)) % len(bits)]
+    agreement = correlation * expected
+    enabled = _perceptual_block_mask(blocks).reshape(-1)[order] if version == "v3" else np.ones(len(order), dtype=bool)
+    pixels = np.full((rows * cols, 3), 42, dtype=np.uint8)
+    pixels[enabled, 1] = np.clip(42 + 185 * np.maximum(agreement[enabled], 0), 0, 255).astype(np.uint8)
+    pixels[enabled, 0] = np.clip(42 + 185 * np.maximum(-agreement[enabled], 0), 0, 255).astype(np.uint8)
+    grid = pixels[np.argsort(order)].reshape(rows, cols, 3)
+    return Image.fromarray(grid, "RGB").resize((width, height), Image.Resampling.NEAREST)

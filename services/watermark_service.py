@@ -107,7 +107,9 @@ class WatermarkService:
         if fingerprint_scheme is None:
             fingerprint_scheme = (
                 "visual-marker-48-secded-hamming-13-8-v1"
-                if algorithm_id == "adaptive-spread-v5" else "visual-marker-48-uncoded-v1"
+                if algorithm_id == "adaptive-spread-v5" else
+                "visual-marker-48-secded-hamming-55-48-v1"
+                if algorithm_id == "dct-qim-v3" else "visual-marker-48-uncoded-v1"
             )
         key_id = key_id or self._active_key_id
         if key_id not in self._forensic_keys:
@@ -190,8 +192,8 @@ class WatermarkService:
 
     def detect_forensic_video(self, path, *, algorithm: str = "auto", max_frames: int = 24) -> dict:
         """Detect a marker and resolve it only against the durable ledger."""
-        algorithms = ("qim2", "adaptive-spread") if algorithm == "auto" else (algorithm,)
-        if any(item not in {"qim2", "adaptive-spread", "dct"} for item in algorithms):
+        algorithms = ("qim3", "qim2", "adaptive-spread") if algorithm == "auto" else (algorithm,)
+        if any(item not in {"qim3", "qim2", "adaptive-spread", "dct"} for item in algorithms):
             raise ValueError("algoritmo visual desconhecido")
         strongest: dict | None = None
         priority = {"NOT_FOUND": 0, "INCONCLUSIVE": 1, "ERROR": 2, "CANDIDATE": 3}
@@ -215,7 +217,7 @@ class WatermarkService:
                     claim = self.verify(record["claim_token"])
                 except ValueError:
                     continue
-                algorithm_id = {"dct": "dct-qim-v1", "qim2": "dct-qim-v2", "adaptive-spread": "adaptive-spread-v5"}[algorithm_name]
+                algorithm_id = {"dct": "dct-qim-v1", "qim2": "dct-qim-v2", "qim3": "dct-qim-v3", "adaptive-spread": "adaptive-spread-v5"}[algorithm_name]
                 if claim.watermark_id != record["watermark_id"] or claim.algorithm_id != algorithm_id:
                     continue
                 return {

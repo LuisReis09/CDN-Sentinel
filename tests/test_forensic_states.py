@@ -42,7 +42,7 @@ class ForensicStatesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             service = WatermarkService("state-test-secret-with-entropy-2026", WatermarkRegistry(Path(temporary) / "ledger.sqlite3"))
             with patch("services.watermark_service.detect_video", side_effect=[
-                {"status": "NOT_FOUND"}, {"status": "INCONCLUSIVE", "reason": "weak-signal"}
+                {"status": "NOT_FOUND"}, {"status": "INCONCLUSIVE", "reason": "weak-signal"}, {"status": "NOT_FOUND"}
             ]):
                 self.assertEqual(service.detect_forensic_video("unused.mp4")["forensic_status"], "INCONCLUSIVE")
             with patch("services.watermark_service.detect_video", return_value={"status": "DECODE_FAILED"}):
