@@ -1,5 +1,7 @@
 # Arquitetura atual do watermark forense
 
+> **Atualização de 12/11/2026:** a situação de implementação e as pendências obrigatórias estão em [watermark-finalization-status.md](watermark-finalization-status.md). QIM2 carrega 48 bits sem ECC; claims novos deixam de declarar SECDED nesse caminho. O Studio ainda executa o CDNWM3 legado.
+
 Estado experimental da branch `codex/forensic-watermark-reengineering`, derivada de `761e64a`. O simulador continua oferecendo rotas legadas, mas a investigação forense usa o fluxo abaixo.
 
 ```text

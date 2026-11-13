@@ -1,5 +1,7 @@
 # Fluxo de investigação forense
 
+> **Atualização de 12/11/2026:** em `CDN_AUTH_MODE=secure`, faça login em `/api/auth/login` com conta configurada no backend; investigação e revisão usam cookie HttpOnly e cabeçalho CSRF. O revisor é retirado da sessão, nunca do JSON enviado pelo cliente. Os comandos legados abaixo aplicam-se somente ao modo acadêmico local. Estados atuais: `NOT_FOUND`, `INCONCLUSIVE`, `CANDIDATE`, `PENDING_REVIEW`, `REVIEWED` e `ERROR`. Veja [o checklist](watermark-finalization-status.md).
+
 1. Um operador autorizado envia um vídeo em `POST /api/monitor/investigations` com `multipart/form-data`, campo `file`. Com `CDN_CONTROL_TOKEN` configurado, envie `X-CDN-Control-Token`. São aceitos contêineres de vídeo usuais até 64 MiB, 180 s, 4K e 60 fps. O upload temporário é excluído após a análise.
 2. O serviço calcula SHA-256 do arquivo recebido, cria `investigation_id` e chama o detector visual keyed sem fornecer cliente, token ou original esperado.
 3. Um `CANDIDATE` visual só avança se o marcador de 48 bits corresponder **exatamente** a uma entrada no ledger para a chave usada. O token CDNWM4 é autenticado e o claim é validado quanto a versão, `kid`, janela histórica, `watermark_id` e algoritmo. Recuperação parcial de bits não escolhe a conta mais próxima.

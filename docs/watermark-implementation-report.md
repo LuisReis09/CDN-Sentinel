@@ -1,5 +1,7 @@
 # Relatório de implementação da reengenharia forense
 
+> **Registro histórico:** este relatório descreve a rodada anterior. As correções posteriores, a autenticação de operador e os critérios ainda bloqueantes estão em [watermark-finalization-status.md](watermark-finalization-status.md). Nenhuma afirmação de prontidão de produção deve ser inferida dos testes locais aqui registrados.
+
 Branch `codex/forensic-watermark-reengineering`, derivada do commit auditado `761e64a89d2d63ea2334566ff852a5da27b8c2be`, 2026-11-11. Este relatório descreve código e ensaios desta branch; os números históricos estão separados em [watermark-security-validation.md](watermark-security-validation.md).
 
 ## Problemas encontrados e correções

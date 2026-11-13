@@ -1,5 +1,9 @@
 # Ferramentas de IA utilizadas
 
+## Revisão de 12/11/2026
+
+Codex auxiliou na implementação de estados forenses, autenticação, testes, CI e inspeção crítica. A decisão sobre uso operacional, a avaliação científica com datasets independentes, a revisão do PR e a validação humana permanecem responsabilidades humanas. Nenhuma resposta humana foi simulada para o estudo perceptual. O estado técnico verificável está no [checklist de fechamento](watermark-finalization-status.md).
+
 ## Ferramenta
 
 - **ChatGPT/Codex (OpenAI):** usado nesta revisão da Entrega 2.

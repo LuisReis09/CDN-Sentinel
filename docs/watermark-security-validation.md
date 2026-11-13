@@ -1,5 +1,7 @@
 # Auditoria e validação do núcleo de watermarking
 
+> **Estado de 12/11/2026:** consulte [watermark-finalization-status.md](watermark-finalization-status.md) para a correção da exposição de `VITE_CONTROL_TOKEN`, RBAC local e os bloqueios de segurança ainda abertos.
+
 > **Arquivo histórico.** As seções abaixo documentam rodadas anteriores nas branches `feat/watermark-security-core` e `feat/watermark-e2e-forensics`. Números, status, tokens nos headers, prefixos de bytes, blacklist automática e a associação por até cinco bits descritos como “atuais” em alguns trechos pertencem àquelas rodadas e **não** descrevem a branch `codex/forensic-watermark-reengineering`. A arquitetura desta branch está em [watermark-architecture.md](watermark-architecture.md), os resultados realmente reexecutados estão em [watermark-benchmark-results.md](watermark-benchmark-results.md) e a decisão de atribuição está em [watermark-forensic-workflow.md](watermark-forensic-workflow.md). A primeira rodada baseline desta branch executou 46 testes; a validação final consta no relatório de implementação.
 
 Data da auditoria: 2026-11-11  

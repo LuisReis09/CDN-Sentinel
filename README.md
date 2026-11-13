@@ -1,5 +1,7 @@
 # CDN-Sentinel
 
+**Estado da reengenharia (12/11/2026):** há correções de estados forenses, autenticação administrativa opcional e CI, mas o merge seguro segue bloqueado por ECC, robustez, Studio CDNWM4 e E2E/CI completos. Consulte [o checklist de fechamento](docs/watermark-finalization-status.md). O modo acadêmico padrão deve ficar no localhost. Nunca coloque segredos em variáveis `VITE_*`: elas entram no bundle público.
+
 ## Dataset de clipes do YouTube
 
 O backend e o Watermark Studio usam automaticamente os vídeos locais do
@@ -135,7 +137,7 @@ npm run dev
 Pop-Location
 ```
 
-O Vite usa `/api` por padrão. Para outro backend, use `VITE_API_BASE_URL`. Se o backend estiver com autenticação de controle, configure também `VITE_CONTROL_TOKEN`. O mapa usa tiles MapTiler Streets com rótulos em português quando `frontend/.env` define `VITE_MAPTILER_KEY`; o código mantém OpenStreetMap como fallback visual quando a chave ainda não foi configurada. Para habilitar exemplos adicionais já instalados pelo `scikit-video`, sem download automático, configure `USE_BIGBUCKBUNNY_DATASET=1`.
+O Vite usa `/api` por padrão. Para outro backend, use `VITE_API_BASE_URL`. Em `CDN_AUTH_MODE=secure`, o painel usa login no backend, cookie HttpOnly e CSRF. O mapa usa tiles MapTiler Streets com rótulos em português quando `frontend/.env` define `VITE_MAPTILER_KEY`; o código mantém OpenStreetMap como fallback visual quando a chave ainda não foi configurada. Para habilitar exemplos adicionais já instalados pelo `scikit-video`, sem download automático, configure `USE_BIGBUCKBUNNY_DATASET=1`.
 
 Após uma mutação no mapa, o console faz uma leitura nova do control plane mesmo que uma consulta periódica esteja em andamento. Assim, clientes e servidores criados por clique aparecem no próximo snapshot, sem depender de uma requisição antiga.
 
@@ -214,7 +216,7 @@ O smoke E2E local inicia processos CDN e verifica inicialização, stream e over
 
 ## Reengenharia forense experimental
 
-Requisitos: Python 3.12, FFmpeg/FFprobe no `PATH`, Node 20 para a interface. Instale o backend com `python -m pip install -r requirements.txt`, execute `python app.py` e o frontend com `cd frontend; npm ci; npm run dev`. O HLS A/B é preparado sob `data/runtime/hls-ab` na primeira sessão. Configure `CDN_SECRET_KEY` com material aleatório e `CDN_CONTROL_TOKEN` para proteger mutações quando sair do demo local. O token de controle do frontend pode ser fornecido por `VITE_CONTROL_TOKEN` apenas no laboratório local; não publique uma build contendo segredo de operador.
+Requisitos: Python 3.12, FFmpeg/FFprobe no `PATH`, Node 20 para a interface. Instale o backend com `python -m pip install -r requirements.txt`, execute `python app.py` e o frontend com `cd frontend; npm ci; npm run dev`. O HLS A/B é preparado sob `data/runtime/hls-ab` na primeira sessão. Para o modo seguro de uma instância, configure `CDN_AUTH_MODE=secure`, `CDN_SECRET_KEY`, `CDN_VIEWER_SESSION_SECRET` e `CDN_OPERATOR_ACCOUNTS`; use HTTPS e um proxy de mesma origem. Gere hashes de senha no backend com `python -c "from services.operator_auth_service import hash_password; print(hash_password('uma-senha-longa-e-aleatoria'))"` e forneça JSON como `{"alice":{"role":"operator","password_hash":"pbkdf2_sha256$..."}}` em `CDN_OPERATOR_ACCOUNTS`. O modo seguro ainda depende de autenticação externa da conta de espectador e de uma única instância de API.
 
 Para exigir autorização de espectador, configure também `CDN_REQUIRE_VIEWER_AUTH=1` e `CDN_VIEWER_SESSION_SECRET` com material aleatório distinto. O backend recusa iniciar esse modo sem `CDN_CONTROL_TOKEN`. Após autenticar a conta em um sistema externo, o operador chama `POST /api/clients/{id}/viewer-sessions` com `X-CDN-Control-Token`; a resposta contém um bearer curto. O espectador envia `Authorization: Bearer <token>` em `/media`, `/stream` e nas rotas HLS. O token vincula cliente, conteúdo e execução atual. Esse mecanismo **não é um provedor de identidade**, exige HTTPS fora do localhost e não substitui autenticação real da conta. Players HLS que não enviam headers precisam de uma integração de autenticação própria. No modo demo padrão, as rotas de mídia continuam abertas.
 

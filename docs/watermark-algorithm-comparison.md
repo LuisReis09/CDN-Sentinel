@@ -1,5 +1,7 @@
 # Comparação de algoritmos
 
+> **Atualização de 12/11/2026:** os resultados abaixo são históricos e insuficientes para escolher um algoritmo de produção. VideoSeal e PixelSeal não foram executados neste ambiente; QIM2 permanece sem ECC corretor. Veja [o estado de fechamento](watermark-finalization-status.md).
+
 ## Escopo e decisão
 
 Os números abaixo vêm do mesmo script `tools/forensic_benchmark.py`, usando o mesmo token por clipe, controle H.264 CRF24, primeiros 2 segundos e até 24 frames para extração. São três clipes locais de `youtube_clipped_videos`, escolhidos por ordem de arquivo; não constituem amostra representativa. Os resultados completos e comandos estão em [watermark-benchmark-results.md](watermark-benchmark-results.md). `CANDIDATE` visual não prova marcador exato.

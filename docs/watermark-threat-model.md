@@ -1,5 +1,7 @@
 # Modelo de ameaças do watermark forense
 
+> **Atualização de 12/11/2026:** `CDN_AUTH_MODE=secure` protege leituras e mutações administrativas com sessão e papéis, mas sessões e rate limits permanecem em memória e a autenticação da conta de espectador é externa. O modelo completo de ameaças ainda não foi validado para implantação pública; veja [o checklist](watermark-finalization-status.md).
+
 ## Ativos, atores e confiança
 
 Ativos: mídia original, segredo de emissão, ledger com tokens/claims e dados de cliente, evidências de investigação e histórico de decisões. O cliente recebe a mídia e controla a cópia; um adversário pode reencodar, editar, gravar tela, combinar cópias ou enviar arquivos falsos. Operadores e nós possuem privilégios distintos na arquitetura pretendida, mas o simulador ainda os executa em uma aplicação/control plane e SQLite local. O investigador conhece a chave e o ledger; o espectador não deve conhecer o token.
