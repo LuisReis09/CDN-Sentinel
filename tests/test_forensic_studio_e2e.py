@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from app import create_app
+from services.content_provider import DatasetContentProvider
 
 
 class ForensicStudioE2ETests(unittest.TestCase):
@@ -20,7 +21,10 @@ class ForensicStudioE2ETests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.get_json())
                 body = response.get_json()
                 self.assertEqual(body["pipeline"], "CDNWM4")
-                self.assertTrue(body["video_id"].startswith("youtube_clipped_videos/"), body["video_id"])
+                if DatasetContentProvider().available():
+                    self.assertTrue(body["video_id"].startswith("youtube_clipped_videos/"), body["video_id"])
+                else:
+                    self.assertEqual(body["video_id"], "bigbuckbunny")
                 self.assertEqual(body["claim"]["version"], "CDNWM4")
                 self.assertEqual(body["visual_detection"]["marker"], body["issued_marker"])
                 self.assertEqual(body["ledger_status"], "VALID")
