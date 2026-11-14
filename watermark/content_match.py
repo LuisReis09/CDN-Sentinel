@@ -7,24 +7,53 @@ It is a screening gate, not a calibrated copyright identifier.
 
 from __future__ import annotations
 
+import math
 import subprocess
 from pathlib import Path
 
 import numpy as np
 
+from utils.video_watermark import FORENSIC_SAMPLE_INTERVAL_SECONDS, probe_video_limits, temporal_sample_indices
 
-def frame_hashes(path: Path, *, max_seconds: int = 30) -> list[tuple[int, float, float]]:
+
+def frame_hashes(
+    path: Path,
+    *,
+    max_seconds: int = 30,
+    sample_interval_seconds: float = FORENSIC_SAMPLE_INTERVAL_SECONDS,
+) -> list[tuple[int, float, float]]:
     """Hash the bounded delivery window used by the CDN leak detector.
 
     A leaked delivery is a short segment, not an entire catalog movie. The
     previous 180-second upper bound made every authenticated investigation
     decode far beyond the received chunk and serialized blacklist progress.
-    The matching thresholds remain unchanged; only irrelevant tail decoding
-    is avoided.
+    The content gate also samples independent frames every two seconds instead
+    of every second.  The terminal frame is included to retain three
+    observations for a four-second forensic-studio clip.
     """
+    if max_seconds <= 0:
+        raise ValueError("max_seconds deve ser positivo")
+    metadata = probe_video_limits(path)
+    fps = float(metadata["fps"])
+    duration = float(metadata["duration_seconds"])
+    if duration <= 0:
+        raise ValueError("duração de vídeo inválida")
+    # ``duration * fps`` can be fractionally above the stream's real frame
+    # count (for example 4.004 s at 29.97003 fps is exactly 120 frames).
+    # Round rather than ceil so the terminal index remains decodable.
+    window_frames = max(1, round(min(duration, max_seconds) * fps))
+    max_samples = max(1, math.ceil(max_seconds / sample_interval_seconds) + 1)
+    indices = temporal_sample_indices(
+        window_frames,
+        fps,
+        interval_seconds=sample_interval_seconds,
+        max_frames=max_samples,
+    )
+    select_expression = "+".join(f"eq(n,{index})" for index in indices) or "eq(n,0)"
     command = [
-        "ffmpeg", "-v", "error", "-i", str(path), "-an", "-vf", "fps=1,scale=16:16:flags=area,format=gray",
-        "-frames:v", str(max_seconds), "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",
+        "ffmpeg", "-v", "error", "-t", str(max_seconds), "-i", str(path), "-an",
+        "-vf", f"select='{select_expression}',scale=16:16:flags=area,format=gray",
+        "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",
     ]
     result = subprocess.run(command, capture_output=True, check=True, timeout=90)
     hashes: list[tuple[int, float, float]] = []
@@ -45,8 +74,13 @@ def match_claimed_content(suspect: Path, reference: Path) -> dict:
     received = frame_hashes(suspect)
     original = frame_hashes(reference)
     if len(received) < 3 or len(original) < 3:
-        return {"status": "INCONCLUSIVE", "reason": "menos de três frames de 1 s disponíveis", "matched_frames": 0}
-    best = {"matched_frames": 0, "median_hamming": 64.0, "offset_seconds": 0, "fraction": 0.0}
+        return {
+            "status": "INCONCLUSIVE",
+            "reason": "menos de três amostras temporais disponíveis",
+            "matched_frames": 0,
+            "sample_interval_seconds": FORENSIC_SAMPLE_INTERVAL_SECONDS,
+        }
+    best = {"matched_frames": 0, "median_hamming": 64.0, "offset_samples": 0, "offset_seconds": 0.0, "fraction": 0.0}
     # Integer offsets support a partial clip and dropped edges.  A frame
     # must meet an absolute distance threshold; sequence order must agree.
     for offset in range(-len(received) + 1, len(original)):
@@ -66,6 +100,18 @@ def match_claimed_content(suspect: Path, reference: Path) -> dict:
         if (matched, fraction, -float(np.median(distances))) > (
             best["matched_frames"], best["fraction"], -best["median_hamming"]
         ):
-            best = {"matched_frames": matched, "median_hamming": float(np.median(distances)), "offset_seconds": offset, "fraction": round(fraction, 4)}
+            best = {
+                "matched_frames": matched,
+                "median_hamming": float(np.median(distances)),
+                "offset_samples": offset,
+                "offset_seconds": round(offset * FORENSIC_SAMPLE_INTERVAL_SECONDS, 3),
+                "fraction": round(fraction, 4),
+            }
     status = "MATCH" if best["matched_frames"] >= 3 and best["fraction"] >= 0.6 else "INCONCLUSIVE"
-    return {"status": status, **best, "method": "ordered-1fps-64bit-regional-hash-plus-luma-statistics", "threshold_hamming": 10}
+    return {
+        "status": status,
+        **best,
+        "method": "ordered-2s-64bit-regional-hash-plus-luma-statistics",
+        "sample_interval_seconds": FORENSIC_SAMPLE_INTERVAL_SECONDS,
+        "threshold_hamming": 10,
+    }

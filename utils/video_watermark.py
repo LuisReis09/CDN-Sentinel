@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import subprocess
 import tempfile
 import threading
@@ -30,6 +31,11 @@ from utils.image_watermark import (
 
 VIDEO_STRENGTH = 24.0
 DETECTION_WIDTH = 640
+# Forensic scans operate on independent temporal evidence.  Sampling every
+# frame (or every second for a short clip) adds expensive QIM work without
+# improving the simulated delivery path.  Keep a fixed, explicit cadence so
+# the same media produces a reproducible evidence plan.
+FORENSIC_SAMPLE_INTERVAL_SECONDS = 2.0
 
 
 def transcode_video(source: Path, destination: Path, crf: int = 24, preset: str = "veryfast") -> dict:
@@ -97,10 +103,18 @@ def probe_video_limits(path: Path) -> dict:
 
 
 def _frame_count(path: Path, fps: float) -> int:
+    """Estimate the frame count from container metadata without decoding.
+
+    Temporal sampling only needs a stable upper bound. ``ffprobe
+    -count_frames`` decodes the full asset before FFmpeg can extract the small
+    evidence plan, which erases most of the benefit of sparse sampling.
+    ``nb_frames`` is exact for the simulator's MP4 inputs; duration times FPS
+    is the fallback for containers that omit it.
+    """
     result = subprocess.run(
         [
-            "ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
-            "-show_entries", "stream=nb_read_frames,duration", "-of", "default=nw=1", str(path),
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=nb_frames,duration", "-of", "default=nw=1", str(path),
         ],
         check=True,
         capture_output=True,
@@ -115,7 +129,7 @@ def _frame_count(path: Path, fps: float) -> int:
         for key, value in [line.split("=", 1)]
     }
     try:
-        count = int(float(fields.get("nb_read_frames", "0")))
+        count = int(float(fields.get("nb_frames", "0")))
     except ValueError:
         count = 0
     if count > 0:
@@ -127,13 +141,6 @@ def _frame_count(path: Path, fps: float) -> int:
             continue
         if count > 0:
             return count
-    for value in values:
-        try:
-            duration = float(value)
-        except ValueError:
-            continue
-        if duration > 0:
-            return max(1, round(duration * fps))
     try:
         duration = float(fields.get("duration", "0"))
     except ValueError:
@@ -141,6 +148,46 @@ def _frame_count(path: Path, fps: float) -> int:
     if duration > 0:
         return max(1, round(duration * fps))
     return 1
+
+
+def temporal_sample_indices(
+    total_frames: int,
+    fps: float,
+    *,
+    interval_seconds: float = FORENSIC_SAMPLE_INTERVAL_SECONDS,
+    max_frames: int = 24,
+) -> list[int]:
+    """Plan bounded forensic samples at a minimum temporal cadence.
+
+    The final frame is retained as an independent end-of-clip observation.
+    That matters for short dataset clips: a four-second clip still contributes
+    evidence near 0 s, 2 s and its end instead of falling below the content
+    gate's three-frame minimum.
+    """
+    if total_frames <= 0:
+        return []
+    if not math.isfinite(fps) or fps <= 0:
+        raise ValueError("fps inválido para amostragem temporal")
+    if not math.isfinite(interval_seconds) or interval_seconds <= 0:
+        raise ValueError("interval_seconds deve ser positivo")
+    if max_frames < 1:
+        raise ValueError("max_frames deve ser positivo")
+
+    frame_stride = max(1, round(fps * interval_seconds))
+    periodic = list(range(0, total_frames, frame_stride))
+    if len(periodic) > max_frames:
+        # Keep coverage across the complete duration rather than retaining
+        # only its beginning when a caller imposes a smaller evidence budget.
+        positions = np.linspace(0, len(periodic) - 1, max_frames, dtype=np.int64)
+        periodic = [periodic[int(position)] for position in positions]
+
+    final_frame = total_frames - 1
+    if final_frame not in periodic:
+        if len(periodic) >= max_frames:
+            periodic[-1] = final_frame
+        else:
+            periodic.append(final_frame)
+    return sorted(set(periodic))
 
 
 def _frame_command(path: Path, width: int, height: int, fps: float) -> list[str]:
@@ -258,6 +305,7 @@ def detect_video(
     path: Path,
     secret: str,
     max_frames: int = 24,
+    sample_interval_seconds: float = FORENSIC_SAMPLE_INTERVAL_SECONDS,
     adaptive: bool = True,
     algorithm: str = "adaptive-spread",
     dct_step: float = 10.0,
@@ -268,15 +316,20 @@ def detect_video(
 
     Detection uses one canonical 640px-wide geometry. Embedding can happen at
     320p, 720p or 1080p, but both the received frame and the keyed carrier are
-    compared after the same deterministic normalization. The frame indices are
-    distributed over the complete duration, which avoids making a decision
-    from only the opening seconds of a long asset.
+    compared after the same deterministic normalization. Independent samples
+    are normally two seconds apart and cover the whole asset; the final frame
+    is retained for short clips. This avoids per-second QIM processing while
+    retaining time-separated evidence.
     """
     qim_step = qim_step if qim_step is not None else (QIM3_STEP if algorithm == "qim3" else QIM_STEP)
     width, height, fps = _probe(path)
     total_frames = _frame_count(path, fps)
-    sample_count = min(max_frames, total_frames)
-    indices = np.linspace(0, max(0, total_frames - 1), sample_count, dtype=np.int64).tolist()
+    indices = temporal_sample_indices(
+        total_frames,
+        fps,
+        interval_seconds=sample_interval_seconds,
+        max_frames=max_frames,
+    )
     select_expression = "+".join(f"eq(n,{int(index)})" for index in indices) or "eq(n,0)"
     detection_width = DETECTION_WIDTH
     detection_height = max(2, round(height * detection_width / width))
@@ -297,7 +350,7 @@ def detect_video(
     aggregate_layout = None
     try:
         assert process.stdout is not None
-        while len(evidences) < max_frames:
+        while len(evidences) < len(indices):
             raw = process.stdout.read(frame_size)
             if len(raw) < frame_size:
                 break
@@ -385,7 +438,8 @@ def detect_video(
             "fps": fps,
             "detection_width": detection_width,
             "detection_height": detection_height,
-            "temporal_sampling": "uniform-over-full-video",
+            "temporal_sampling": "two-second-interval-over-full-video",
+            "sample_interval_seconds": sample_interval_seconds,
             "qim3_soft_decode": qim3_soft_decode if algorithm == "qim3" else None,
             "sampled_frame_indices": indices,
             "frames": evidences,
@@ -400,7 +454,8 @@ def detect_video(
             "fps": fps,
             "detection_width": detection_width,
             "detection_height": detection_height,
-            "temporal_sampling": "uniform-over-full-video",
+            "temporal_sampling": "two-second-interval-over-full-video",
+            "sample_interval_seconds": sample_interval_seconds,
             "sampled_frame_indices": indices,
             "frames": evidences,
         }
@@ -419,7 +474,8 @@ def detect_video(
         "fps": fps,
         "detection_width": detection_width,
         "detection_height": detection_height,
-        "temporal_sampling": "uniform-over-full-video",
+        "temporal_sampling": "two-second-interval-over-full-video",
+        "sample_interval_seconds": sample_interval_seconds,
         "sampled_frame_indices": indices,
         "frames": evidences,
     }

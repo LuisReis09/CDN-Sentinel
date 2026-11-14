@@ -32,6 +32,8 @@ class ForensicStudioE2ETests(unittest.TestCase):
                 self.assertTrue(body["forensic_envelope"]["ciphertext_and_tag_base64url"])
                 self.assertNotEqual(body["media_payloads"]["original"]["sha256"], body["media_payloads"]["watermarked"]["sha256"])
                 self.assertEqual(body["visual_detection"]["marker"], body["issued_marker"])
+                self.assertEqual(body["visual_detection"]["sample_interval_seconds"], 2.0)
+                self.assertIn("two-second", body["visual_detection"]["temporal_sampling"])
                 self.assertEqual(body["ledger_status"], "VALID")
                 self.assertEqual(body["investigation"]["decision"], "PENDING_REVIEW")
                 self.assertEqual(body["investigation"]["content_match"]["status"], "MATCH")
