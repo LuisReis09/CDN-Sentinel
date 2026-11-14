@@ -69,6 +69,7 @@ class SimulationRepository:
             snapshot.clients = {}
             snapshot.servers = copy.deepcopy(self._state.servers)
             snapshot.blacklist = copy.deepcopy(self._state.blacklist)
+            snapshot.forensic_pending_clients = copy.deepcopy(self._state.forensic_pending_clients)
             snapshot.leaks = copy.deepcopy(self._state.leaks)
             snapshot.scan_history = copy.deepcopy(self._state.scan_history)
             snapshot.metrics_history = copy.deepcopy(self._state.metrics_history)

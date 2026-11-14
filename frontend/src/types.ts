@@ -196,6 +196,7 @@ export interface SimulationStatus {
   clients_total: number;
   malicious_clients: number;
   blacklisted_total: number;
+  forensic_pending_total?: number;
   initialization?: {
     in_progress: boolean;
     progress_pct: number;

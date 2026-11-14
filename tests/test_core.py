@@ -1,5 +1,11 @@
+import base64
+import os
 import subprocess
+import tempfile
+import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from services.watermark_service import WatermarkService
 from config import SimulationConfig
@@ -12,6 +18,7 @@ from controllers.simulation_controller import SimulationController
 from repositories.in_memory import SimulationRepository
 from services.cdn_http_client import CDNHttpClient
 from services.client_activity_service import ClientActivityService
+from services.leak_service import LeakService
 from services.stream_service import StreamService
 from models.entities import CDNServer, Client, SimulationState
 from utils.video import generate_visual_variants, get_video_asset, list_video_examples
@@ -97,6 +104,98 @@ class SecurityAndNetworkTests(unittest.TestCase):
         self.assertEqual(refreshed.errors_total, 3)
         self.assertEqual(refreshed.simulated_requests_total, 51)
         self.assertEqual(refreshed.http_requests_total, 3)
+
+    def test_dashboard_metrics_keep_counter_sources_and_use_actual_observation_window(self):
+        repository = SimulationRepository()
+        now = time.time()
+        server = CDNServer("cdn-01", "127.0.0.1", 5101, 0, 0, "Test", status="healthy", capacity_rps=20)
+        server.simulated_requests_total = 40
+        server.http_requests_total = 3
+        server.requests_total = 43
+        server.simulated_errors_total = 1
+        server.http_errors_total = 1
+        server.errors_total = 2
+        clients = {
+            "client-1": Client("client-1", 0, 0, "Test"),
+            "client-2": Client("client-2", 1, 1, "Test"),
+        }
+        repository.replace(SimulationState(
+            initialized=True,
+            lifecycle="running",
+            started_at=now - 2,
+            config={
+                "demand_rps_per_client": 1.0,
+                "tick_interval_seconds": 0.5,
+                "monthly_client_price_usd": 25,
+                "monthly_fixed_cost_usd": 100,
+            },
+            clients=clients,
+            servers={server.server_id: server},
+            forensic_pending_clients={"client-1"},
+            traffic=[
+                {"at": now - 0.2, "server_id": server.server_id, "request_count": 8, "end_to_end_ms": 80},
+                {"at": now - 0.1, "server_id": server.server_id, "request_count": 4, "end_to_end_ms": 120},
+            ],
+        ))
+        status = SimulationController(repository, CDNHttpClient()).status()
+        scale = status["scalability"]
+        self.assertEqual(status["blacklisted_total"], 0)
+        self.assertEqual(status["forensic_pending_total"], 1)
+        self.assertEqual(scale["observed_request_count"], 12)
+        self.assertLess(scale["metrics_window_seconds"], 60)
+        self.assertGreater(scale["observed_rps"], 10)
+        self.assertEqual(scale["average_latency_ms"], 100.0)
+        self.assertEqual(scale["p95_latency_ms"], 120.0)
+        self.assertEqual(scale["total_capacity"], 20)
+        self.assertEqual(scale["demand_rps"], 2.0)
+        self.assertEqual(scale["observed_errors"], 2)
+        self.assertEqual(scale["success_rate_pct"], round(100 * 41 / 43, 2))
+        self.assertEqual(repository.snapshot().metrics_history[-1]["total_requests"], 43)
+
+    def test_forensic_hold_stops_simulated_progress_before_real_proof_is_ready(self):
+        class FakeStream:
+            def stream(self, client, state, chunk_number):
+                return SimpleNamespace(
+                    payload=base64.b64encode(b"real-media-proof").decode(),
+                    server_id="cdn-01",
+                    request_id="request-1",
+                    trace_id="trace-1",
+                    content_type="video/mp4",
+                )
+
+        repository = SimulationRepository()
+        malicious = Client("pirate", 0, 0, "Test", malicious=True)
+        regular = Client("regular", 1, 1, "Test")
+        server = CDNServer("cdn-01", "127.0.0.1", 5101, 0, 0, "Test", status="healthy", capacity_rps=10)
+        repository.replace(SimulationState(
+            initialized=True,
+            lifecycle="running",
+            config={"demand_rps_per_client": 1.0},
+            clients={malicious.client_id: malicious, regular.client_id: regular},
+            servers={server.server_id: server},
+        ))
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"CDN_LEAK_MEDIA_ROOT": directory}):
+            leaks = []
+            leak_service = LeakService(repository, FakeStream(), on_leak=leaks.append)
+            leak_service._capture_one_leak()
+            self.assertEqual(repository.state_ref().forensic_pending_clients, {"pirate"})
+            self.assertEqual(len(leaks), 1)
+            activity = ClientActivityService(repository, StreamService(CDNHttpClient()))
+            activity._advance_virtual_clients(repository.state_ref(), [malicious, regular], 1)
+        self.assertEqual(malicious.videos_consumed, 0)
+        self.assertEqual(regular.videos_consumed, 1)
+
+    def test_leak_worker_captures_before_waiting_for_the_next_tick(self):
+        service = LeakService(SimulationRepository(), StreamService(CDNHttpClient()))
+        captured = []
+
+        def capture():
+            captured.append(True)
+            service._stop_event.set()
+
+        service._capture_one_leak = capture
+        service._run()
+        self.assertEqual(captured, [True])
 
     def test_delivery_ranking_shares_nearby_nodes_but_keeps_geography(self):
         first = CDNServer("cdn-a", "127.0.0.1", 5101, 0, 0, "A", capacity_rps=10, utilization=0.95)

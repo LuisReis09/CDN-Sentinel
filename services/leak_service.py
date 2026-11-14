@@ -51,10 +51,17 @@ class LeakService:
         self._tick_interval_seconds = max(0.5, float(tick_interval_seconds))
 
     def _run(self) -> None:
-        while not self._stop_event.wait(self._tick_interval_seconds):
+        # Begin real evidence capture at once instead of waiting a whole tick.
+        while not self._stop_event.is_set():
+            self._capture_one_leak()
+            if self._stop_event.wait(self._tick_interval_seconds):
+                break
+
+    def _capture_one_leak(self) -> None:
+        if not self._stop_event.is_set():
             state = self._repository.state_ref()
             if state.paused or state.lifecycle != "running":
-                continue
+                return
             pending_client_ids = {
                 str(leak.get("client_id"))
                 for leak in state.leaks
@@ -67,9 +74,10 @@ class LeakService:
                 and client.active
                 and client.client_id not in state.blacklist
                 and client.client_id not in pending_client_ids
+                and client.client_id not in state.forensic_pending_clients
             ]
             if not malicious:
-                continue
+                return
             # Each candidate uses the genuine QIM3/AES delivery and forensic
             # path.  Limit this expensive work to one round-robin client per
             # cycle so a burst cannot starve visible simulation updates or
@@ -77,12 +85,15 @@ class LeakService:
             malicious.sort(key=lambda item: item.client_id)
             client = malicious[self._next_malicious_index % len(malicious)]
             self._next_malicious_index += 1
+            # This is a temporary investigative hold, not a blacklist entry.
+            state.forensic_pending_clients.add(client.client_id)
             try:
                 chunk = self._stream_service.stream(client, state, chunk_number=1)
                 try:
                     media = base64.b64decode(chunk.payload, validate=True)
                 except (ValueError, TypeError):
-                    continue
+                    state.forensic_pending_clients.discard(client.client_id)
+                    return
                 leak_root = Path(os.getenv("CDN_LEAK_MEDIA_ROOT", "data/runtime/leaks"))
                 leak_root.mkdir(parents=True, exist_ok=True)
                 leak_id = f"leak-{uuid.uuid4().hex[:12]}"
@@ -119,5 +130,6 @@ class LeakService:
                 if self._on_leak:
                     self._on_leak(leak)
             except (PermissionError, RuntimeError, OSError):
-                continue
+                state.forensic_pending_clients.discard(client.client_id)
+                return
 

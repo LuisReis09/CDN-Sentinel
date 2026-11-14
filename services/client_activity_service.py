@@ -147,15 +147,21 @@ class ClientActivityService:
                 "routing_reason": "roteamento virtual agregado para escala",
             })
         # The aggregate traffic record above protects the real playback path
-        # from hundreds of QIM/FFmpeg jobs.  Playback progress remains fair:
-        # ordinary scenarios update every client every tick, while oversized
-        # simulations use a deterministic rotating window.
-        batch_size = min(len(active_clients), self.virtual_delivery_batch_size)
-        start = ((tick - 1) * batch_size) % len(active_clients)
+        # from hundreds of QIM/FFmpeg jobs. A suspected pirate whose real
+        # marked media is being encoded/inspected is held until that forensic
+        # pipeline resolves; suspicion alone is still not a blacklist action.
+        progress_clients = [
+            client for client in active_clients
+            if client.client_id not in state.forensic_pending_clients
+        ]
+        if not progress_clients:
+            return
+        batch_size = min(len(progress_clients), self.virtual_delivery_batch_size)
+        start = ((tick - 1) * batch_size) % len(progress_clients)
         now = time.time()
         pending_assignments: dict[str, int] = {}
         for offset in range(batch_size):
-            client = active_clients[(start + offset) % len(active_clients)]
+            client = progress_clients[(start + offset) % len(progress_clients)]
             # The aggregate delivery path keeps geography as its primary
             # signal, but shares a same-tick burst with nearby idle nodes.
             _score, server = rank_delivery_servers(
@@ -188,6 +194,8 @@ class ClientActivityService:
             "at": time.time(),
             "tick": tick,
             "client_count": len(active_clients),
+            "progress_client_count": len(progress_clients),
+            "forensic_pending_clients": len(state.forensic_pending_clients),
             "request_count": round(served_rps * interval),
             "demand_rps": round(demand_rps, 3),
             "served_rps": round(served_rps, 3),

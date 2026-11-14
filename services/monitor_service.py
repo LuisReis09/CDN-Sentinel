@@ -240,6 +240,7 @@ class MonitorService:
                 leak["processed"] = True
                 leak["attributed"] = True
                 leak["attributed_client_id"] = claim["client_id"]
+                state.forensic_pending_clients.discard(str(claim["client_id"]))
                 leak["needs_reanalysis"] = False
                 leak["review_status"] = "PENDING_REVIEW"
                 leak["detected_at"] = time.time()

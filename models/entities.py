@@ -153,6 +153,10 @@ class SimulationState:
     clients: Dict[str, Client] = field(default_factory=dict)
     servers: Dict[str, CDNServer] = field(default_factory=dict)
     blacklist: Dict[str, BlacklistEntry] = field(default_factory=dict)
+    # A client enters this set as soon as the simulator has started creating
+    # a real, watermarked leak for it. It is not a blacklist: it merely
+    # prevents aggregate playback from racing ahead of the evidence pipeline.
+    forensic_pending_clients: set[str] = field(default_factory=set)
     leaks: List[Dict[str, Any]] = field(default_factory=list)
     scan_history: List[Dict[str, Any]] = field(default_factory=list)
     metrics_history: List[Dict[str, Any]] = field(default_factory=list)

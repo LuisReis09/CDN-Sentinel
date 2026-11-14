@@ -67,9 +67,9 @@ class ApiController:
             self.management_engine.reset(seed=result["configuration"].get("seed", 2026))
         self.watermark_service.configure(self.simulation_controller.secret_key)
         tick_interval = result["configuration"].get("tick_interval_seconds", 1.25)
+        self.monitor_service.start(result.get("servers", []), tick_interval)
         self.leak_service.start(tick_interval)
         self.client_activity_service.start(tick_interval)
-        self.monitor_service.start(result.get("servers", []), tick_interval)
         return result
 
     def update_simulation(self, payload: dict) -> dict:
@@ -88,15 +88,15 @@ class ApiController:
         except Exception:
             if rebuild and current.initialized:
                 tick_interval = current.config.get("tick_interval_seconds", 1.25)
+                self.monitor_service.start([server.to_dict() for server in current.servers.values()], tick_interval)
                 self.leak_service.start(tick_interval)
                 self.client_activity_service.start(tick_interval)
-                self.monitor_service.start([server.to_dict() for server in current.servers.values()], tick_interval)
             raise
         tick_interval = result["configuration"].get("tick_interval_seconds", 1.25)
         if rebuild:
+            self.monitor_service.start([server.to_dict() for server in self.repository.snapshot_without_clients().servers.values()], tick_interval)
             self.leak_service.start(tick_interval)
             self.client_activity_service.start(tick_interval)
-            self.monitor_service.start([server.to_dict() for server in self.repository.snapshot_without_clients().servers.values()], tick_interval)
         else:
             # Configuration edits, including live population resizing, only
             # adjust worker cadence and monitor membership; no worker restarts.

@@ -162,7 +162,11 @@ export function DashboardPage({
         <MetricCard
           label="BLACKLIST"
           value={status.blacklisted_total}
-          caption="propagada via gossip"
+          caption={
+            status.forensic_pending_total
+              ? `${status.forensic_pending_total} em anÃ¡lise forense`
+              : "propagada via gossip"
+          }
           icon={Ban}
           tone="red"
         />

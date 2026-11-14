@@ -314,8 +314,15 @@ class SimulationController:
         queue_depth = sum(server.queue_depth for server in state.servers.values())
         queue_rejected = sum(server.queue_rejected for server in state.servers.values())
         queue_wait_ms = round(sum(server.queue_wait_ms for server in state.servers.values()) / len(state.servers), 1) if state.servers else 0.0
-        window_seconds = 60.0
-        recent_traffic = [item for item in state.traffic if now - float(item.get("at", now)) <= window_seconds]
+        max_window_seconds = 60.0
+        recent_traffic = [item for item in state.traffic if now - float(item.get("at", now)) <= max_window_seconds]
+        # At start-up, dividing a few seconds of traffic by a fixed 60-second
+        # window made the displayed RPS artificially close to zero.
+        oldest_traffic_at = min((float(item.get("at", now)) for item in recent_traffic), default=now)
+        window_seconds = min(
+            max_window_seconds,
+            max(float(state.config.get("tick_interval_seconds", 1.25)), now - oldest_traffic_at),
+        )
         latencies = [float(item.get("end_to_end_ms", item.get("http_rtt_ms", 0))) for item in recent_traffic]
         ordered_latencies = sorted(latencies)
 
@@ -468,6 +475,7 @@ class SimulationController:
             "malicious_clients": client_summary["malicious"],
             "initialization": self.initialization_progress(),
             "blacklisted_total": len(state.blacklist),
+            "forensic_pending_total": len(state.forensic_pending_clients),
             "scalability": {
                 "active_clients": active_clients,
                 "healthy_servers": healthy_servers,
