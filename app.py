@@ -24,11 +24,13 @@ from services.client_activity_service import ClientActivityService
 from services.forensic_investigation_service import ForensicInvestigationService
 from services.viewer_session_service import ViewerSessionService
 from services.operator_auth_service import OperatorAuthService, SESSION_SECONDS
+from services.supabase_store import SupabaseSimulationPersistence, load_project_env
 from management.engine import ManagementEngine
 from media.hls_ab import HLSABService
 
 
 def create_app() -> Flask:
+    load_project_env()
     app = Flask(__name__)
     auth_mode = os.getenv("CDN_AUTH_MODE", "local").strip().lower()
     if auth_mode not in {"local", "secure"}:
@@ -135,7 +137,7 @@ def create_app() -> Flask:
         description="Simulação distribuída de CDN de vídeo com watermarking forense e monitoramento de pirataria.",
         doc="/docs",
     )
-    repository = SimulationRepository()
+    repository = SimulationRepository(SupabaseSimulationPersistence())
     http_client = CDNHttpClient()
     simulation_controller = SimulationController(repository, http_client)
     watermark_service = WatermarkService(os.getenv("CDN_SECRET_KEY", "local-development-secret"))
@@ -165,6 +167,7 @@ def create_app() -> Flask:
         return jsonify({"ok": True, "initialized": repository.snapshot_without_clients().initialized})
 
     app.extensions["cdn_controller"] = controller
+    app.extensions["cdn_storage"] = repository.storage_status
     app.extensions["cdn_control_auth"] = {"mode": auth_mode, "configured": bool(control_token), "viewer_auth_required": viewer_auth_required, "cors_origins": configured_origins}
     atexit.register(leak_service.stop)
     atexit.register(client_activity_service.stop)

@@ -48,10 +48,33 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-  compose-config:
+  docker-validation:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Validate Docker Compose configuration
+      - name: Validate Compose configuration
         run: docker compose config --quiet
+      - name: Build container images
+        run: docker compose build
+      - name: Run backend tests in the backend image
+        run: docker compose run --rm --no-deps backend python -m unittest discover -s tests -v
+      - name: Smoke test the composed stack
+        run: |
+          set -euo pipefail
+          trap 'docker compose logs --tail=200; docker compose down -v' EXIT
+          docker compose up -d
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:5000/health >/dev/null; then break; fi
+            if [ "$attempt" = "30" ]; then exit 1; fi
+            sleep 2
+          done
+          curl --fail --silent --show-error \
+            -H 'Content-Type: application/json' \
+            -d '{"chunk":0}' \
+            http://127.0.0.1:5000/api/security/watermark/demo >/dev/null
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:8080/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          exit 1

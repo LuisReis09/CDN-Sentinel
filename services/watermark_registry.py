@@ -10,6 +10,8 @@ from contextlib import closing
 from pathlib import Path
 from threading import RLock
 
+from services.supabase_store import SupabaseLedgerBackend, SupabaseUnavailable
+
 
 class WatermarkRegistryCollision(ValueError):
     """Raised when two authenticated tokens claim the same visual marker."""
@@ -20,6 +22,10 @@ class WatermarkRegistry:
 
     def __init__(self, path: str | Path | None = None) -> None:
         configured = path or os.getenv("CDN_WATERMARK_REGISTRY_PATH")
+        # Explicit paths are used by tests and local forensic exports. The
+        # normal application registry mirrors to Supabase and retains SQLite
+        # only as an outage-safe forensic fallback.
+        self._remote = SupabaseLedgerBackend.from_environment() if path is None and not configured else None
         self.path = (
             Path(configured)
             if configured
@@ -131,10 +137,25 @@ class WatermarkRegistry:
                 )
                 connection.execute("CREATE INDEX IF NOT EXISTS ab_sessions_content_idx ON ab_sessions(content_id, fingerprint)")
 
+    def _remote_call(self, operation):
+        if not self._remote or not self._remote.available:
+            return False, None
+        try:
+            return True, operation(self._remote)
+        except SupabaseUnavailable:
+            self._remote = None
+            return False, None
+
     def put(self, secret_key: str, marker: str, token: str, created_at: float) -> None:
+        key_id = self.key_id(secret_key)
+        try:
+            mirrored, _ = self._remote_call(
+                lambda remote: remote.put_marker(key_id, marker, token, float(created_at), "CDNIMG5-SECDED-48")
+            )
+        except ValueError as exc:
+            raise WatermarkRegistryCollision(str(exc)) from exc
         with self._lock, closing(self._connect()) as connection:
             with connection:
-                key_id = self.key_id(secret_key)
                 existing = connection.execute(
                     "SELECT token FROM watermark_registry WHERE key_id = ? AND marker = ?",
                     (key_id, marker),
@@ -154,10 +175,13 @@ class WatermarkRegistry:
                 )
 
     def load(self, secret_key: str) -> dict[str, str]:
+        key_id = self.key_id(secret_key)
+        mirrored, rows = self._remote_call(lambda remote: remote.load_markers(key_id))
+        if mirrored:
+            return rows
         with self._lock, closing(self._connect()) as connection:
             rows = connection.execute(
-                "SELECT marker, token FROM watermark_registry WHERE key_id = ?",
-                (self.key_id(secret_key),),
+                "SELECT marker, token FROM watermark_registry WHERE key_id = ?", (key_id,),
             ).fetchall()
         return {str(marker): str(token) for marker, token in rows}
 
@@ -169,6 +193,12 @@ class WatermarkRegistry:
         canonical = json.dumps(claim, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         claim_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         key_id = self.key_id(secret_key)
+        try:
+            self._remote_call(
+                lambda remote: remote.put_claim(key_id, marker, token, claim, claim_hash)
+            )
+        except ValueError as exc:
+            raise WatermarkRegistryCollision(str(exc)) from exc
         with self._lock, closing(self._connect()) as connection:
             with connection:
                 existing = connection.execute(
@@ -205,6 +235,18 @@ class WatermarkRegistry:
                 )
 
     def claim_for_session(self, secret_key: str, session_id: str, content_id: str, segment_range: str, algorithm_id: str, server_id: str) -> dict | None:
+        key_id = self.key_id(secret_key)
+        mirrored, remote_row = self._remote_call(
+            lambda remote: remote.claim_for_session(key_id, session_id, content_id, segment_range, algorithm_id, server_id)
+        )
+        if mirrored:
+            if not remote_row:
+                return None
+            payload = remote_row["claim"]
+            canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != remote_row["claim_hash"]:
+                raise ValueError("integridade do claim da sessÃ£o invÃ¡lida")
+            return {"claim_token": remote_row["claim_token"], "claim": payload}
         with self._lock, closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT claim_token, claim_json, claim_hash FROM forensic_claims WHERE key_id = ? AND session_id = ? AND content_id = ? AND segment_range = ? AND algorithm_id = ? AND server_id = ?",
@@ -219,6 +261,16 @@ class WatermarkRegistry:
         return {"claim_token": str(row[0]), "claim": payload}
 
     def claim_for_marker(self, secret_key: str, marker: str) -> dict | None:
+        key_id = self.key_id(secret_key)
+        mirrored, remote_row = self._remote_call(lambda remote: remote.claim_for_marker(key_id, marker))
+        if mirrored:
+            if not remote_row:
+                return None
+            payload = remote_row["claim"]
+            canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != remote_row["claim_hash"]:
+                raise ValueError("integridade do claim no ledger invÃ¡lida")
+            return remote_row
         with self._lock, closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT watermark_id, claim_token, claim_json, claim_hash FROM forensic_claims WHERE key_id = ? AND marker = ?",
@@ -235,6 +287,16 @@ class WatermarkRegistry:
     def append_forensic_event(self, secret_key: str, event_type: str, payload: dict, watermark_id: str | None = None) -> dict:
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         key_id = self.key_id(secret_key)
+        mirrored, remote_events = self._remote_call(lambda remote: remote.events(key_id))
+        if mirrored:
+            previous_hash = remote_events[-1]["payload_hash"] if remote_events else None
+            signed = json.dumps([event_type, watermark_id, previous_hash, canonical], separators=(",", ":"), ensure_ascii=False)
+            payload_hash = hmac.new(secret_key.encode("utf-8"), signed.encode("utf-8"), hashlib.sha256).hexdigest()
+            written, _ = self._remote_call(
+                lambda remote: remote.append_event(key_id, watermark_id, event_type, payload, payload_hash, previous_hash, time.time())
+            )
+            if written:
+                return {"event_type": event_type, "watermark_id": watermark_id, "payload_hash": payload_hash, "previous_hash": previous_hash}
         with self._lock, closing(self._connect()) as connection:
             with connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -252,8 +314,20 @@ class WatermarkRegistry:
         return {"event_type": event_type, "watermark_id": watermark_id, "payload_hash": payload_hash, "previous_hash": previous_hash}
 
     def forensic_events(self, secret_key: str, watermark_id: str | None = None) -> list[dict]:
+        key_id = self.key_id(secret_key)
+        mirrored, remote_rows = self._remote_call(lambda remote: remote.events(key_id, watermark_id))
+        if mirrored:
+            return [
+                {
+                    "event_id": row["event_id"], "watermark_id": row.get("watermark_id"),
+                    "event_type": row["event_type"], "payload": row["payload_json"],
+                    "payload_hash": row["payload_hash"], "previous_hash": row.get("previous_hash"),
+                    "created_at": row["created_at"],
+                }
+                for row in remote_rows
+            ]
         query = "SELECT event_id, watermark_id, event_type, payload_json, payload_hash, previous_hash, created_at FROM forensic_events WHERE key_id = ?"
-        args: tuple = (self.key_id(secret_key),)
+        args: tuple = (key_id,)
         if watermark_id:
             query += " AND watermark_id = ?"
             args = (self.key_id(secret_key), watermark_id)
@@ -263,13 +337,18 @@ class WatermarkRegistry:
         return [{"event_id": row[0], "watermark_id": row[1], "event_type": row[2], "payload": json.loads(row[3]), "payload_hash": row[4], "previous_hash": row[5], "created_at": row[6]} for row in rows]
 
     def verify_forensic_events(self, secret_key: str) -> bool:
-        with self._lock, closing(self._connect()) as connection:
-            rows = connection.execute(
-                "SELECT watermark_id, event_type, payload_json, payload_hash, previous_hash FROM forensic_events WHERE key_id = ? ORDER BY event_id",
-                (self.key_id(secret_key),),
-            ).fetchall()
+        # Go through the public reader so verification follows the active
+        # durable backend.  With Supabase configured, events are deliberately
+        # not duplicated into SQLite, therefore reading SQLite here would
+        # incorrectly report an empty (and valid) chain.
+        rows = self.forensic_events(secret_key)
         previous_hash = None
-        for watermark_id, event_type, canonical, stored_hash, linked_hash in rows:
+        for row in rows:
+            watermark_id = row.get("watermark_id")
+            event_type = row.get("event_type")
+            canonical = json.dumps(row.get("payload"), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            stored_hash = row.get("payload_hash")
+            linked_hash = row.get("previous_hash")
             if linked_hash != previous_hash:
                 return False
             signed = json.dumps([event_type, watermark_id, previous_hash, canonical], separators=(",", ":"), ensure_ascii=False)
@@ -280,6 +359,9 @@ class WatermarkRegistry:
         return True
 
     def ab_pattern_exists(self, content_id: str, fingerprint: str) -> bool:
+        mirrored, exists = self._remote_call(lambda remote: remote.ab_pattern_exists(content_id, fingerprint))
+        if mirrored:
+            return bool(exists)
         with self._lock, closing(self._connect()) as connection:
             return connection.execute(
                 "SELECT 1 FROM ab_sessions WHERE content_id = ? AND fingerprint = ?", (content_id, fingerprint)
@@ -291,6 +373,15 @@ class WatermarkRegistry:
         fields = [session_id, client_id, content_id, watermark_id, cache_id, fingerprint]
         canonical = json.dumps(fields, separators=(",", ":"), ensure_ascii=False)
         mac = hmac.new(secret_key.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+        mirrored, _ = self._remote_call(
+            lambda remote: remote.put_ab_session({
+                "session_id": session_id, "client_id": client_id, "content_id": content_id,
+                "watermark_id": watermark_id, "cache_id": cache_id, "fingerprint": fingerprint,
+                "record_mac": mac, "created_at": time.time(),
+            })
+        )
+        if mirrored:
+            return
         with self._lock, closing(self._connect()) as connection:
             with connection:
                 connection.execute(
@@ -299,6 +390,16 @@ class WatermarkRegistry:
                 )
 
     def ab_session(self, secret_key: str, session_id: str) -> dict | None:
+        mirrored, remote_row = self._remote_call(lambda remote: remote.ab_session(session_id))
+        if mirrored:
+            if not remote_row:
+                return None
+            fields = [remote_row[key] for key in ("session_id", "client_id", "content_id", "watermark_id", "cache_id", "fingerprint")]
+            canonical = json.dumps(fields, separators=(",", ":"), ensure_ascii=False)
+            expected = hmac.new(secret_key.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(str(remote_row["record_mac"]), expected):
+                raise ValueError("integridade da sessÃ£o A/B invÃ¡lida")
+            return dict(zip(("session_id", "client_id", "content_id", "watermark_id", "cache_id", "fingerprint"), fields))
         with self._lock, closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT session_id, client_id, content_id, watermark_id, cache_id, fingerprint, record_mac FROM ab_sessions WHERE session_id = ?", (session_id,)

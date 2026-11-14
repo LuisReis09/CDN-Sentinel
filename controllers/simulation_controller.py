@@ -316,14 +316,18 @@ class SimulationController:
         queue_wait_ms = round(sum(server.queue_wait_ms for server in state.servers.values()) / len(state.servers), 1) if state.servers else 0.0
         max_window_seconds = 60.0
         recent_traffic = [item for item in state.traffic if now - float(item.get("at", now)) <= max_window_seconds]
+        # QIM3 evidence capture is an internal control-plane job. It is
+        # intentionally expensive and must never make customer-facing SLO
+        # telemetry look degraded.
+        customer_traffic = [item for item in recent_traffic if not item.get("forensic_capture")]
         # At start-up, dividing a few seconds of traffic by a fixed 60-second
         # window made the displayed RPS artificially close to zero.
-        oldest_traffic_at = min((float(item.get("at", now)) for item in recent_traffic), default=now)
+        oldest_traffic_at = min((float(item.get("at", now)) for item in customer_traffic), default=now)
         window_seconds = min(
             max_window_seconds,
             max(float(state.config.get("tick_interval_seconds", 1.25)), now - oldest_traffic_at),
         )
-        latencies = [float(item.get("end_to_end_ms", item.get("http_rtt_ms", 0))) for item in recent_traffic]
+        latencies = [float(item.get("end_to_end_ms", item.get("http_rtt_ms", 0))) for item in customer_traffic]
         ordered_latencies = sorted(latencies)
 
         def percentile(values: list[float], fraction: float) -> float:
@@ -337,16 +341,16 @@ class SimulationController:
         p95_latency = percentile(ordered_latencies, 0.95)
         p99_latency = percentile(ordered_latencies, 0.99)
         error_count = sum(int(server.errors_total) for server in state.servers.values())
-        monthly_server_cost = sum(float(profile_for_tier(server.capacity_tier).cost_monthly_usd) for server in state.servers.values() if server.status != "stopped") or available_servers * float(state.config.get("monthly_server_cost_usd", state.config.get("monthly_server_cost_unit", 100.0)))
-        monthly_fixed_cost = float(state.config.get("monthly_fixed_cost_usd", state.config.get("monthly_fixed_cost_unit", 150.0)))
+        monthly_server_cost = sum(float(profile_for_tier(server.capacity_tier).cost_monthly_usd) for server in state.servers.values() if server.status != "stopped") or available_servers * float(state.config.get("monthly_server_cost_usd", 100.0))
+        monthly_fixed_cost = float(state.config.get("monthly_fixed_cost_usd", 150.0))
         monthly_variable_cost = active_clients * 2.0
         monthly_cost = monthly_server_cost + monthly_fixed_cost + monthly_variable_cost
         paying_clients = max(1, client_summary["total"]) if client_summary["total"] else 0
-        configured_price = float(state.config.get("monthly_client_price_usd", state.config.get("monthly_client_price_unit", 25.0)))
+        configured_price = float(state.config.get("monthly_client_price_usd", 25.0))
         break_even_price = monthly_cost / paying_clients if paying_clients else 0
         minimum_price = break_even_price * 1.2 if paying_clients else 0
         revenue = client_summary["paying_active"] * configured_price
-        observed_requests = sum(int(item.get("request_count", 1)) for item in recent_traffic)
+        observed_requests = sum(int(item.get("request_count", 1)) for item in customer_traffic)
         observed_rps = round(observed_requests / window_seconds, 3)
         total_requests = sum(int(server.requests_total) for server in state.servers.values())
         successful_requests = max(0, total_requests - error_count)
@@ -355,7 +359,7 @@ class SimulationController:
         slo_success_rate_pct = float(state.config.get("slo_success_rate_pct", 99.0))
         slo_compliant = bool(observed_requests and p95_latency <= slo_p95_ms and (success_rate_pct is None or success_rate_pct >= slo_success_rate_pct))
         server_latencies: dict[str, list[float]] = {server_id: [] for server_id in state.servers}
-        for item in recent_traffic:
+        for item in customer_traffic:
             server_id = str(item.get("server_id") or "")
             if server_id in server_latencies:
                 server_latencies[server_id].append(
@@ -506,8 +510,8 @@ class SimulationController:
                 "slo_success_rate_pct": slo_success_rate_pct,
                 "slo_compliant": slo_compliant,
                 "health_score_pct": health_score_pct,
-                "metrics_provenance": "demanda/capacidade são modelo virtual; fila, erros, RTT e E2E vêm dos nós HTTP",
-                "latency_semantics": "end_to_end_ms de requisições concluídas na janela; artificial_latency_ms, http_rtt_ms e queue_wait_ms são separados",
+                "metrics_provenance": "demanda/capacidade são modelo virtual; filas, erros, RTT e E2E vêm das entregas HTTP ao cliente",
+                "latency_semantics": "end_to_end_ms das entregas concluídas ao cliente na janela; capturas forenses internas são excluídas do SLO",
                 "cost_model": {
                     "currency": "USD/mês",
                     "server_cost_usd": round(monthly_server_cost, 2),

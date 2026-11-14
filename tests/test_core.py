@@ -5,9 +5,10 @@ import tempfile
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from services.watermark_service import WatermarkService
+from services.watermark_registry import WatermarkRegistry
 from config import SimulationConfig
 from utils.robust_watermark import assess_robustness
 from utils.geo import haversine_km, load_global_cities, rank_delivery_servers
@@ -15,11 +16,13 @@ from utils.latency import propagation_delay_seconds
 from repositories.in_memory import NodeRepository
 from services.capacity_service import capacity_limits, profile_for_tier, service_metrics
 from controllers.simulation_controller import SimulationController
+from controllers.api_controller import ApiController
 from repositories.in_memory import SimulationRepository
 from services.cdn_http_client import CDNHttpClient
 from services.client_activity_service import ClientActivityService
 from services.leak_service import LeakService
 from services.blacklist_service import BlacklistService
+from services.supabase_store import SupabaseSimulationPersistence
 from services.stream_service import StreamService
 from models.entities import CDNServer, Client, SimulationState
 from utils.video import generate_visual_variants, get_video_asset, list_video_examples
@@ -152,6 +155,117 @@ class SecurityAndNetworkTests(unittest.TestCase):
         self.assertEqual(scale["observed_errors"], 2)
         self.assertEqual(scale["success_rate_pct"], round(100 * 41 / 43, 2))
         self.assertEqual(repository.snapshot().metrics_history[-1]["total_requests"], 43)
+
+    def test_forensic_capture_latency_does_not_degrade_customer_slo(self):
+        repository = SimulationRepository()
+        now = time.time()
+        server = CDNServer("cdn-01", "127.0.0.1", 5101, 0, 0, "Test", status="healthy", capacity_rps=20)
+        repository.replace(SimulationState(
+            initialized=True,
+            lifecycle="running",
+            started_at=now - 2,
+            config={"demand_rps_per_client": 0.25, "tick_interval_seconds": 1, "slo_p95_ms": 250},
+            clients={"client-1": Client("client-1", 0, 0, "Test")},
+            servers={server.server_id: server},
+            traffic=[
+                {"at": now - 0.2, "server_id": server.server_id, "request_count": 1, "end_to_end_ms": 80},
+                {"at": now - 0.1, "server_id": server.server_id, "request_count": 1, "end_to_end_ms": 7016, "forensic_capture": True},
+            ],
+        ))
+        scale = SimulationController(repository, CDNHttpClient()).status()["scalability"]
+        self.assertEqual(scale["p95_latency_ms"], 80.0)
+        self.assertTrue(scale["slo_compliant"])
+        self.assertEqual(scale["health_score_pct"], 100.0)
+
+    def test_clients_api_marks_only_live_forensic_quarantines(self):
+        repository = SimulationRepository()
+        now = time.time()
+        repository.replace(SimulationState(
+            initialized=True,
+            clients={
+                "held": Client("held", 0, 0, "Test"),
+                "released": Client("released", 1, 1, "Test"),
+            },
+            temporary_blacklist={
+                "held": {"client_id": "held", "expires_at": now + 30},
+                "released": {"client_id": "released", "expires_at": now - 1},
+            },
+        ))
+        controller = ApiController(
+            repository, Mock(), Mock(), Mock(), Mock(), Mock(), Mock(), Mock(),
+        )
+        quarantined = {client["client_id"]: client["forensic_quarantined"] for client in controller.clients()}
+        self.assertEqual(quarantined, {"held": True, "released": False})
+
+    def test_supabase_checkpoint_uses_a_durable_json_state_row(self):
+        class FakeStore:
+            available = True
+            disabled_reason = None
+
+            def __init__(self):
+                self.rows = []
+
+            def upsert(self, table, row, *, on_conflict):
+                self.rows.append((table, row, on_conflict))
+
+        store = FakeStore()
+        repository = SimulationRepository(SupabaseSimulationPersistence(store))
+        repository.replace(SimulationState(initialized=True, simulation_id="sim-supabase", lifecycle="running"))
+        self.assertEqual(store.rows[0][0], "cdn_simulation_state")
+        self.assertEqual(store.rows[0][1]["simulation_id"], "sim-supabase")
+        self.assertEqual(store.rows[0][1]["payload"]["lifecycle"], "running")
+
+    def test_history_merges_the_durable_archives_by_archive_id(self):
+        class FakePersistence:
+            enabled = True
+            disabled_reason = None
+
+            def checkpoint(self, _state):
+                return None
+
+            def history(self, _simulation_id):
+                return [{"archive_id": "remote", "ended_at": 20.0, "simulation_id": "sim"}]
+
+        repository = SimulationRepository(FakePersistence())
+        repository._history.append({"archive_id": "local", "ended_at": 10.0, "simulation_id": "sim"})
+        self.assertEqual(
+            [item["archive_id"] for item in repository.history("sim")],
+            ["remote", "local"],
+        )
+
+    def test_forensic_chain_verification_reads_the_durable_ledger(self):
+        class FakeLedger:
+            available = True
+
+            def __init__(self):
+                self.rows = []
+
+            def events(self, _key_id, _watermark_id=None):
+                return list(self.rows)
+
+            def append_event(self, key_id, watermark_id, event_type, payload, payload_hash, previous_hash, created_at):
+                row = {
+                    "event_id": len(self.rows) + 1,
+                    "key_id": key_id,
+                    "watermark_id": watermark_id,
+                    "event_type": event_type,
+                    "payload_json": dict(payload),
+                    "payload_hash": payload_hash,
+                    "previous_hash": previous_hash,
+                    "created_at": created_at,
+                }
+                self.rows.append(row)
+                return row
+
+        with tempfile.TemporaryDirectory() as directory:
+            registry = WatermarkRegistry(os.path.join(directory, "registry.sqlite3"))
+            ledger = FakeLedger()
+            registry._remote = ledger
+            registry.append_forensic_event("remote-ledger-secret", "issued", {"client_id": "client-1"})
+            registry.append_forensic_event("remote-ledger-secret", "reviewed", {"decision": "accept"})
+            self.assertTrue(registry.verify_forensic_events("remote-ledger-secret"))
+            ledger.rows[-1]["payload_json"]["decision"] = "reject"
+            self.assertFalse(registry.verify_forensic_events("remote-ledger-secret"))
 
     def test_forensic_hold_stops_simulated_progress_before_real_proof_is_ready(self):
         class FakeStream:
@@ -299,8 +413,7 @@ class SecurityAndNetworkTests(unittest.TestCase):
 
     def test_tick_interval_and_economics_are_configurable(self):
         config = SimulationConfig.from_payload({"tick_interval_seconds": 5, "monthly_client_price_usd": 40})
-        self.assertEqual(config.tick_interval_seconds, 5)
-        self.assertEqual(config.simulation_speed, 0.5)
+        self.assertEqual(config.tick_interval_seconds, 5.0)
         self.assertEqual(config.monthly_client_price_usd, 40)
 
     def test_capacity_is_tier_and_workload_based(self):

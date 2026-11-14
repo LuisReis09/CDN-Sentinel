@@ -409,9 +409,11 @@ export function ManagementPage({
           <MapView
             clients={overview.clients.map((client) => ({
               ...client,
-              forensic_quarantined: (overview.temporary_blacklist ?? []).some(
-                (entry) => entry.client_id === client.client_id,
-              ),
+              forensic_quarantined:
+                Boolean(client.forensic_quarantined) ||
+                (overview.temporary_blacklist ?? []).some(
+                  (entry) => entry.client_id === client.client_id,
+                ),
             }))}
             servers={overview.servers}
             traffic={overview.recent_traffic}

@@ -1673,6 +1673,23 @@ label {
     9px "Manrope",
     sans-serif;
 }
+.scale-percentage > strong {
+  display: block;
+  font: inherit;
+}
+.scale-percentage .scale-value-good {
+  color: var(--green);
+}
+.scale-percentage .scale-value-warning {
+  color: var(--orange);
+}
+.scale-percentage .scale-value-danger {
+  color: var(--red);
+}
+.scale-percentage small.slo-health {
+  margin-top: 2px;
+  font-weight: 700;
+}
 .scale-bar {
   position: relative;
   height: 9px;

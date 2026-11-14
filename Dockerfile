@@ -12,7 +12,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+RUN useradd --system --create-home --uid 10001 cdn
+
+COPY --chown=cdn:cdn . .
+
+USER cdn
 
 EXPOSE 5000 5101-5120
 

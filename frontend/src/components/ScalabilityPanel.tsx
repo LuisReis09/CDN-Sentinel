@@ -5,6 +5,9 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
   const scale = status.scalability;
   const economics = scale.cost_model;
   const percent = Math.max(0, Math.round(scale.utilization * 100));
+  const sloHealth = Math.max(0, Math.round(scale.health_score_pct ?? 0));
+  const capacityTone = percent >= 100 ? "danger" : percent >= 75 ? "warning" : "good";
+  const sloTone = sloHealth < 70 ? "danger" : sloHealth < 95 ? "warning" : "good";
   const tone =
     scale.profile === "gargalo" || scale.profile === "alerta" || scale.profile === "critica"
       ? "scale-danger"
@@ -26,7 +29,9 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
           <span>{scale.message}</span>
         </div>
         <div className="scale-percentage">
-          {percent}%<small>utilização</small>
+          <strong className={`scale-value-${capacityTone}`}>{percent}%</strong>
+          <small>utilização de capacidade</small>
+          <small className={`slo-health scale-value-${sloTone}`}>saúde do serviço (SLO): {sloHealth}%</small>
         </div>
       </div>
       <div className="scale-bar">

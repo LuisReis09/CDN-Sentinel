@@ -12,16 +12,32 @@ from models.entities import BlacklistEntry, Client, CDNServer, SimulationState
 class SimulationRepository:
     """Thread-safe state repository owned by the controller process."""
 
-    def __init__(self) -> None:
+    def __init__(self, persistence=None) -> None:
         self._state = SimulationState()
         self._history: List[dict] = []
         self._lock = RLock()
+        self._persistence = persistence
+
+    def checkpoint(self) -> None:
+        """Persist a bounded checkpoint when a durable backend is configured."""
+        if self._persistence:
+            self._persistence.checkpoint(self.snapshot())
+
+    def storage_status(self) -> dict:
+        if not self._persistence:
+            return {"backend": "memory", "durable": False, "reason": "no durable backend configured"}
+        return {
+            "backend": "supabase",
+            "durable": bool(getattr(self._persistence, "enabled", False)),
+            "reason": getattr(self._persistence, "disabled_reason", None),
+        }
 
     def replace(self, state: SimulationState) -> None:
         with self._lock:
             if not state.simulation_id:
                 state.simulation_id = f"sim-{uuid.uuid4().hex[:12]}"
             self._state = state
+        self.checkpoint()
 
     def archive_current(self, ended_at: float | None = None, reason: str = "operator", client_sample_limit: int = 2_000) -> dict | None:
         with self._lock:
@@ -30,6 +46,7 @@ class SimulationRepository:
             ended_at = ended_at or time.time()
             clients = list(self._state.clients.values())
             payload = {
+                "archive_id": str(uuid.uuid4()),
                 "simulation_id": self._state.simulation_id,
                 "lifecycle": "ended",
                 "started_at": self._state.started_at,
@@ -49,12 +66,23 @@ class SimulationRepository:
             }
             self._history.append(payload)
             self._history = self._history[-20:]
-            return copy.deepcopy(payload)
+            archived = copy.deepcopy(payload)
+        if self._persistence:
+            self._persistence.archive(archived)
+        return archived
 
     def history(self, simulation_id: str | None = None) -> list[dict]:
         with self._lock:
             records = self._history if simulation_id is None else [item for item in self._history if item.get("simulation_id") == simulation_id]
-            return copy.deepcopy(records)
+            local_records = copy.deepcopy(records)
+        durable_history = []
+        load_history = getattr(self._persistence, "history", None)
+        if callable(load_history):
+            durable_history = load_history(simulation_id)
+        merged = {str(item.get("archive_id") or f"local-{index}"): item for index, item in enumerate(durable_history)}
+        for index, item in enumerate(local_records):
+            merged.setdefault(str(item.get("archive_id") or f"local-{index}"), item)
+        return sorted(merged.values(), key=lambda item: float(item.get("ended_at") or 0), reverse=True)
 
     def snapshot(self) -> SimulationState:
         """Return an isolated read snapshot; callers cannot mutate live state."""
@@ -126,10 +154,12 @@ class SimulationRepository:
             if client.client_id in self._state.clients:
                 raise ValueError(f"Cliente {client.client_id} já existe")
             self._state.clients[client.client_id] = client
+        self.checkpoint()
 
     def update_client(self, client: Client) -> None:
         with self._lock:
             self._state.clients[client.client_id] = client
+        self.checkpoint()
 
     def add_server(self, server: CDNServer) -> None:
         with self._lock:
@@ -138,27 +168,36 @@ class SimulationRepository:
             if any(existing.port == server.port for existing in self._state.servers.values()):
                 raise ValueError(f"A porta {server.port} já está em uso")
             self._state.servers[server.server_id] = server
+        self.checkpoint()
 
     def add_blacklist(self, entry: BlacklistEntry) -> None:
         with self._lock:
             self._state.blacklist[entry.client_id] = copy.deepcopy(entry)
+        self.checkpoint()
 
     def append_leak(self, leak: dict) -> None:
         with self._lock:
             self._state.leaks.append(copy.deepcopy(leak))
             self._state.leaks = self._state.leaks[-500:]
+        self.checkpoint()
 
     def replace_leaks(self, leaks: List[dict]) -> None:
         with self._lock:
             self._state.leaks = leaks
+        self.checkpoint()
 
     def update_leak(self, leak_id: str, values: Dict[str, Any]) -> bool:
         with self._lock:
             for leak in self._state.leaks:
                 if leak.get("leak_id") == leak_id:
                     leak.update(copy.deepcopy(values))
-                    return True
-            return False
+                    updated = True
+                    break
+            else:
+                updated = False
+        if updated:
+            self.checkpoint()
+        return updated
 
     def blacklist_values(self) -> List[BlacklistEntry]:
         with self._lock:
@@ -168,12 +207,14 @@ class SimulationRepository:
         with self._lock:
             self._state.config.update(values)
             self._state.updated_at = time.time()
+        self.checkpoint()
 
     def set_paused(self, paused: bool) -> None:
         with self._lock:
             self._state.paused = paused
             self._state.lifecycle = "paused" if paused else "running"
             self._state.updated_at = time.time()
+        self.checkpoint()
 
     def append_event(self, event: Dict[str, Any]) -> None:
         with self._lock:
@@ -185,16 +226,19 @@ class SimulationRepository:
             enriched.setdefault("event_id", f"evt-{uuid.uuid4().hex[:12]}")
             self._state.events.append(enriched)
             self._state.events = self._state.events[-500:]
+        self.checkpoint()
 
     def append_traffic(self, traffic: Dict[str, Any]) -> None:
         with self._lock:
             self._state.traffic.append(copy.deepcopy(traffic))
             self._state.traffic = self._state.traffic[-500:]
+        self.checkpoint()
 
     def append_metric(self, metric: Dict[str, Any]) -> None:
         with self._lock:
             self._state.metrics_history.append(copy.deepcopy(metric))
             self._state.metrics_history = self._state.metrics_history[-500:]
+        self.checkpoint()
 
     def reset_metrics(self) -> None:
         with self._lock:
@@ -202,6 +246,7 @@ class SimulationRepository:
             self._state.traffic.clear()
             self._state.scan_history.clear()
             self._state.metrics_history.clear()
+        self.checkpoint()
 
 
 class NodeRepository:

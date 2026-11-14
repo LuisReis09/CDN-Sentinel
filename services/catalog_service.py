@@ -16,11 +16,11 @@ class CatalogItem:
 
 
 class MetadataCatalog:
-    """Compare a real linear scan with deterministic in-memory indexes.
+    """Compare deterministic linear and indexed metadata workloads.
 
-    This is intentionally not a database adapter. It is the seam where a
-    future PostgreSQL/Supabase repository can be introduced without claiming
-    that one exists today.
+    This small catalog is intentionally a simulation workload, not the
+    controller's durable Supabase store. It makes the metadata optimization
+    action observable without presenting a synthetic lookup as a database.
     """
 
     def __init__(self, size: int = 512) -> None:

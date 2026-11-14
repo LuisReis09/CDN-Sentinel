@@ -39,16 +39,11 @@ class SimulationConfig:
             malicious_probability = float(payload.get("malicious_probability", 0.25))
             latency_factor = float(payload.get("latency_factor", 1.0))
             base_node_port = int(payload.get("base_node_port", 5101))
-            raw_tick_interval = payload.get("tick_interval_seconds")
-            if raw_tick_interval is None:
-                legacy_speed = float(payload.get("simulation_speed", 1.0))
-                tick_interval_seconds = 1.25 / legacy_speed
-            else:
-                tick_interval_seconds = float(raw_tick_interval)
+            tick_interval_seconds = float(payload.get("tick_interval_seconds", 1.25))
             base_client_port = int(payload.get("base_client_port", 6101))
-            monthly_client_price_usd = float(payload.get("monthly_client_price_usd", payload.get("monthly_client_price_unit", 25.0)))
-            monthly_server_cost_usd = float(payload.get("monthly_server_cost_usd", payload.get("monthly_server_cost_unit", 100.0)))
-            monthly_fixed_cost_usd = float(payload.get("monthly_fixed_cost_usd", payload.get("monthly_fixed_cost_unit", 150.0)))
+            monthly_client_price_usd = float(payload.get("monthly_client_price_usd", 25.0))
+            monthly_server_cost_usd = float(payload.get("monthly_server_cost_usd", 100.0))
+            monthly_fixed_cost_usd = float(payload.get("monthly_fixed_cost_usd", 150.0))
             node_tier = str(payload.get("node_tier", "basic"))
             demand_rps_per_client = float(payload.get("demand_rps_per_client", 0.25))
             slo_p95_ms = float(payload.get("slo_p95_ms", 250.0))
@@ -126,9 +121,4 @@ class SimulationConfig:
             "slo_success_rate_pct": self.slo_success_rate_pct,
             "seed": self.seed,
         }
-
-    @property
-    def simulation_speed(self) -> float:
-        """Legacy derived value kept for callers that still use the old name."""
-        return 2.5 / self.tick_interval_seconds
 

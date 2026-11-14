@@ -175,8 +175,9 @@ class StreamService:
         distance = selected_distance
         routing_reason = "primeiro nó falhou; failover determinístico" if failures else ("nó não saudável excluído; menor custo de distância e carga" if len(candidate_details) > len(candidates) else "menor custo de distância e carga entre nós saudáveis")
         server.load = int(result.get("load", server.load))
-        client.videos_consumed += 1
-        client.last_activity_at = time.time()
+        if not forensic_capture:
+            client.videos_consumed += 1
+            client.last_activity_at = time.time()
         artificial_latency_ms = float(result.get("network_latency_ms", 0.0))
         http_rtt_ms = float(result.get("http_rtt_ms", 0.0))
         queue_wait_ms = float(result.get("queue_wait_ms", 0.0))
@@ -195,9 +196,10 @@ class StreamService:
             "watermark_algorithm": result.get("watermark_algorithm", "dct-qim-v3"),
             "watermark_id": result.get("watermark_id"),
         }
-        client.watch_history.append(watch_record)
-        client.watch_history = client.watch_history[-100:]
-        self.record_delivery_feedback(client, watch_record)
+        if not forensic_capture:
+            client.watch_history.append(watch_record)
+            client.watch_history = client.watch_history[-100:]
+            self.record_delivery_feedback(client, watch_record)
         if self._repository:
             self._repository.append_traffic({
                 "at": time.time(),
@@ -214,9 +216,10 @@ class StreamService:
                 "chunk_id": result["chunk_id"],
                 "routing_reason": routing_reason,
                 "route_kind": "failover" if failures else "delivery",
+                "forensic_capture": forensic_capture,
             })
             self._repository.append_event({
-                "type": "client_request",
+                "type": "forensic_capture" if forensic_capture else "client_request",
                 "at": time.time(),
                 "request_id": request_id,
                 "trace_id": trace_id,
@@ -237,6 +240,7 @@ class StreamService:
                 "content_title": state.config.get("video_id") or default_content_id(),
                 "routing_candidates": candidate_details,
                 "routing_reason": routing_reason,
+                "forensic_capture": forensic_capture,
             })
             if failures:
                 self._repository.append_event({

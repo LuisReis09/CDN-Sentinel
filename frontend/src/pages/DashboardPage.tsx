@@ -58,7 +58,11 @@ export function DashboardPage({
   const clients = overview.clients.map((client) =>
     overview.blacklist.some((entry) => entry.client_id === client.client_id)
       ? { ...client, active: false }
-      : { ...client, forensic_quarantined: temporarilyBlocked.has(client.client_id) },
+      : {
+          ...client,
+          forensic_quarantined:
+            Boolean(client.forensic_quarantined) || temporarilyBlocked.has(client.client_id),
+        },
   );
   const visibleServers = activeNode
     ? overview.servers.filter((server) => server.server_id === activeNode)
@@ -172,6 +176,13 @@ export function DashboardPage({
           }
           icon={Ban}
           tone="red"
+        />
+        <MetricCard
+          label="QUARENTENA"
+          value={status.forensic_pending_total ?? temporarilyBlocked.size}
+          caption="bloqueios temporÃ¡rios em anÃ¡lise"
+          icon={Ban}
+          tone="warning"
         />
       </section>
       <section className="topology-layout">

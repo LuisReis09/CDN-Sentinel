@@ -198,7 +198,9 @@ class ApiController:
 
     def status(self) -> dict:
         self.monitor_service.maintain_quarantines()
-        return self.simulation_controller.status()
+        result = self.simulation_controller.status()
+        result["storage"] = self.repository.storage_status()
+        return result
 
     def create_client(self, payload: dict) -> dict:
         return self.simulation_controller.add_client(payload)
@@ -274,7 +276,17 @@ class ApiController:
     def clients(self) -> list[dict]:
         # Keep the control-plane payload bounded; status.clients_total remains
         # the authoritative count for large simulations.
-        return [client.to_dict() for client in self.repository.client_sample(2_000)]
+        state = self.repository.snapshot_without_clients()
+        now = time.time()
+        quarantined = {
+            client_id
+            for client_id, entry in state.temporary_blacklist.items()
+            if float(entry.get("expires_at", 0)) > now
+        }
+        return [
+            client.to_dict() | {"forensic_quarantined": client.client_id in quarantined}
+            for client in self.repository.client_sample(2_000)
+        ]
 
     def leaks(self) -> list[dict]:
         return self.leak_summaries()
@@ -321,7 +333,10 @@ class ApiController:
             "temporary_blacklist": list(state.temporary_blacklist.values()),
             "leaks": self.leak_summaries(),
             "recent_events": sorted(selected_events, key=lambda event: event.get("at", 0))[-35:],
-            "recent_traffic": self.traffic()[-25:],
+            "recent_traffic": [
+                item for item in self.traffic()
+                if not item.get("forensic_capture")
+            ][-25:],
             "metrics_history": list(state.metrics_history),
             "monitor": self.monitor_status(),
             "management": self.management_engine.snapshot() if self.management_engine else None,

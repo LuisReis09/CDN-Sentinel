@@ -7,5 +7,5 @@ frontend/dist/
 data/media/generated/
 data/runtime/
 data/datasets/youtube_clipped_videos/
+supabase/.temp/
 *.tsbuildinfo
-docs/

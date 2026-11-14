@@ -198,6 +198,7 @@ export interface SimulationStatus {
   malicious_clients: number;
   blacklisted_total: number;
   forensic_pending_total?: number;
+  storage?: { backend: string; durable: boolean; reason?: string | null };
   initialization?: {
     in_progress: boolean;
     progress_pct: number;

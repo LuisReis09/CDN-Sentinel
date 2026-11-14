@@ -25,6 +25,12 @@ import { api } from "./api";
 
 export function App() {
   const data = useDashboardData();
+  const storage = data.overview.status.storage;
+  const storageLabel = storage
+    ? storage.durable
+      ? "SUPABASE DURÁVEL"
+      : "FALLBACK LOCAL"
+    : "STORAGE PENDENTE";
   const [auth, setAuth] = useState<"loading" | "local" | "login" | "authenticated">("loading");
   const [operator, setOperator] = useState("");
   const [password, setPassword] = useState("");
@@ -168,6 +174,12 @@ export function App() {
               title={data.error ?? "Última atualização da API"}
             >
               <Wifi size={14} /> {data.freshness}
+            </span>
+            <span
+              className="environment-chip"
+              title={storage?.reason ?? "Persistência ainda não foi verificada pela API"}
+            >
+              {storageLabel}
             </span>
             <span className="environment-chip">LOCAL SIMULATION</span>
           </div>
