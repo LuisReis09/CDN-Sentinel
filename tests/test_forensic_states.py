@@ -60,6 +60,38 @@ class ForensicStatesTests(unittest.TestCase):
             self.assertEqual(result["scanned"], 1)
             self.assertEqual(investigate.call_args.kwargs["algorithm"], "qim3")
 
+    def test_simulated_cdn_fast_path_still_requires_watermark_and_capture_bindings(self):
+        claim = {
+            "client_id": "client-a",
+            "server_id": "edge-a",
+            "content_id": "movie-a",
+            "session_id": "session-a",
+            "watermark_id": "watermark-a",
+        }
+        service = FakeWatermarkService({"forensic_status": "VALID", "claim": claim})
+        investigator = ForensicInvestigationService(service)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "evidence.mp4"
+            path.write_bytes(b"simulated-media")
+            digest = __import__("hashlib").sha256(path.read_bytes()).hexdigest()
+            result = investigator.investigate_simulated_cdn_leak(
+                path,
+                expected_media_sha256=digest,
+                expected_client_id="client-a",
+                expected_server_id="edge-a",
+                expected_content_id="movie-a",
+            )
+            self.assertEqual(result["decision"], "PENDING_REVIEW")
+            mismatch = investigator.investigate_simulated_cdn_leak(
+                path,
+                expected_media_sha256="0" * 64,
+                expected_client_id="client-a",
+                expected_server_id="edge-a",
+                expected_content_id="movie-a",
+            )
+        self.assertEqual(mismatch["decision"], "INCONCLUSIVE")
+        self.assertFalse(mismatch["content_match"]["bindings"]["digest"])
+
     def test_detector_prefers_inconclusive_to_not_found_and_never_maps_unknown_to_absence(self):
         with tempfile.TemporaryDirectory() as temporary:
             service = WatermarkService("state-test-secret-with-entropy-2026", WatermarkRegistry(Path(temporary) / "ledger.sqlite3"))

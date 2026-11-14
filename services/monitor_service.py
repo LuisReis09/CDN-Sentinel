@@ -224,9 +224,27 @@ class MonitorService:
             try:
                 media_path = leak.get("media_path")
                 if media_path:
-                    investigation = self._investigations.investigate_video(
-                        Path(media_path), source="simulated-platform", algorithm="qim3"
-                    )
+                    # Only the leak worker can supply every immutable capture
+                    # binding.  Manually submitted or external/re-encoded
+                    # evidence keeps the complete Studio-grade content match.
+                    if all((
+                        leak.get("media_sha256"),
+                        leak.get("client_id"),
+                        leak.get("origin_server_id"),
+                        leak.get("content_id"),
+                    )):
+                        investigation = self._investigations.investigate_simulated_cdn_leak(
+                            Path(media_path),
+                            expected_media_sha256=str(leak["media_sha256"]),
+                            expected_client_id=str(leak["client_id"]),
+                            expected_server_id=str(leak["origin_server_id"]),
+                            expected_content_id=str(leak["content_id"]),
+                            algorithm="qim3",
+                        )
+                    else:
+                        investigation = self._investigations.investigate_video(
+                            Path(media_path), source="simulated-platform", algorithm="qim3"
+                        )
                     leak["forensic_status"] = investigation["forensic_status"]
                     leak["forensic_evidence"] = investigation["evidence"]
                     leak["investigation_id"] = investigation["investigation_id"]
@@ -259,7 +277,7 @@ class MonitorService:
                         raise ValueError("claim forense confirmado sem token registrado para blacklist")
                     blacklist_entry = self._blacklist_service.report(
                         proof_token,
-                        reason="vazamento autenticado por QIM3/CDNWM4 e correspondência de conteúdo",
+                        reason="vazamento autenticado por QIM3/CDNWM4 e vínculo íntegro da entrega simulada",
                         detected_by_server_id=server_id,
                         trace_id=str(leak.get("trace_id") or ""),
                     )
@@ -273,7 +291,7 @@ class MonitorService:
                 leak["review_status"] = "PENDING_REVIEW"
                 leak["detected_at"] = time.time()
                 leak["detected_by_server_id"] = server_id
-                self.release_quarantine(str(leak.get("client_id") or ""), "forensic analysis failed")
+                self.release_quarantine(str(leak.get("client_id") or ""), "permanent blacklist installed")
                 detected.append({"leak_id": leak["leak_id"], "monitor_server_id": server_id, "claim": claim, "investigation_id": investigation["investigation_id"], "decision": "PENDING_REVIEW", "blacklist": blacklist_entry.to_dict(), "forensic_source": leak["forensic_source"]})
             except (ValueError, KeyError, TypeError, OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
                 leak["processed"] = False

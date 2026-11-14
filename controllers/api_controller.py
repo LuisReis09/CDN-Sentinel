@@ -283,9 +283,13 @@ class ApiController:
             for client_id, entry in state.temporary_blacklist.items()
             if float(entry.get("expires_at", 0)) > now
         }
+        # A pending forensic capture is also delivery-blocked.  This fallback
+        # covers the small interval before the distributed lease is persisted
+        # and keeps the UI truthful if a legacy state is restored.
+        delivery_blocked = quarantined | set(state.forensic_pending_clients)
         return [
-            client.to_dict() | {"forensic_quarantined": client.client_id in quarantined}
-            for client in self.repository.client_sample(2_000)
+            client.to_dict() | {"forensic_quarantined": client.client_id in delivery_blocked}
+            for client in self.repository.client_sample(2_000, priority_ids=delivery_blocked)
         ]
 
     def leaks(self) -> list[dict]:
@@ -330,7 +334,10 @@ class ApiController:
             "servers": servers,
             "clients": self.clients(),
             "blacklist": blacklist,
-            "temporary_blacklist": list(state.temporary_blacklist.values()),
+            "temporary_blacklist": [
+                entry for entry in state.temporary_blacklist.values()
+                if float(entry.get("expires_at", 0)) > time.time()
+            ],
             "leaks": self.leak_summaries(),
             "recent_events": sorted(selected_events, key=lambda event: event.get("at", 0))[-35:],
             "recent_traffic": [

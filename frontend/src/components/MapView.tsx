@@ -47,7 +47,16 @@ export function MapView({
   highlightedClientId = null,
   highlightedServerId = null,
 }: MapViewProps) {
-  const visibleClients = clients.slice(0, 1_200);
+  // The control plane sends a bounded client sample.  Keep forensic holds at
+  // the front of the final rendering window too, so a temporary block is
+  // never silently omitted on a large topology.
+  const visibleClients = [...clients]
+    .sort(
+      (left, right) =>
+        Number(Boolean(right.forensic_quarantined)) -
+        Number(Boolean(left.forensic_quarantined)),
+    )
+    .slice(0, 1_200);
   const clientsById = new Map(
     visibleClients.map((client) => [client.client_id, client]),
   );
@@ -500,6 +509,7 @@ function MapLegends() {
           <div className="map-legend-grid">
             <LegendItem symbol="client-active" label="regular" />
             <LegendItem symbol="client-dangerous" label="suspeito" />
+            <LegendItem symbol="client-quarantined" label="em quarentena" />
             <LegendItem symbol="client-banned" label="bloqueado" />
           </div>
         </section>

@@ -5,6 +5,11 @@ import threading
 import time
 import uuid
 
+from utils.video_watermark import (
+    FORENSIC_SAMPLE_INTERVAL_SECONDS,
+    INTERACTIVE_RECOVERY_SAMPLE_INTERVAL_SECONDS,
+)
+
 from models.entities import WatermarkClaim
 from services.watermark_registry import WatermarkRegistry
 from utils.image_watermark import detect_image, visual_marker
@@ -200,7 +205,13 @@ class WatermarkService:
         for algorithm_name in algorithms:
             for secret in self._forensic_keys.values():
                 try:
-                    evidence = detect_video(path, secret, algorithm=algorithm_name, max_frames=max_frames)
+                    evidence = detect_video(
+                        path,
+                        secret,
+                        algorithm=algorithm_name,
+                        max_frames=max_frames,
+                        sample_interval_seconds=FORENSIC_SAMPLE_INTERVAL_SECONDS,
+                    )
                 except (OSError, RuntimeError, ValueError) as exc:
                     evidence = {"status": "ERROR", "reason": "detector_failed", "error_type": type(exc).__name__}
                 status = evidence.get("status")
@@ -251,10 +262,29 @@ class WatermarkService:
         adaptive: bool = True,
         algorithm: str = "adaptive-spread",
         dct_step: float = 10.0,
+        sample_interval_seconds: float | None = None,
     ) -> dict:
-        return self._resolve_detection(
-            detect_video(path, self._secret_key, adaptive=adaptive, algorithm=algorithm, dct_step=dct_step)
-        )
+        kwargs = {
+            "adaptive": adaptive,
+            "algorithm": algorithm,
+            "dct_step": dct_step,
+        }
+        if sample_interval_seconds is not None:
+            kwargs["sample_interval_seconds"] = sample_interval_seconds
+        resolved = self._resolve_detection(detect_video(path, self._secret_key, **kwargs))
+        if sample_interval_seconds is not None or resolved.get("status") in {"VALID", "CANDIDATE"}:
+            return resolved
+        # Uploads are untrusted and may use a different H.264 build than the
+        # simulator.  Retry only an inconclusive interactive scan with denser
+        # temporal evidence; exact marker and claim verification remain the
+        # gate for a VALID result. CDN monitoring never takes this branch.
+        recovery = self._resolve_detection(detect_video(
+            path,
+            self._secret_key,
+            **kwargs,
+            sample_interval_seconds=INTERACTIVE_RECOVERY_SAMPLE_INTERVAL_SECONDS,
+        ))
+        return recovery if recovery.get("status") in {"VALID", "CANDIDATE"} else resolved
 
     def _resolve_detection(self, evidence: dict) -> dict:
         """Promote evidence only through exact marker association.

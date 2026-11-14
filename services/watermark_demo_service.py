@@ -173,7 +173,12 @@ class WatermarkDemoService:
         watermarked_asset, _ = get_video_asset(video["video_id"], "watermarked", generated_id)
         difference_asset, _ = get_video_asset(video["video_id"], "difference", generated_id)
         watermarked_bytes = watermarked_asset.read_bytes()
-        visual_detection = self._watermark_service.detect_video(watermarked_asset)
+        # Keep the teaching/demo flow aligned with the CDN forensic cadence;
+        # interactive upload detection deliberately samples more densely.
+        visual_detection = self._watermark_service.detect_video(
+            watermarked_asset,
+            sample_interval_seconds=2.0,
+        )
         verified_claim = self._watermark_service.verify(token)
         encoded_claim = token.split(".", 2)[1]
         signature = token.rsplit(".", 1)[1]

@@ -12,6 +12,7 @@ from typing import Callable
 
 from models.entities import SimulationState
 from repositories.in_memory import SimulationRepository
+from services.content_provider import default_content_id
 from services.stream_service import StreamService
 
 
@@ -136,6 +137,7 @@ class LeakService:
                     "content_type": chunk.content_type,
                     "media_path": str(media_path.resolve()),
                     "media_sha256": hashlib.sha256(media).hexdigest(),
+                    "content_id": state.config.get("video_id") or default_content_id(),
                     "content": None,
                     "created_at": time.time(),
                     "processed": False,

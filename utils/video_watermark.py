@@ -31,6 +31,12 @@ from utils.image_watermark import (
 
 VIDEO_STRENGTH = 24.0
 DETECTION_WIDTH = 640
+# Interactive uploads use a denser one-second evidence plan.  It makes the
+# public detector resilient to codec differences on short clips.  The CDN
+# monitor explicitly opts into the less expensive two-second forensic plan
+# below; the two paths must not be conflated.
+VIDEO_SAMPLE_INTERVAL_SECONDS = 1.0
+INTERACTIVE_RECOVERY_SAMPLE_INTERVAL_SECONDS = 0.5
 # Forensic scans operate on independent temporal evidence.  Sampling every
 # frame (or every second for a short clip) adds expensive QIM work without
 # improving the simulated delivery path.  Keep a fixed, explicit cadence so
@@ -305,7 +311,7 @@ def detect_video(
     path: Path,
     secret: str,
     max_frames: int = 24,
-    sample_interval_seconds: float = FORENSIC_SAMPLE_INTERVAL_SECONDS,
+    sample_interval_seconds: float = VIDEO_SAMPLE_INTERVAL_SECONDS,
     adaptive: bool = True,
     algorithm: str = "adaptive-spread",
     dct_step: float = 10.0,
@@ -316,8 +322,9 @@ def detect_video(
 
     Detection uses one canonical 640px-wide geometry. Embedding can happen at
     320p, 720p or 1080p, but both the received frame and the keyed carrier are
-    compared after the same deterministic normalization. Independent samples
-    are normally two seconds apart and cover the whole asset; the final frame
+    compared after the same deterministic normalization. The caller chooses
+    the sampling interval; CDN forensic monitoring uses two seconds while
+    interactive upload detection uses one. The final frame
     is retained for short clips. This avoids per-second QIM processing while
     retaining time-separated evidence.
     """
@@ -329,6 +336,11 @@ def detect_video(
         fps,
         interval_seconds=sample_interval_seconds,
         max_frames=max_frames,
+    )
+    sampling_label = (
+        "two-second" if sample_interval_seconds == 2.0 else
+        "one-second" if sample_interval_seconds == 1.0 else
+        f"{sample_interval_seconds:g}-second"
     )
     select_expression = "+".join(f"eq(n,{int(index)})" for index in indices) or "eq(n,0)"
     detection_width = DETECTION_WIDTH
@@ -438,7 +450,7 @@ def detect_video(
             "fps": fps,
             "detection_width": detection_width,
             "detection_height": detection_height,
-            "temporal_sampling": "two-second-interval-over-full-video",
+            "temporal_sampling": f"{sampling_label}-interval-over-full-video",
             "sample_interval_seconds": sample_interval_seconds,
             "qim3_soft_decode": qim3_soft_decode if algorithm == "qim3" else None,
             "sampled_frame_indices": indices,
@@ -454,7 +466,7 @@ def detect_video(
             "fps": fps,
             "detection_width": detection_width,
             "detection_height": detection_height,
-            "temporal_sampling": "two-second-interval-over-full-video",
+            "temporal_sampling": f"{sampling_label}-interval-over-full-video",
             "sample_interval_seconds": sample_interval_seconds,
             "sampled_frame_indices": indices,
             "frames": evidences,
@@ -474,7 +486,7 @@ def detect_video(
         "fps": fps,
         "detection_width": detection_width,
         "detection_height": detection_height,
-        "temporal_sampling": "two-second-interval-over-full-video",
+        "temporal_sampling": f"{sampling_label}-interval-over-full-video",
         "sample_interval_seconds": sample_interval_seconds,
         "sampled_frame_indices": indices,
         "frames": evidences,

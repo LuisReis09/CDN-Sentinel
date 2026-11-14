@@ -3237,6 +3237,10 @@ label {
   background: #b5682e;
   border-color: #ffd08b;
 }
+.map-legend-symbol--client-quarantined {
+  background: #5b6672;
+  border-color: #a5afba;
+}
 .map-legend-symbol--client-banned {
   background: #a52b47;
   border-color: #ff6177;

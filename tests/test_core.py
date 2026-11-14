@@ -197,6 +197,24 @@ class SecurityAndNetworkTests(unittest.TestCase):
         quarantined = {client["client_id"]: client["forensic_quarantined"] for client in controller.clients()}
         self.assertEqual(quarantined, {"held": True, "released": False})
 
+    def test_clients_api_prioritizes_delivery_blocked_clients_in_bounded_map_sample(self):
+        repository = SimulationRepository()
+        now = time.time()
+        clients = {f"regular-{index}": Client(f"regular-{index}", 0, index, "Test") for index in range(2_001)}
+        clients["held"] = Client("held", 1, 1, "Test")
+        repository.replace(SimulationState(
+            initialized=True,
+            clients=clients,
+            temporary_blacklist={"held": {"client_id": "held", "expires_at": now + 30}},
+        ))
+        controller = ApiController(
+            repository, Mock(), Mock(), Mock(), Mock(), Mock(), Mock(), Mock(),
+        )
+        sample = controller.clients()
+        self.assertEqual(sample[0]["client_id"], "held")
+        self.assertTrue(sample[0]["forensic_quarantined"])
+        self.assertEqual(len(sample), 2_000)
+
     def test_supabase_checkpoint_uses_a_durable_json_state_row(self):
         class FakeStore:
             available = True

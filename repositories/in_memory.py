@@ -127,10 +127,30 @@ class SimulationRepository:
                 "paying_active": paying,
             }
 
-    def client_sample(self, limit: int = 2_000) -> list[Client]:
-        """Return a deterministic prefix for map/API rendering."""
+    def client_sample(self, limit: int = 2_000, priority_ids: Iterable[str] | None = None) -> list[Client]:
+        """Return a bounded deterministic sample, keeping priority clients visible.
+
+        The API intentionally does not send every client of a large simulation
+        to the browser.  A plain dictionary prefix, however, could hide the
+        small set of clients currently blocked by a forensic quarantine.  Put
+        those operationally relevant clients first without changing the
+        regular sample order for the remaining map markers.
+        """
         with self._lock:
-            return copy.deepcopy(list(self._state.clients.values())[:max(0, limit)])
+            maximum = max(0, limit)
+            if maximum == 0:
+                return []
+            priority = {str(client_id) for client_id in (priority_ids or ())}
+            selected = [
+                client for client_id, client in self._state.clients.items()
+                if client_id in priority
+            ]
+            selected_ids = {client.client_id for client in selected}
+            selected.extend(
+                client for client_id, client in self._state.clients.items()
+                if client_id not in selected_ids
+            )
+            return copy.deepcopy(selected[:maximum])
 
     def state_ref(self) -> SimulationState:
         """Return the live state for short, repository-owned mutations only.
