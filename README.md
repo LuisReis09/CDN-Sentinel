@@ -1,238 +1,239 @@
 # CDN-Sentinel
 
-**Estado da reengenharia (12/11/2026):** há correções de estados forenses, autenticação administrativa opcional e CI, mas o merge seguro segue bloqueado por ECC, robustez, Studio CDNWM4 e E2E/CI completos. Consulte [o checklist de fechamento](docs/watermark-finalization-status.md). O modo acadêmico padrão deve ficar no localhost. Nunca coloque segredos em variáveis `VITE_*`: elas entram no bundle público.
+Simulador acadêmico de uma CDN de vídeo distribuída com control plane observável, roteamento geográfico, failover, watermark forense e resposta coordenada a vazamentos. O objetivo não é reproduzir uma CDN de produção: capacidade, custo e demanda são modelos didáticos; as requisições HTTP, os processos de nó e a investigação de mídia são reais no ambiente local.
 
-## Dataset de clipes do YouTube
+## Sumário
 
-O backend e o Watermark Studio usam automaticamente os vídeos locais do
-dataset [`kishan51/youtube_clipped_videos`](https://huggingface.co/datasets/kishan51/youtube_clipped_videos)
-quando ele estiver disponível. O snapshot fica em
-`data/datasets/youtube_clipped_videos/`, que está no `.gitignore`.
+- [Integrantes do grupo](#1-integrantes-do-grupo)
+- [Resumo e objetivos](#2-resumo-e-objetivos)
+- [Conceitos utilizados](#3-conceitos-utilizados)
+- [Arquitetura: C4, ADRs e padrões](#4-arquitetura-c4-adrs-e-padrões)
+- [Stack tecnológico](#5-stack-tecnológico)
+- [Requisitos](#6-requisitos)
+- [Compilação e execução](#7-compilação-e-execução)
+- [Dockerização](#8-dockerização)
+- [Fluxos do programa](#9-fluxos-do-programa)
+- [Pipeline de watermark](#10-pipeline-de-watermark)
+- [Figuras do programa](#11-figuras-do-programa)
+- [Estrutura do projeto](#12-estrutura-do-projeto)
+- [Testes, auditoria e limitações](#13-testes-auditoria-e-limitações)
+- [Ferramentas de IA utilizadas](#14-ferramentas-de-ia-utilizadas)
 
-Depois de instalar as dependências, execute o downloader na raiz do projeto:
+## 1. Integrantes do grupo
 
-```powershell
-python tools/download_youtube_clipped_videos.py
+| Nome | Matrícula | Contribuição |
+|---|---|---|
+| Luis Reis | _a informar antes da entrega_ | Implementação e integração da simulação, frontend, infraestrutura, testes e documentação. |
+
+> A matrícula não está presente em nenhum arquivo versionado do projeto e não foi inventada. Complete esse campo antes da submissão acadêmica.
+
+## 2. Resumo e objetivos
+
+O CDN-Sentinel inicia nós HTTP locais e clientes virtuais, seleciona o melhor nó disponível pela distância e carga, mede as entregas e exibe a operação em um console React. Cada entrega recebe uma prova de watermark forense; um vazamento suspeito entra imediatamente em quarentena temporária distribuída enquanto a análise verifica marca, claim autenticado e conteúdo. Havendo prova válida, a blacklist permanente é propagada; sem confirmação, a quarentena expira ou é liberada.
+
+Os objetivos são:
+
+- demonstrar comunicação, observabilidade e falhas em uma topologia distribuída simulada;
+- comparar demanda virtual com telemetria HTTP observada sem misturar tarefas internas forenses no SLO do cliente;
+- atribuir mídia vazada a uma sessão de forma autenticada e auditável;
+- permitir experimentar decisões de capacidade, cache, balanceamento, preço e campanha no modo de gestão;
+- persistir checkpoints, históricos e ledger forense no Supabase com acesso somente de servidor.
+
+## 3. Conceitos utilizados
+
+| Área | Aplicação no projeto |
+|---|---|
+| Sistemas distribuídos | nós HTTP independentes, hierarquia origin/regional/edge, gossip com ACK, deduplicação, retry, failover e leases de quarentena. |
+| Observabilidade | métricas de fila, RTT, E2E, p50/p95/p99, erros, eventos, correlação por `request_id`/`trace_id` e SSE. |
+| Balanceamento | seleção `nearest-healthy`, `least-utilized` ou híbrida; o modo orquestração combina distância, saúde e pressão de carga. |
+| Segurança de transporte | envelopes AES-256-GCM, HMAC, nonce, timestamp e TTL para mensagens internas. |
+| Watermark forense | QIM/DCT visual, código ECC, claim AES-GCM/HMAC/HKDF, associação de marcador a sessão e cadeia HMAC de eventos. |
+| Defesa contra pirataria | quarentena temporária com expiração/reassignação, análise de evidência real e blacklist idempotente. |
+| Persistência | Supabase/PostgREST com RLS para estado do controlador, histórico, claims, marcadores, sessões A/B e eventos forenses. |
+
+## 4. Arquitetura: C4, ADRs e padrões
+
+O contexto e os contêineres C4, as decisões arquiteturais e os padrões estão detalhados em [docs/arquitetura-e-decisoes.md](docs/arquitetura-e-decisoes.md).
+
+```mermaid
+C4Context
+  title Contexto — CDN-Sentinel
+  Person(operator, "Operador", "Configura e acompanha a simulação")
+  System(sentinel, "CDN-Sentinel", "Console e controlador da CDN simulada")
+  SystemDb(supabase, "Supabase", "Checkpoints e ledger forense")
+  System_Ext(tiles, "OpenStreetMap/MapTiler", "Tiles opcionais do mapa")
+  Rel(operator, sentinel, "Usa via navegador")
+  Rel(sentinel, supabase, "Persiste via Data API usando chave de servidor")
+  Rel(sentinel, tiles, "Solicita tiles de mapa")
 ```
 
-O download pode ser repetido para continuar uma transferência interrompida.
-Por padrão, o backend descobre os arquivos de vídeo recursivamente nesse
-diretório e usa o dataset automaticamente. O seletor
-`video_id = "youtube_clipped_videos"` continua disponível para deixar essa
-escolha explícita; para o Watermark Studio, os clipes baixados também são
-escolhidos automaticamente. Sem o dataset, o Big Buck Bunny local continua
-sendo o fallback.
+Padrões centrais: controlador-orquestrador, repositório com snapshot isolado, workers com ciclo de vida explícito, ledger append-only verificável, fallback de persistência e clientes virtuais para escalar a demonstração sem criar milhares de processos.
 
-Se o backend estiver em Docker, o Compose monta esse diretório como somente
-leitura. Para usar outro local, defina `CDN_DATASET_DIR` antes de subir os
-serviços.
+## 5. Stack tecnológico
 
-Protótipo acadêmico de uma control room para Engenharia de Sistemas Distribuídos e Segurança Computacional. A aplicação torna observáveis, em processos locais reais, roteamento por distância, failover, watermarking forense AES-GCM/HMAC, monitoramento de vazamentos, blacklist idempotente, gossip hierárquico cifrado, retry e métricas de requisição.
+- Backend: Python 3.12, Flask, Flask-RESTX, Flask-CORS, Requests.
+- Mídia e watermark: FFmpeg/FFprobe, Pillow, NumPy, SciPy, Cryptography e scikit-video.
+- Frontend: React 18, TypeScript, Vite, Leaflet, Recharts e Lucide.
+- Persistência: Supabase Data API/PostgreSQL; SQLite somente como fallback forense local quando a API não está disponível.
+- Entrega: Docker Compose, Nginx e Make (WSL/Linux).
 
-> Escopo da Entrega 2 e da reengenharia experimental: execução local, topologia/telemetria em memória e ledger forense SQLite. Big Buck Bunny está versionado; o dataset Hugging Face é opcional e baixado explicitamente. Não há Supabase/PostgreSQL, broker, Kubernetes, serviço externo ou credencial paga obrigatória.
+## 6. Requisitos
 
-## O que existe
+- Python 3.12 e `pip`.
+- Node.js 20 e npm.
+- FFmpeg e FFprobe disponíveis no `PATH` para watermark e testes de vídeo.
+- Para Docker: Docker Engine/Desktop com Compose v2.
+- Para Supabase: `SUPABASE_URL` e `SUPABASE_SECRET_KEY` de servidor válidos. Não use a chave publicável no backend e nunca publique segredos `VITE_*`.
 
-- **Backend Flask/RESTX**: control plane, data plane, segurança, monitor e observabilidade em `/docs`.
-- **Processos CDN independentes**: `node_app.py` inicia um processo HTTP por nó, com PID, porta, health, métricas e estado local.
-- **Frontend React/TypeScript**: console em `frontend/`, com Command Center, Network Lab, Security Observatory e Watermark Studio.
-- **Modos operacionais**: o seletor do topo alterna entre **Orquestração**, que mantém o dashboard da main, e **Gamificação**, que usa o simulador de gestão da branch `feat/cdn-management-simulator`.
-- **Comunicação distribuída real**: controller↔nó e nó↔nó usam HTTP local assinado; o gossip possui `message_id`, deduplicação, hops, ACK e retry pendente.
-- **Conteúdo desacoplado**: `ContentProvider`/`VideoCatalog` permitem trocar Big Buck Bunny ou o fallback por um catálogo futuro sem acoplar routing ou segurança.
+Copie `.env.example` para `.env` e preencha somente as variáveis necessárias ao ambiente.
 
-As coordenadas das cidades e a latência de propagação são um modelo didático. Elas não representam presença geográfica real nem uma CDN de produção.
-
-O fator de latência não é mais editável no frontend: o atraso de propagação é calculado pela distância até o servidor escolhido. Mantido o mesmo caminho e sem saturação do limite didático, 2N km produz aproximadamente o dobro do atraso de N km; fila, RTT HTTP e falhas continuam sendo métricas separadas.
-
-### Modo de gamificação
-
-O modo de gamificação começa com caixa, preço, clientes pagantes, nós e custos visíveis no painel **Como o modo começa**. Cada tick representa um dia: a população do jogo pode receber clientes ou perder clientes por preço, satisfação, reputação, capacidade e cenário. Ações de escala horizontal/vertical, cache, balanceamento, metadados e preço debitam investimento quando aplicável e alteram custos recorrentes, receita ou margem; ações pendentes respeitam lead time e cooldown.
-
-## Console e ciclo de vida
-
-O console React cobre o fluxo completo: 'Command center' inicia e controla a simulação, o botão muda para 'Encerrar' enquanto ela está ativa e 'Simulation history' fica disponível depois do encerramento. O dashboard mostra séries temporais de blacklist, requisições acumuladas por servidor, latência média/p95 e saúde geral da CDN. O histórico arquivado preserva essas mesmas amostras e uma tabela final compacta dos processos.
-
-O estado de cada CDN e observado como starting, healthy, degraded, overloaded, offline ou stopped. Pressao de capacidade a partir de 90% aparece como alerta/sobrecarregado; latencia/perda injetadas e erros consecutivos tornam o no degraded; falha de processo torna-o offline. O intervalo de tick e configuravel no slider de 0,5 a 5,0 segundos, e o preco por cliente/mes fica junto dos custos de infraestrutura no acordeao de precificacao.
-
-Durante a propagacao de uma blacklist, o controller tenta os candidatos disponiveis em ordem deterministica. Um no que ja reconheceu o bloqueio responde 403 e o proximo no pode atender o cliente ate que todos os nos tenham recebido a evidencia. Quando todos rejeitam, a API retorna 403.
-
-### Escala e leitura do mapa
-
-A configuracao aceita ate 500 servidores e 100.000 clientes. Para nao transformar a demonstracao em uma colecao de processos ociosos, a execucao mantem limites configuraveis de processos reais (`CDN_REAL_NODE_LIMIT`, padrao 64; `CDN_REAL_CLIENT_LIMIT`, padrao 32) e representa nos/clientes adicionais como capacidade e trafego virtuais agregados. O overview e o historico visual retornam uma amostra limitada de clientes, preservando os totais e as metricas completas do control plane.
-
-O mapa usa uma arvore geradora minima entre os servidores como backbone visual, mais as arestas de mensagens ativas, failover, capacidade e blacklist. Isso reduz o desenho de O(n²) para O(n) no backbone sem esconder os eventos importantes; o trafego cliente-servidor tambem e amostrado e agregado em escalas grandes.
-
-Os servidores conversam por saltos autenticados e cifrados com AES-256-GCM. A topologia limita os vizinhos em uma hierarquia origem → regionais → edges: uma edge busca conteúdo/telemetria em regionais próximos, regionais sincronizam com a origem, e blacklist/gossip podem atravessar vários saltos com deduplicação, limite de hops e retry. A distância geográfica entra no atraso didático; em uma CDN real, DNS/Anycast escolhe o edge, o backbone privado interliga regiões e o conteúdo é puxado por hierarquia/cache shield, em vez de cada edge manter uma conversa full-mesh com o planeta. A árvore do mapa continua sendo uma simplificação visual, não a rota exata usada em cada requisição.
-
-## Arquitetura
-
-```text
-React/TypeScript ── REST ──> Flask controller
-                                  │
-              AES-GCM + HTTP assinado│
-                    ┌─────────────┼─────────────┐
-                    ▼             ▼             ▼
-                CDN node 1    CDN node 2    CDN node N
-                    │             │             │
-                    └── gossip hierárquico cifrado + ACK/retry ──┘
-
-LeakService → plataforma externa simulada → MonitorService → investigação visual + ledger + conteúdo → revisão explícita
-```
-
-O repositório do controller e o repositório de cada nó são independentes e em memória. Snapshots públicos são cópias isoladas; eventos, tráfego, leaks e scans ficam limitados a 500 itens.
-
-## Execução local
-
-### Docker Compose (caminho principal)
-
-Com Docker Desktop ou Docker Engine + Compose instalados:
+No WSL/Ubuntu:
 
 ```bash
-docker compose up --build
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip ffmpeg make curl
+# Instale Node 20 e habilite a integração WSL do Docker Desktop, se usar Docker.
 ```
 
-Ou use o atalho equivalente:
+## 7. Compilação e execução
+
+### 7.1. Desenvolvimento local
 
 ```bash
-make docker-up
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cd frontend && npm ci && cd ..
+python app.py
 ```
 
-O console fica em `http://127.0.0.1:8080`, o backend em `http://127.0.0.1:5000`, Swagger em `http://127.0.0.1:5000/docs` e o health check em `http://127.0.0.1:5000/health`. O frontend servido pelo Nginx encaminha `/api` para o serviço backend. Para validar automaticamente build, health, demo do watermark, proxy e encerramento, execute `make docker-smoke`.
-
-Variáveis opcionais do Compose:
+Em outro terminal:
 
 ```bash
-CDN_SECRET_KEY='chave-local-de-desenvolvimento' CDN_CONTROL_TOKEN='' docker compose up --build
+cd frontend
+npm run dev
 ```
 
-O container inclui o clipe real local `data/media/bigbuckbunny.mp4` e o FFmpeg usado para gerar as variantes do Watermark Studio. O asset é atribuído à Blender Foundation sob CC-BY-3.0; nenhum download acontece no startup.
+Abra `http://127.0.0.1:5173`; o Vite encaminha `/api` para o Flask em `http://127.0.0.1:5000`. Swagger fica em `http://127.0.0.1:5000/docs`.
 
-### Makefile / execução sem Docker
-
-No Linux, `make dev` inicia backend e frontend juntos, usando `python3` e `npm`:
+No WSL, os atalhos equivalentes são:
 
 ```bash
 make install
 make dev
 ```
 
-O backend fica em `http://127.0.0.1:5000` e o Vite em `http://127.0.0.1:5173`. Outros comandos úteis são `make test`, `make build`, `make backend`, `make frontend` e `make docker-down`.
+`make dev` encerra apenas os dois processos que ele próprio iniciou. Os demais alvos estão em [docs/desenvolvimento-e-testes.md](docs/desenvolvimento-e-testes.md).
 
-No Windows/PowerShell, a execução separada continua disponível:
+### 7.2. Supabase
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-$env:CDN_SECRET_KEY = "chave-local-de-desenvolvimento"
-python app.py
+As tabelas são definidas em `supabase/migrations/20261114000000_cdn_sentinel.sql`. Depois de autenticar a CLI e vincular o projeto:
+
+```bash
+supabase link --project-ref <project-ref>
+supabase db push --include-all
+supabase migration list
 ```
 
-Em outro terminal:
+O endpoint de status expõe `storage.backend`, `storage.durable` e `storage.reason`. Se a credencial ou a API falhar, a simulação continua com o fallback local e informa o motivo; isso não deve ser confundido com persistência durável. Veja [docs/supabase-e-operacao.md](docs/supabase-e-operacao.md).
 
-```powershell
-Push-Location frontend
-npm install
-npm run dev
-Pop-Location
+## 8. Dockerização
+
+O backend é construído sobre `python:3.12-slim`, instala FFmpeg, roda como usuário não privilegiado e usa `init: true` no Compose para reaproveitar corretamente processos filhos de nós/clientes. O frontend é um build multiestágio Node 20 servido por Nginx e faz proxy de `/api` e do SSE ao backend. O diretório de runtime não é volume Docker: a persistência de produção é o Supabase e o fallback local é deliberadamente efêmero.
+
+```bash
+docker compose up --build
+# ou
+make docker-up
 ```
 
-O Vite usa `/api` por padrão. Para outro backend, use `VITE_API_BASE_URL`. Em `CDN_AUTH_MODE=secure`, o painel usa login no backend, cookie HttpOnly e CSRF. O mapa usa tiles MapTiler Streets com rótulos em português quando `frontend/.env` define `VITE_MAPTILER_KEY`; o código mantém OpenStreetMap como fallback visual quando a chave ainda não foi configurada. Para habilitar exemplos adicionais já instalados pelo `scikit-video`, sem download automático, configure `USE_BIGBUCKBUNNY_DATASET=1`.
+Serviços: console em `http://127.0.0.1:8080`, API em `http://127.0.0.1:5000` e health em `/health`. O Compose repassa `SUPABASE_URL` e `SUPABASE_SECRET_KEY` do `.env` apenas ao backend; a chave não chega ao bundle do frontend.
 
-Após uma mutação no mapa, o console faz uma leitura nova do control plane mesmo que uma consulta periódica esteja em andamento. Assim, clientes e servidores criados por clique aparecem no próximo snapshot, sem depender de uma requisição antiga.
+Validações previstas:
 
-## Segurança e modo de demonstração
-
-- Endpoints de controle/mutação aceitam `X-CDN-Control-Token` quando `CDN_CONTROL_TOKEN` está configurado. Com a variável vazia, o comportamento é explicitamente **demo local**; CORS continua limitado a `CDN_CORS_ORIGINS` (por padrão, localhost nas portas 5173).
-- Mensagens internas usam envelope AES-256-GCM e HMAC sobre o ciphertext, método e path, com timestamp, nonce e TTL de 30 segundos. Nonces já usados são rejeitados; payloads POST internos sem envelope cifrado são recusados.
-- Uma blacklist só é aceita por um nó quando o token HMAC da prova corresponde a `client_id`, servidor emissor e assinatura. Mensagens sem credencial/prova são rejeitadas.
-- O claim forense CDNWM4 usa AES-256-GCM, HMAC-SHA256, HKDF e `kid`; o ledger SQLite associa o marcador visual de 48 bits a uma sessão. O nó usa QIM2 para fontes >=640×360 e spread adaptativo abaixo disso. A detecção e a comparação de conteúdo usam evidências temporais espaçadas em 2 s, com o frame final preservado, evitando varrer cada segundo sem reduzir a validação por marcador exato, claim autenticado e conteúdo alegado; a revisão não aplica blacklist. A avaliação atual permanece experimental. O anti-replay implementado é do protocolo interno, com nonce/TTL/estado local.
-
-## Fluxo rápido da API
-
-Inicializar uma rede pequena:
-
-```powershell
-$body = @{ num_servers = 3; num_clients = 4; malicious_probability = 0.35; tick_interval_seconds = 2.5; seed = 2026 } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5000/api/control/simulation/init -ContentType "application/json" -Body $body
+```bash
+make docker-config
+make docker-build
+make docker-test
+make docker-smoke
 ```
 
-Endpoints principais:
+`docker-test` executa a suíte Python dentro da imagem backend. `docker-smoke` sobe o stack, valida health, rota de watermark, proxy Nginx e encerra os contêineres. A situação da execução local desta auditoria está registrada em [docs/auditoria-tecnica.md](docs/auditoria-tecnica.md).
 
-| Domínio | Endpoint | Finalidade |
+## 9. Fluxos do programa
+
+```mermaid
+sequenceDiagram
+  participant UI as React
+  participant API as Flask Controller
+  participant CDN as Nó CDN HTTP
+  participant DB as Supabase
+  UI->>API: inicializar/configurar simulação
+  API->>CDN: configurar nó (envelope autenticado)
+  UI->>API: solicitar stream
+  API->>CDN: selecionar nó saudável por distância+carga
+  CDN-->>API: MP4 watermarkado + métricas
+  API->>DB: checkpoint/eventos forenses
+  API-->>UI: overview/SSE com telemetria
+```
+
+O fluxo completo de orquestração, failover, quarentena e gamificação está em [docs/orquestracao-cdn.md](docs/orquestracao-cdn.md).
+
+## 10. Pipeline de watermark
+
+```mermaid
+flowchart LR
+  A[Cliente + sessão + segmento] --> B[Claim CDNWM4 cifrado e autenticado]
+  B --> C[Marcador visual QIM/DCT + ECC no MP4]
+  C --> D[Entrega e registro no ledger]
+  D --> E[Vazamento suspeito]
+  E --> F[Quarentena temporária distribuída]
+  F --> G[Extrair marcador e verificar claim/conteúdo]
+  G -->|prova válida| H[Blacklist permanente]
+  G -->|inconclusivo/falha| I[Liberar ou expirar lease]
+```
+
+A especificação, do payload à verificação e à descriptografia, está em [docs/watermark-forense.md](docs/watermark-forense.md).
+
+## 11. Figuras do programa
+
+O repositório não contém capturas de interface versionadas no momento. Para não apresentar imagens artificiais como execução real, esta documentação mantém apenas os diagramas acima. Antes da entrega, registre capturas reais do Command Center, Network Lab, Security Observatory e Watermark Studio em `docs/imagens/` e inclua-as nesta seção com a configuração usada na simulação.
+
+## 12. Estrutura do projeto
+
+```text
+CDN-Sentinel/
+├── app.py                     # composição Flask e ciclo de vida
+├── node_app.py / client_app.py # processos locais simulados
+├── controllers/               # controle e cálculo de telemetria
+├── services/                  # streaming, monitor, watermark, Supabase
+├── repositories/              # cache transacional e snapshots do controlador
+├── management/                # modo econômico/gamificado
+├── watermark/ e utils/        # algoritmos, claims, ECC e mídia
+├── routes/                    # contratos RESTX
+├── frontend/                  # React/TypeScript/Vite/Nginx
+├── supabase/migrations/       # esquema versionado do banco
+├── tests/                     # unitários, integração e E2E local
+├── tools/                     # downloads e benchmarks explícitos
+├── docs/                      # documentação aprofundada
+└── Dockerfile, docker-compose.yml, Makefile
+```
+
+## 13. Testes, auditoria e limitações
+
+```bash
+make test
+make docker-test
+make docker-smoke
+```
+
+O projeto separa tráfego de clientes de capturas forenses internas nas métricas de SLO. Os custos, a demanda e a geografia são didáticos; não representam preço, capacidade ou roteamento de uma CDN comercial. A detecção de watermark é experimental e uma investigação inconclusiva não deve atribuir pirataria.
+
+Consulte [docs/desenvolvimento-e-testes.md](docs/desenvolvimento-e-testes.md) e [docs/auditoria-tecnica.md](docs/auditoria-tecnica.md) para comandos, escopo e resultados de validação.
+
+## 14. Ferramentas de IA utilizadas
+
+| Ferramenta | Uso e orientação recebida | Avaliação honesta |
 |---|---|---|
-| Controle | `POST /api/control/simulation/init` | cria topologia e processos |
-| Controle | `PATCH /api/control/simulation/config` | altera configuração; mudanças estruturais recriam a simulação |
-| Controle | `POST /api/control/simulation/pause` / `resume` | pausa/retoma workers |
-| Controle | `POST /api/control/fault/{server_id}` | offline, latência extra ou perda local |
-| Controle | `POST /api/control/metrics/reset` | zera telemetria sem apagar topologia/blacklist |
-| Controle | `POST /api/control/simulation/end` | encerra processos/workers e arquiva a simulacao |
-| Dados | `GET /api/clients/{id}/stream?chunk=0` | roteia, faz failover e entrega o MP4 Base64 com marca visual nos frames |
-| Dados | `GET /api/clients/{id}/media?chunk=0` | entrega o MP4 watermarkado como mídia binária reproduzível |
-| Dados | `POST /api/clients/{id}/viewer-sessions` | operador emite autorização temporária de espectador quando o modo autenticado está ativo |
-| Dados | `POST /api/clients/{id}/hls/sessions` | prepara ou reutiliza variantes A/B e cria playlist por sessão; extração A/B ainda experimental |
-| Dados | `POST /api/clients/{id}/feedback` | registra like/nota e relaciona a percepção à latência observada |
-| Topologia | `GET/POST /api/topology/servers` | observa/adiciona nós |
-| Segurança | `POST /api/security/watermark/verify` | descriptografa e valida token AES-GCM/HMAC sem expor chave |
-| Monitor | `POST /api/monitor/scan` | dispara varredura manual |
-| Monitor | `POST /api/monitor/investigations` | recebe vídeo autorizado e registra evidência sem bloqueio automático |
-| Monitor | `POST /api/monitor/investigations/{id}/review` | registra revisão explícita da evidência |
-| Observabilidade | `GET /api/observability/overview` | snapshot agregado para o console |
-| Observabilidade | `GET /api/observability/realtime/stream` | stream SSE persistente para estado, telemetria e gestão |
-| Observabilidade | `GET /api/observability/history` | lista historicos completos arquivados |
-
-Uma resposta de stream distingue `artificial_latency_ms`, `http_rtt_ms` e `end_to_end_ms`, além de `request_id`, `trace_id`, candidatos e razão de routing.
-
-## Experimentos didáticos
-
-1. Faça um stream e abra a decisão de routing no Command Center/Network Lab.
-2. Desligue o nó selecionado no Network Lab; a próxima chamada deve escolher o próximo candidato saudável e registrar a razão.
-3. Injete latência ou perda; observe requests, erros, in-flight, retry e eventos.
-4. No Security Observatory, acompanhe cliente → chunk → plataforma simulada → monitor → investigação → revisão. A marca não gera blacklist automática.
-5. No Watermark Studio, reproduza o Big Buck Bunny original, o MP4 entregue ao cliente e a diferença em escala de cinza; confira a descriptografia do claim e as amostras reais de resistência. Depois altere um caractere do token: a prova adulterada deve ser rejeitada.
-
-O roteiro completo está em [`docs/demo-script.md`](./docs/demo-script.md).
-
-## Testes e verificações
-
-```powershell
-python -m compileall app.py config.py client_app.py node_app.py controllers models repositories routes services utils tools tests
-python -m unittest discover -s tests -v
-Push-Location frontend
-npm.cmd run build
-Pop-Location
-```
-
-O smoke E2E local inicia processos CDN e verifica inicialização, stream e overview. `make docker-config` valida o Compose; `make docker-smoke` sobe as imagens, aguarda `/health`, verifica o frontend via Nginx e encerra os containers ao final.
-
-## Decisões e limitações
-
-- Topologia e telemetria permanecem em memória; claims, sessões A/B e eventos forenses usam SQLite local. PostgreSQL, retenção, backup e distribuição do ledger não fazem parte desta etapa.
-- O Big Buck Bunny é um asset local de demonstração, atribuído à Blender Foundation sob CC-BY-3.0; ele continua como fallback. O dataset `kishan51/youtube_clipped_videos` é baixado explicitamente pelo script documentado acima e fica fora do Git; licenças e termos de uso dos clipes devem ser verificados antes de uma distribuição pública.
-- Clientes pequenos podem ter processos locais observaveis; populacoes grandes usam clientes virtuais e lotes de telemetria, evitando milhares de processos ociosos.
-- Custos mensais, capacidade por nó e latência de fila são cenários didáticos estimados, nunca fatos de produção.
-- O monitor é separado por escopo de nó, mas continua coordenado pelo controller no mesmo aplicativo Flask.
-- O watermark forense atual usa marcador keyed de 48 bits nos frames e claim cifrado apenas no ledger; os bytes públicos são MP4 sem prefixo de token. A série `metrics_history` é limitada a 500 amostras e fica em memória.
-
-## Reengenharia forense experimental
-
-Requisitos: Python 3.12, FFmpeg/FFprobe no `PATH`, Node 20 para a interface. Instale o backend com `python -m pip install -r requirements.txt`, execute `python app.py` e o frontend com `cd frontend; npm ci; npm run dev`. O HLS A/B é preparado sob `data/runtime/hls-ab` na primeira sessão. Para o modo seguro de uma instância, configure `CDN_AUTH_MODE=secure`, `CDN_SECRET_KEY`, `CDN_VIEWER_SESSION_SECRET` e `CDN_OPERATOR_ACCOUNTS`; use HTTPS e um proxy de mesma origem. Gere hashes de senha no backend com `python -c "from services.operator_auth_service import hash_password; print(hash_password('uma-senha-longa-e-aleatoria'))"` e forneça JSON como `{"alice":{"role":"operator","password_hash":"pbkdf2_sha256$..."}}` em `CDN_OPERATOR_ACCOUNTS`. O modo seguro ainda depende de autenticação externa da conta de espectador e de uma única instância de API.
-
-Para exigir autorização de espectador, configure também `CDN_REQUIRE_VIEWER_AUTH=1` e `CDN_VIEWER_SESSION_SECRET` com material aleatório distinto. O backend recusa iniciar esse modo sem `CDN_CONTROL_TOKEN`. Após autenticar a conta em um sistema externo, o operador chama `POST /api/clients/{id}/viewer-sessions` com `X-CDN-Control-Token`; a resposta contém um bearer curto. O espectador envia `Authorization: Bearer <token>` em `/media`, `/stream` e nas rotas HLS. O token vincula cliente, conteúdo e execução atual. Esse mecanismo **não é um provedor de identidade**, exige HTTPS fora do localhost e não substitui autenticação real da conta. Players HLS que não enviam headers precisam de uma integração de autenticação própria. No modo demo padrão, as rotas de mídia continuam abertas.
-
-Requisições repetidas da mesma sessão autenticada, conteúdo, segmento e nó reutilizam o claim e o MP4 em cache. Uma nova sessão ainda exige codificação integral na rota MP4; a preparação HLS A/B é o caminho segmentado experimental. Vazamentos inconclusivos permanecem disponíveis para reanálise manual e não aparecem como atribuídos no resumo público.
-
-Documentos desta rodada: [arquitetura](docs/watermark-architecture.md), [comparação de algoritmos](docs/watermark-algorithm-comparison.md), [ameaças](docs/watermark-threat-model.md), [resultados e comandos](docs/watermark-benchmark-results.md), [fluxo de investigação](docs/watermark-forensic-workflow.md) e [relatório de implementação](docs/watermark-implementation-report.md). A auditoria histórica permanece em [watermark-security-validation.md](docs/watermark-security-validation.md).
-
-## Uso de ferramentas de IA
-
-O registro acadêmico de ferramentas está em [docs/ai-tools.md](docs/ai-tools.md). Esta reengenharia foi implementada com assistência de Codex; as medições relatadas são saídas de comandos executados localmente. A avaliação cega com participantes, a conferência das licenças do dataset e a aprovação para eventual uso real dependem de revisão humana e ainda não ocorreram.
-
-Checklist, C4, ADR, padrões, plano de testes e pendência de equipe:
-
-- [`docs/delivery-2-checklist.md`](./docs/delivery-2-checklist.md)
-- [`docs/c4.md`](./docs/c4.md)
-- [`docs/adrs/0001-protocolo-interno-e-failover.md`](./docs/adrs/0001-protocolo-interno-e-failover.md)
-- [`docs/patterns.md`](./docs/patterns.md)
-- [`docs/test-plan.md`](./docs/test-plan.md)
-- [`docs/responsibilities.md`](./docs/responsibilities.md)
+| Codex (OpenAI) | Leitura do repositório, análise de inconsistências, implementação, refatoração, testes e redação. Foi orientado por requisitos funcionais, arquivos do projeto, evidências de testes e restrições de segurança. | Acelerou diagnóstico e documentação, mas exigiu revisão humana de métricas, credenciais, dados acadêmicos e comandos. Não substitui validação de mídia, Docker ou segurança. |
+| ChatGPT | Auxiliou na análise dos requisitos do projeto, na redação dos prompts e em pesquisar estratégias de segurança e de orquestração da CDN | Acelerou bastante o trabalho de conceituação do projeto, ajudando a definir como seria a estrutura do projeto, mas todo o trabalho de escolha da estrutura final passou por seleção, revisão e refinamento humano |
