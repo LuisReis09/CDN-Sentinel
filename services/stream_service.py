@@ -7,7 +7,7 @@ import requests
 from models.entities import Client, SimulationState, VideoChunk
 from services.cdn_http_client import CDNHttpClient
 from services.content_provider import default_content_id
-from utils.geo import haversine_km, rank_servers
+from utils.geo import haversine_km, rank_delivery_servers
 from utils.latency import sleep_for_distance
 
 
@@ -88,10 +88,28 @@ class StreamService:
             raise ValueError("chunk deve ser maior ou igual a zero")
         request_id = request_id or f"req-{uuid.uuid4().hex[:16]}"
         trace_id = f"trace-{uuid.uuid4().hex[:16]}"
-        candidates = rank_servers(client.latitude, client.longitude, state.servers.values())
+        candidates = rank_delivery_servers(
+            client.latitude, client.longitude, state.servers.values()
+        )
         if not candidates:
             raise RuntimeError("Nenhum servidor CDN saudável está disponível")
-        candidate_details = [{"server_id": server.server_id, "distance_km": round(distance, 2), "status": server.status, "selected": False, "attempted": False, "reason": "candidato saudável"} for distance, server in candidates]
+        candidate_details = [
+            {
+                "server_id": server.server_id,
+                "routing_score": round(score, 2),
+                "distance_km": round(
+                    haversine_km(
+                        client.latitude, client.longitude, server.latitude, server.longitude
+                    ),
+                    2,
+                ),
+                "status": server.status,
+                "selected": False,
+                "attempted": False,
+                "reason": "eligible by distance and load",
+            }
+            for score, server in candidates
+        ]
         healthy_ids = {server.server_id for _, server in candidates}
         for server in state.servers.values():
             if server.server_id not in healthy_ids:
@@ -102,7 +120,10 @@ class StreamService:
         selected_distance = 0.0
         failures: list[str] = []
         blocked_failures: list[str] = []
-        for index, (distance, candidate) in enumerate(candidates):
+        for index, (_score, candidate) in enumerate(candidates):
+            distance = haversine_km(
+                client.latitude, client.longitude, candidate.latitude, candidate.longitude
+            )
             candidate_details[index]["selected"] = True
             candidate_details[index]["attempted"] = True
             try:
@@ -144,7 +165,7 @@ class StreamService:
             raise RuntimeError("Todos os nós candidatos falharam: " + "; ".join(failures))
         server = selected_server
         distance = selected_distance
-        routing_reason = "primeiro nó falhou; failover determinístico" if failures else ("nó não saudável excluído; menor distância entre nós saudáveis" if len(candidate_details) > len(candidates) else "menor distância entre nós saudáveis")
+        routing_reason = "primeiro nó falhou; failover determinístico" if failures else ("nó não saudável excluído; menor custo de distância e carga" if len(candidate_details) > len(candidates) else "menor custo de distância e carga entre nós saudáveis")
         server.load = int(result.get("load", server.load))
         client.videos_consumed += 1
         client.last_activity_at = time.time()
@@ -199,7 +220,7 @@ class StreamService:
                 "queue_wait_ms": queue_wait_ms,
                 "end_to_end_ms": round(end_to_end_ms, 3),
                 "protocol": "HTTP/1.1",
-                "routing": "Haversine / nearest healthy CDN",
+                "routing": "Haversine + balanceamento por pressão",
                 "watermark_algorithm": result.get("watermark_algorithm", "dct-qim-v3"),
                 "watermark_version": result.get("watermark_version", "CDNWM4"),
                 "watermark_id": result.get("watermark_id"),

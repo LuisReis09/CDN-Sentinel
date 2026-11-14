@@ -119,9 +119,8 @@ export function NetworkLabPage({
           <label>
             Atraso extra (ms)
             <input
-              type="number"
-              min="0"
-              max="30000"
+              type="text"
+              inputMode="decimal"
               value={latency}
               onChange={(event) => setLatency(event.target.value)}
             />
@@ -129,10 +128,8 @@ export function NetworkLabPage({
           <label>
             Perda de mensagens
             <input
-              type="number"
-              min="0"
-              max="1"
-              step="0.05"
+              type="text"
+              inputMode="decimal"
               value={dropRate}
               onChange={(event) => setDropRate(event.target.value)}
             />
@@ -293,6 +290,7 @@ function NodeCard({
         </span>
         <span>
           requests <b>{server.requests_total ?? 0}</b>
+          <small>sim. {server.simulated_requests_total ?? 0} · HTTP {server.http_requests_total ?? 0}</small>
         </span>
         <span>
           erros <b>{server.errors_total ?? 0}</b>

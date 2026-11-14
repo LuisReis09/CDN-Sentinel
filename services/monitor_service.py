@@ -23,6 +23,7 @@ class MonitorService:
         self._tick_interval_seconds = 1.0
         self._threads: Dict[str, threading.Thread] = {}
         self._stop_events: Dict[str, threading.Event] = {}
+        self._wake_events: Dict[str, threading.Event] = {}
         self._locks: Dict[str, threading.Lock] = {}
         self._last_results: Dict[str, Dict[str, Any]] = {}
         self._lifecycle_lock = threading.RLock()
@@ -56,23 +57,29 @@ class MonitorService:
             if not start_thread:
                 return
             stop_event = threading.Event()
+            wake_event = threading.Event()
             self._stop_events[server_id] = stop_event
-            thread = threading.Thread(target=self._run, args=(server_id, stop_event), name=f"monitor-{server_id}", daemon=True)
+            self._wake_events[server_id] = wake_event
+            thread = threading.Thread(target=self._run, args=(server_id, stop_event, wake_event), name=f"monitor-{server_id}", daemon=True)
             self._threads[server_id] = thread
             thread.start()
 
     def stop(self) -> None:
         with self._lifecycle_lock:
             events = list(self._stop_events.values())
+            wake_events = list(self._wake_events.values())
             threads = list(self._threads.values())
             for stop_event in events:
                 stop_event.set()
+            for wake_event in wake_events:
+                wake_event.set()
         for thread in threads:
             if thread.is_alive():
                 thread.join(timeout=1.0)
         with self._lifecycle_lock:
             self._threads.clear()
             self._stop_events.clear()
+            self._wake_events.clear()
             self._locks.clear()
             self._last_results.clear()
 
@@ -84,16 +91,31 @@ class MonitorService:
         server_id = str(server_id)
         with self._lifecycle_lock:
             stop_event = self._stop_events.pop(server_id, None)
+            wake_event = self._wake_events.pop(server_id, None)
             thread = self._threads.pop(server_id, None)
             self._locks.pop(server_id, None)
             self._last_results.pop(server_id, None)
         if stop_event:
             stop_event.set()
+        if wake_event:
+            wake_event.set()
         if thread and thread.is_alive():
             thread.join(timeout=1.0)
 
-    def _run(self, server_id: str, stop_event: threading.Event) -> None:
-        while not stop_event.wait(self._tick_interval_seconds):
+    def notify_leak(self, leak: dict) -> None:
+        """Start a valid forensic scan immediately instead of waiting a tick."""
+        server_id = str(leak.get("server_id") or "")
+        with self._lifecycle_lock:
+            wake_event = self._wake_events.get(server_id)
+        if wake_event:
+            wake_event.set()
+
+    def _run(self, server_id: str, stop_event: threading.Event, wake_event: threading.Event) -> None:
+        while not stop_event.is_set():
+            wake_event.wait(self._tick_interval_seconds)
+            wake_event.clear()
+            if stop_event.is_set():
+                break
             try:
                 self.scan(server_id=server_id, automatic=True)
             except RuntimeError:
@@ -158,6 +180,8 @@ class MonitorService:
 
     def _scan(self, server_id: str, automatic: bool) -> Dict[str, Any]:
         state = self._repository.state_ref()
+        if automatic and (state.paused or state.lifecycle != "running"):
+            return self._empty_result(server_id)
         detected: List[dict] = []
         rejected: List[dict] = []
         now = time.time()

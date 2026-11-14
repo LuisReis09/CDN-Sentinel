@@ -182,7 +182,7 @@ export function ManagementPage({
     try {
       const result = await api.applyManagementAction({
         action_type: selectedAction.action_type,
-        parameters,
+        parameters: normalizeActionParameters(parameters),
         expected_version: management.version,
       });
       setManagement(result.state);
@@ -223,7 +223,10 @@ export function ManagementPage({
     ? Number(scenarioInitial.monthly_price_usd ?? state?.monthly_price_per_client_usd ?? 0)
     : state?.monthly_price_per_client_usd ?? 0;
   const showInitialConditions = !overview.status.initialized || overview.status.lifecycle === "ended";
-  const satisfaction = state?.customer_satisfaction ?? 0;
+  const satisfaction = Math.max(0, Math.min(100, state?.customer_satisfaction ?? 0));
+  const satisfactionFactors = state?.satisfaction_factors ?? {
+    latency: 0, reliability: 0, price: 0, capacity: 0, feedback: 0,
+  };
   const satisfactionTips = [
     ...(state && state.latency_p95_ms > 180
       ? ["Reduza o P95: adicione capacidade, aumente o tier ou use balanceamento híbrido antes de subir o preço."]
@@ -351,9 +354,16 @@ export function ManagementPage({
         <Kpi
           icon={<ShieldCheck size={16} />}
           label="SLA / satisfação"
-          value={`${state?.sla_compliance_pct ?? 0}%`}
-          detail={`${state?.customer_satisfaction ?? 0}/100 satisfação`}
+          value={`${satisfaction.toFixed(0)}%`}
+          detail={`SLA ${state?.sla_compliance_pct ?? 0}%`}
           tone="green"
+        />
+        <Kpi
+          icon={<Banknote size={16} />}
+          label="Custo operacional"
+          value={formatUsd(state?.monthly_opex_usd ?? 0)}
+          detail={`${formatUsd(state?.daily_opex_usd ?? 0)}/dia`}
+          tone="orange"
         />
         <Kpi
           icon={<Activity size={16} />}
@@ -374,13 +384,15 @@ export function ManagementPage({
       <section className={`management-satisfaction management-satisfaction--${satisfaction >= 75 ? "good" : satisfaction >= 55 ? "watch" : "risk"}`} aria-label="Satisfação dos clientes">
         <div>
           <p className="eyebrow">PRIMARY PLAYER METRIC</p>
-          <h2>Satisfação do cliente: {satisfaction.toFixed(0)}/100</h2>
+          <h2>Satisfação do cliente: {satisfaction.toFixed(0)}%</h2>
           <p>Ela determina reputação, chegada de pagantes e churn. É calculada por latência P95, erros, preço e feedback real das entregas.</p>
         </div>
         <div className="management-satisfaction__signals">
-          <span><small>feedback</small><b>{state?.feedback_score ?? 0}/100</b></span>
-          <span><small>P95</small><b>{state?.latency_p95_ms ?? 0} ms</b></span>
-          <span><small>erros</small><b>{state?.error_rate_pct ?? 0}%</b></span>
+          <span><small>latência</small><b>{satisfactionFactors.latency.toFixed(1)}/10</b></span>
+          <span><small>confiabilidade</small><b>{satisfactionFactors.reliability.toFixed(1)}/10</b></span>
+          <span><small>preço</small><b>{satisfactionFactors.price.toFixed(1)}/10</b></span>
+          <span><small>capacidade</small><b>{satisfactionFactors.capacity.toFixed(1)}/10</b></span>
+          <span><small>feedback</small><b>{satisfactionFactors.feedback.toFixed(1)}/10</b></span>
         </div>
         <ul>{satisfactionTips.map((tip) => <li key={tip}>{tip}</li>)}</ul>
       </section>
@@ -477,7 +489,7 @@ export function ManagementPage({
         <div className="panel management-decisions">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">DECISION CONSOLE / SIX ACTION TYPES</p>
+              <p className="eyebrow">DECISION CONSOLE / ACTION TYPES</p>
               <h2>Decisões econômicas</h2>
             </div>
             <GitBranch size={18} className="accent" />
@@ -696,20 +708,22 @@ function ActionForm({
                 <label>
                   Latitude
                   <input
-                    type="number"
-                    value={Number(parameters.latitude)}
+                    type="text"
+                    inputMode="decimal"
+                    value={String(parameters.latitude ?? "")}
                     onChange={(event) =>
-                      set("latitude", Number(event.target.value))
+                      set("latitude", event.target.value)
                     }
                   />
                 </label>
                 <label>
                   Longitude
                   <input
-                    type="number"
-                    value={Number(parameters.longitude)}
+                    type="text"
+                    inputMode="decimal"
+                    value={String(parameters.longitude ?? "")}
                     onChange={(event) =>
-                      set("longitude", Number(event.target.value))
+                      set("longitude", event.target.value)
                     }
                   />
                 </label>
@@ -751,12 +765,11 @@ function ActionForm({
           <label>
             Preço mensal (USD)
             <input
-              type="number"
-              min="1"
-              max="200"
-              value={Number(parameters.monthly_price_usd)}
+              type="text"
+              inputMode="decimal"
+              value={String(parameters.monthly_price_usd ?? "")}
               onChange={(event) =>
-                set("monthly_price_usd", Number(event.target.value))
+                set("monthly_price_usd", event.target.value)
               }
             />
           </label>
@@ -937,6 +950,16 @@ function ChartPanel({
       </div>
     </div>
   );
+}
+
+function normalizeActionParameters(parameters: Record<string, unknown>) {
+  const numericFields = new Set(["latitude", "longitude", "monthly_price_usd", "level"]);
+  return Object.fromEntries(Object.entries(parameters).map(([key, value]) => {
+    if (!numericFields.has(key) || typeof value !== "string") return [key, value];
+    const normalized = value.trim().replace(",", ".");
+    const numeric = Number(normalized);
+    return [key, normalized && Number.isFinite(numeric) ? numeric : value];
+  }));
 }
 
 function formatUsd(value: number) {

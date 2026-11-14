@@ -966,8 +966,20 @@ class SimulationController:
                 server.blacklist_size = int(status.get("blacklist_size", 0))
                 server.messages_received = int(status.get("messages_received", 0))
                 server.uptime_seconds = float(status.get("uptime_seconds", server.uptime_seconds))
-                server.requests_total = int(status.get("requests_total", server.requests_total))
-                server.errors_total = int(status.get("errors_total", server.errors_total))
+                # A local node reports only HTTP traffic.  Do not let a
+                # status poll overwrite the aggregate simulator counter.
+                server.http_requests_total = int(
+                    status.get("requests_total", server.http_requests_total)
+                )
+                server.http_errors_total = int(
+                    status.get("errors_total", server.http_errors_total)
+                )
+                server.requests_total = (
+                    server.simulated_requests_total + server.http_requests_total
+                )
+                server.errors_total = (
+                    server.simulated_errors_total + server.http_errors_total
+                )
                 server.requests_in_flight = int(status.get("requests_in_flight", server.requests_in_flight))
                 server.last_request_at = status.get("last_request_at")
                 capacity = status.get("capacity", {})

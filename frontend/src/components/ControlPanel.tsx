@@ -265,22 +265,14 @@ export function ControlPanel({
           value={form.malicious_probability}
           onValueChange={(value) => update("malicious_probability", value)}
         />
-        <label className="range-field">
-          <span>
-            Intervalo do tick <b>{tickInterval.toFixed(1)} s</b>
-          </span>
-          <input
-            type="range"
-            min="0.5"
-            max="5"
-            step="0.5"
-            value={tickInterval}
-            onChange={(event) =>
-              update("tick_interval_seconds", Number(event.target.value))
-            }
-          />
-          <small>0,5 a 5,0 segundos</small>
-        </label>
+        <NumericField
+          label="Intervalo do tick (s)"
+          value={tickInterval}
+          min={0.5}
+          max={5}
+          error={fieldErrors.tick_interval_seconds}
+          onValueChange={(value) => update("tick_interval_seconds", value)}
+        />
         <small className="tick-hint">
           O tick acelera o relógio e a telemetria agregada. Todos os clientes
           permanecem ativos; assistir mídia pelo cliente continua sendo uma

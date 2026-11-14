@@ -300,7 +300,8 @@ function NodeHealthPanel({
             </span>
             <span className="node-health-stat">
               <b>{server.requests_total ?? 0}</b>
-              <small>requests</small>
+              <small>requests total</small>
+              <small>sim. {server.simulated_requests_total ?? 0} · HTTP {server.http_requests_total ?? 0}</small>
             </span>
             <span className="node-health-stat">
               <b>{server.errors_total ?? 0}</b>

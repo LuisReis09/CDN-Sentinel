@@ -53,6 +53,41 @@ def rank_servers(latitude: float, longitude: float, servers: Iterable[object]) -
     return sorted(candidates, key=lambda item: (item[0], getattr(item[1], "server_id", "")))
 
 
+def rank_delivery_servers(
+    latitude: float,
+    longitude: float,
+    servers: Iterable[object],
+    *,
+    require_http: bool = True,
+    pending_assignments: dict[str, int] | None = None,
+) -> list[tuple[float, object]]:
+    """Rank eligible nodes by both geographic distance and pressure.
+
+    Distance remains dominant; a bounded pressure penalty shares traffic among
+    similarly located nodes without sending ordinary traffic to a distant idle
+    node. ``pending_assignments`` also balances a virtual burst before the
+    next status refresh.
+    """
+    pending_assignments = pending_assignments or {}
+    candidates: list[tuple[float, object]] = []
+    for server in servers:
+        if require_http and getattr(server, "process_mode", "http") != "http":
+            continue
+        if getattr(server, "status", "healthy") not in {"healthy", "degraded", "overloaded", "starting"}:
+            continue
+        distance = haversine_km(latitude, longitude, server.latitude, server.longitude)
+        capacity = max(1.0, float(getattr(server, "capacity_rps", 0.0) or 1.0))
+        pressure = max(
+            0.0,
+            float(getattr(server, "utilization", 0.0) or 0.0),
+            float(getattr(server, "capacity_pressure", 0.0) or 0.0),
+        )
+        pressure += max(0.0, float(getattr(server, "queue_depth", 0) or 0) / capacity)
+        pressure += pending_assignments.get(str(getattr(server, "server_id", "")), 0) / capacity
+        candidates.append((distance + min(2_000.0, pressure * 300.0), server))
+    return sorted(candidates, key=lambda item: (item[0], getattr(item[1], "server_id", "")))
+
+
 def choose_server(latitude: float, longitude: float, servers: Iterable[object]) -> tuple[object, float]:
     """Choose the closest healthy server and return it with the distance."""
     candidates = rank_servers(latitude, longitude, servers)

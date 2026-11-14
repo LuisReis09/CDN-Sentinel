@@ -48,7 +48,7 @@ class ManagementEngine:
             initial_cash = float(initial.get("cash_usd", 10_000.0))
             initial_price = float(initial.get("monthly_price_usd", config.get("monthly_client_price_usd", 25.0)))
             initial_reputation = float(initial.get("reputation", 75.0))
-            initial_satisfaction = float(initial.get("satisfaction", 75.0))
+            initial_satisfaction = max(0.0, min(100.0, float(initial.get("satisfaction", 75.0))))
             self._state = ManagementState(
                 simulation_id=world.simulation_id,
                 scenario_id=scenario_id,
@@ -181,6 +181,8 @@ class ManagementEngine:
             if not 1 <= price <= 200:
                 raise ValueError("monthly_price_usd deve estar entre 1 e 200")
             return definition.investment_usd, 0.0, "preço aplicado gradualmente; elasticidade afeta churn e demanda"
+        if action_type == "advertising_campaign":
+            return definition.investment_usd, 0.0, "campanha converte novos clientes conforme o porte e a saúde atual da CDN"
         if action_type == "cache_upgrade":
             server_id = str(parameters.get("server_id", ""))
             level = int(parameters.get("level", 0))
@@ -231,6 +233,25 @@ class ManagementEngine:
                 elif action.action_type == "price_adjustment":
                     self._state.monthly_price_per_client_usd = float(action.parameters["monthly_price_usd"])
                     action.result = {"monthly_price_usd": self._state.monthly_price_per_client_usd}
+                elif action.action_type == "advertising_campaign":
+                    status = self._simulation_controller.status().get("scalability", {})
+                    health = max(0.05, min(1.0, float(status.get("health_score_pct", 100.0)) / 100.0))
+                    current = max(1, self._state.paying_clients)
+                    # Small networks gain more proportionally; health gates
+                    # conversion and a cap prevents an invalid population jump.
+                    acquired = round(min(
+                        current * 1.5,
+                        max(2.0, math.sqrt(current) * math.log1p(current) * (0.5 + health) * 1.4),
+                    ))
+                    self._state.base_paying_clients += acquired
+                    self._state.paying_clients += acquired
+                    self._state.arrivals_today += acquired
+                    self._state.arrivals_total += acquired
+                    action.result = {
+                        "new_clients": acquired,
+                        "health_factor_pct": round(health * 100, 1),
+                        "formula": "min(1.5N, sqrt(N) * ln(1+N) * (0.5+health) * 1.4)",
+                    }
                 elif action.action_type == "cache_upgrade":
                     node = self._state.nodes[str(action.parameters["server_id"])]
                     node.cache_level = int(action.parameters["level"])
@@ -333,12 +354,28 @@ class ManagementEngine:
         slo_success = float(world.config.get("slo_success_rate_pct", 99.0))
         compliant = self._state.latency_p95_ms <= slo_p95 and self._state.availability_pct >= slo_success
         self._state.sla_compliance_pct = round((sum(1 for item in self._state.history[-29:] if item.get("sla_compliant")) + int(compliant)) / max(1, min(30, len(self._state.history) + 1)) * 100, 2)
-        quality = max(0.0, 100.0 - max(0.0, self._state.latency_p95_ms - 100.0) * 0.08 - self._state.error_rate_pct * 1.5 - max(0.0, price_ratio - 1.0) * 25.0)
-        if self._state.feedback_count:
-            quality = quality * 0.75 + self._state.feedback_score * 0.25
-            quality -= max(0.0, self._state.feedback_latency_avg_ms - 180.0) * 0.04
-        self._state.customer_satisfaction = round(self._state.customer_satisfaction * 0.8 + quality * 0.2, 2)
-        self._state.reputation = round(self._state.reputation * 0.95 + self._state.customer_satisfaction * 0.05, 2)
+        clamp_rating = lambda value: max(0.0, min(10.0, value))
+        factors = {
+            "latency": clamp_rating(10.0 - max(0.0, self._state.latency_p95_ms - 80.0) / 42.0),
+            "reliability": clamp_rating(self._state.availability_pct / 10.0),
+            "price": clamp_rating(10.0 - max(0.0, price_ratio - 1.0) * 5.0),
+            "capacity": clamp_rating(10.0 - max(0.0, self._state.utilization - 0.65) * 14.0),
+            "feedback": clamp_rating(self._state.feedback_score / 10.0) if self._state.feedback_count else 7.5,
+        }
+        self._state.satisfaction_factors = {key: round(value, 1) for key, value in factors.items()}
+        quality = (
+            factors["latency"] * 0.25 + factors["reliability"] * 0.25
+            + factors["price"] * 0.20 + factors["capacity"] * 0.15
+            + factors["feedback"] * 0.15
+        ) * 10.0
+        self._state.customer_satisfaction = round(
+            max(0.0, min(100.0, self._state.customer_satisfaction * 0.8 + quality * 0.2)),
+            2,
+        )
+        self._state.reputation = round(
+            max(0.0, min(100.0, self._state.reputation * 0.95 + self._state.customer_satisfaction * 0.05)),
+            2,
+        )
         self._state.daily_revenue_usd = round(self._state.paying_clients * self._state.monthly_price_per_client_usd / 30.0, 2)
         node_opex = sum(node.monthly_cost_usd for node in self._state.nodes.values() if node.lifecycle_status != "stopped")
         self._state.cache_monthly_cost_usd = round(sum(node.cache_level * 15 for node in self._state.nodes.values()), 2)
@@ -348,7 +385,8 @@ class ManagementEngine:
         catalog_metrics = self._catalog.workload(round(self._state.metadata_query_rps), self._state.metadata_tier)
         self._state.metadata_lookup_ms = catalog_metrics["lookup_ms"]
         self._state.metadata_staleness_ms = catalog_metrics["staleness_ms"]
-        self._state.daily_opex_usd = round((node_opex + self._state.fixed_monthly_cost_usd + self._state.cache_monthly_cost_usd + self._state.balancing_monthly_cost_usd + self._state.metadata_monthly_cost_usd) / 30.0, 2)
+        self._state.monthly_opex_usd = round(node_opex + self._state.fixed_monthly_cost_usd + self._state.cache_monthly_cost_usd + self._state.balancing_monthly_cost_usd + self._state.metadata_monthly_cost_usd, 2)
+        self._state.daily_opex_usd = round(self._state.monthly_opex_usd / 30.0, 2)
         self._state.daily_profit_usd = round(self._state.daily_revenue_usd - self._state.daily_opex_usd, 2)
         # Day zero is the initial snapshot, not a paid accounting period.  The
         # first daily profit is posted after the first simulated day so the UI
@@ -376,6 +414,10 @@ class ManagementEngine:
                 slo_reasons.append(f"o p95 excedeu a meta de {slo_p95:g} ms")
             if self._state.availability_pct < slo_success:
                 slo_reasons.append(f"a disponibilidade ficou abaixo da meta de {slo_success:g}%")
+            self._state.alerts.append({
+                "severity": "critical",
+                "message": f"SLA fora da meta ≤ {slo_p95:g} ms nas 5% de entregas mais lentas: {'; '.join(slo_reasons)}.",
+            })
         if outage_factor < 1:
             self._state.alerts.append({"severity": "critical", "message": "Evento de cenário: queda de nó reduziu a capacidade agregada; verifique failover no Network Lab."})
         self._state.updated_at = time.time() if hasattr(self._state, "updated_at") else None

@@ -8,7 +8,7 @@ import uuid
 from repositories.in_memory import SimulationRepository
 from services.stream_service import StreamService
 from services.content_provider import default_content_id
-from utils.geo import haversine_km
+from utils.geo import haversine_km, rank_delivery_servers
 from utils.latency import propagation_delay_seconds
 
 
@@ -118,8 +118,10 @@ class ClientActivityService:
             # simulation; a client twice as far observes roughly twice the
             # propagation delay (before queueing and HTTP overhead).
             rejected = max(0, round(request_count * max(0.0, utilization - 1.0)))
-            server.requests_total += request_count
-            server.errors_total += rejected
+            server.simulated_requests_total += request_count
+            server.simulated_errors_total += rejected
+            server.requests_total = server.simulated_requests_total + server.http_requests_total
+            server.errors_total = server.simulated_errors_total + server.http_errors_total
             server.requests_in_flight = 0
             server.load = min(16, round(utilization * 16))
             server.utilization = round(utilization, 3)
@@ -151,24 +153,19 @@ class ClientActivityService:
         batch_size = min(len(active_clients), self.virtual_delivery_batch_size)
         start = ((tick - 1) * batch_size) % len(active_clients)
         now = time.time()
+        pending_assignments: dict[str, int] = {}
         for offset in range(batch_size):
             client = active_clients[(start + offset) % len(active_clients)]
-            # Keep the simulated playback route consistent with the real
-            # StreamService: geographic nearest eligible node first. The
-            # aggregate loop above still spreads capacity telemetry; it must
-            # not dictate which node a given client appears to use.
-            server = min(
+            # The aggregate delivery path keeps geography as its primary
+            # signal, but shares a same-tick burst with nearby idle nodes.
+            _score, server = rank_delivery_servers(
+                client.latitude,
+                client.longitude,
                 available,
-                key=lambda candidate: (
-                    haversine_km(
-                        client.latitude,
-                        client.longitude,
-                        candidate.latitude,
-                        candidate.longitude,
-                    ),
-                    candidate.server_id,
-                ),
-            )
+                require_http=False,
+                pending_assignments=pending_assignments,
+            )[0]
+            pending_assignments[server.server_id] = pending_assignments.get(server.server_id, 0) + 1
             distance = haversine_km(client.latitude, client.longitude, server.latitude, server.longitude)
             network_latency = round(propagation_delay_seconds(distance, 1.0) * 1000, 3)
             client.videos_consumed += 1

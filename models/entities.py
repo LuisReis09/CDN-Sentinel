@@ -55,7 +55,11 @@ class CDNServer:
     last_error: str | None = None
     uptime_seconds: float = 0.0
     requests_total: int = 0
+    simulated_requests_total: int = 0
+    http_requests_total: int = 0
     errors_total: int = 0
+    simulated_errors_total: int = 0
+    http_errors_total: int = 0
     requests_in_flight: int = 0
     last_request_at: float | None = None
     fault: Dict[str, Any] = field(default_factory=dict)

@@ -18,7 +18,7 @@ from services.stream_service import StreamService
 class LeakService:
     """Background simulator for malicious clients and external platforms."""
 
-    def __init__(self, repository: SimulationRepository, stream_service: StreamService, interval_seconds: float = 4.0) -> None:
+    def __init__(self, repository: SimulationRepository, stream_service: StreamService, interval_seconds: float = 4.0, on_leak: Callable[[dict], None] | None = None) -> None:
         self._repository = repository
         self._stream_service = stream_service
         self._interval_seconds = interval_seconds
@@ -26,6 +26,12 @@ class LeakService:
         self._random = random.Random(20261102)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._on_leak = on_leak
+        self._next_malicious_index = 0
+
+    def set_on_leak(self, callback: Callable[[dict], None] | None) -> None:
+        """Notify the monitor after a real, marked leak is persisted."""
+        self._on_leak = callback
 
     def start(self, tick_interval_seconds: float = 1.25) -> None:
         self.stop()
@@ -68,7 +74,9 @@ class LeakService:
             # path.  Limit this expensive work to one round-robin client per
             # cycle so a burst cannot starve visible simulation updates or
             # queue a backlog before monitors can inspect the first leak.
-            client = malicious[self._random.randrange(len(malicious))]
+            malicious.sort(key=lambda item: item.client_id)
+            client = malicious[self._next_malicious_index % len(malicious)]
+            self._next_malicious_index += 1
             try:
                 chunk = self._stream_service.stream(client, state, chunk_number=1)
                 try:
@@ -85,7 +93,7 @@ class LeakService:
                     {"id": "streambox", "name": "StreamBox", "kind": "retransmissão não autorizada"},
                     {"id": "torrent-index", "name": "Torrent Index", "kind": "índice de distribuição"},
                 ])
-                self._repository.append_leak({
+                leak = {
                     "leak_id": leak_id,
                     "client_id": client.client_id,
                     "server_id": chunk.server_id,
@@ -106,7 +114,10 @@ class LeakService:
                     "attributed": False,
                     "needs_reanalysis": False,
                     "analysis_count": 0,
-                })
+                }
+                self._repository.append_leak(leak)
+                if self._on_leak:
+                    self._on_leak(leak)
             except (PermissionError, RuntimeError, OSError):
                 continue
 

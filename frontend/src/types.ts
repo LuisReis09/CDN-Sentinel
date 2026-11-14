@@ -32,6 +32,8 @@ export interface ServerNode {
   messages_received: number;
   uptime_seconds?: number;
   requests_total?: number;
+  simulated_requests_total?: number;
+  http_requests_total?: number;
   errors_total?: number;
   requests_in_flight?: number;
   last_request_at?: number | null;
@@ -550,6 +552,7 @@ export interface ManagementState {
   sla_compliance_pct: number;
   daily_revenue_usd: number;
   daily_opex_usd: number;
+  monthly_opex_usd: number;
   daily_profit_usd: number;
   monthly_margin_pct: number;
   objective: Record<string, unknown>;
@@ -578,6 +581,7 @@ export interface ManagementState {
   feedback_score: number;
   feedback_count: number;
   feedback_latency_avg_ms: number;
+  satisfaction_factors: Record<"latency" | "reliability" | "price" | "capacity" | "feedback", number>;
 }
 
 export interface ForensicStudio {

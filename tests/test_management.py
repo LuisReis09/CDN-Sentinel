@@ -53,10 +53,28 @@ class ManagementSimulationTests(unittest.TestCase):
         self.engine = ManagementEngine(self.repository, FakeController(self.repository))
         self.engine.reset("free", 11)
 
-    def test_registry_has_exactly_six_actions(self):
-        self.assertEqual(self.engine.registry.action_types, ("horizontal_scale", "vertical_scale", "price_adjustment", "cache_upgrade", "load_balancing", "metadata_upgrade"))
+    def test_registry_exposes_commercial_campaign(self):
+        self.assertEqual(self.engine.registry.action_types, ("horizontal_scale", "vertical_scale", "price_adjustment", "advertising_campaign", "cache_upgrade", "load_balancing", "metadata_upgrade"))
         vertical = next(item for item in self.engine.action_definitions() if item["action_type"] == "vertical_scale")
         self.assertEqual(vertical["investment_by_tier"], {"standard": 280.0, "pro": 560.0, "enterprise": 1120.0})
+
+    def test_campaign_increases_clients_but_is_bounded_by_cdn_health(self):
+        before = self.engine.snapshot()
+        submitted = self.engine.apply_action({"action_type": "advertising_campaign", "parameters": {}, "expected_version": before["version"]})
+        self.assertEqual(submitted["action"]["status"], "pending")
+        self.engine.tick()
+        after = self.engine.snapshot()
+        event = next(item for item in after["events"] if item.get("action_type") == "advertising_campaign" and item["type"] == "management_action_applied")
+        self.assertGreater(event["result"]["new_clients"], 0)
+        self.assertLessEqual(event["result"]["new_clients"], before["paying_clients"] * 1.5)
+
+    def test_satisfaction_and_costs_stay_in_a_presentable_range(self):
+        self.engine.tick()
+        state = self.engine.snapshot()
+        self.assertGreaterEqual(state["customer_satisfaction"], 0)
+        self.assertLessEqual(state["customer_satisfaction"], 100)
+        self.assertGreaterEqual(state["monthly_opex_usd"], 0)
+        self.assertTrue(all(0 <= score <= 10 for score in state["satisfaction_factors"].values()))
 
     def test_scenarios_change_initial_conditions(self):
         free = self.engine.reset("free", 11)

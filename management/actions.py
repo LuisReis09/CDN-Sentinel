@@ -38,6 +38,9 @@ ACTION_DEFINITIONS = (
         "price_adjustment", "Ajustar preço dos clientes", "Comercial", "Alterar preço mensal com elasticidade e cooldown didáticos; cada experimento tem custo operacional.", 25, 0, 1, 5, [{"name": "monthly_price_usd", "kind": "number", "min": 1, "max": 200}], ["receita por pagante"], ["taxa do experimento, churn e demanda com atraso"]
     ),
     ActionDefinition(
+        "advertising_campaign", "Campanha publicitária", "Comercial", "Atrair uma onda de novos clientes proporcional à saúde real da CDN e ao porte atual da rede.", 400, 0, 1, 5, [], ["aquisição acelerada de clientes"], ["investimento antecipado; rede pressionada reduz a conversão"]
+    ),
+    ActionDefinition(
         "cache_upgrade", "Melhorar cache e prefetch", "Otimização", "Aumentar cache por nó/região com hits observáveis no modelo.", 180, 45, 1, 2, [{"name": "server_id", "kind": "server"}, {"name": "level", "kind": "number", "min": 1, "max": 3}], ["hit rate e cold miss"], ["RAM, armazenamento e banda de prefetch"]
     ),
     ActionDefinition(

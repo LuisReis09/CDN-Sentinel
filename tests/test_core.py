@@ -4,7 +4,7 @@ import unittest
 from services.watermark_service import WatermarkService
 from config import SimulationConfig
 from utils.robust_watermark import assess_robustness
-from utils.geo import haversine_km, load_global_cities
+from utils.geo import haversine_km, load_global_cities, rank_delivery_servers
 from utils.latency import propagation_delay_seconds
 from repositories.in_memory import NodeRepository
 from services.capacity_service import capacity_limits, profile_for_tier, service_metrics
@@ -78,6 +78,33 @@ class SecurityAndNetworkTests(unittest.TestCase):
             event["type"] in {"client_connected", "client_disconnected"}
             for event in repository.snapshot().events
         ))
+
+    def test_http_refresh_preserves_aggregate_request_counter(self):
+        repository = SimulationRepository()
+        server = CDNServer("cdn-01", "127.0.0.1", 5101, 0, 0, "Test", status="healthy", capacity_rps=10)
+        server.simulated_requests_total = 51
+        server.simulated_errors_total = 2
+        repository.replace(SimulationState(initialized=True, lifecycle="running", servers={server.server_id: server}))
+        http = CDNHttpClient()
+        controller = SimulationController(repository, http)
+        controller._http_client.status = lambda _server: {
+            "status": "healthy", "lifecycle_status": "running", "health_status": "healthy",
+            "requests_total": 3, "errors_total": 1, "capacity": {"capacity_rps": 10},
+        }
+        controller.refresh_servers()
+        refreshed = repository.state_ref().servers["cdn-01"]
+        self.assertEqual(refreshed.requests_total, 54)
+        self.assertEqual(refreshed.errors_total, 3)
+        self.assertEqual(refreshed.simulated_requests_total, 51)
+        self.assertEqual(refreshed.http_requests_total, 3)
+
+    def test_delivery_ranking_shares_nearby_nodes_but_keeps_geography(self):
+        first = CDNServer("cdn-a", "127.0.0.1", 5101, 0, 0, "A", capacity_rps=10, utilization=0.95)
+        second = CDNServer("cdn-b", "127.0.0.1", 5102, 0.01, 0.01, "B", capacity_rps=10, utilization=0.05)
+        far = CDNServer("cdn-c", "127.0.0.1", 5103, 20, 20, "C", capacity_rps=10, utilization=0.0)
+        ranked = rank_delivery_servers(0, 0, [first, second, far])
+        self.assertEqual(ranked[0][1].server_id, "cdn-b")
+        self.assertNotEqual(ranked[0][1].server_id, "cdn-c")
 
     def test_management_clock_uses_every_operational_tick(self):
         service = ClientActivityService(SimulationRepository(), StreamService(CDNHttpClient()))

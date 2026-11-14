@@ -74,6 +74,7 @@ class ManagementState:
     sla_compliance_pct: float = 100.0
     daily_revenue_usd: float = 0.0
     daily_opex_usd: float = 0.0
+    monthly_opex_usd: float = 0.0
     daily_profit_usd: float = 0.0
     monthly_margin_pct: float = 0.0
     cache_monthly_cost_usd: float = 0.0
@@ -93,6 +94,7 @@ class ManagementState:
     feedback_score: float = 0.0
     feedback_count: int = 0
     feedback_latency_avg_ms: float = 0.0
+    satisfaction_factors: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

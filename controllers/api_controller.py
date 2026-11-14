@@ -41,6 +41,7 @@ class ApiController:
         self.forensic_investigation_service = forensic_investigation_service
         self.hls_ab_service = hls_ab_service
         self.management_engine = management_engine
+        self.leak_service.set_on_leak(self.monitor_service.notify_leak)
         if self.management_engine:
             self.management_engine.set_server_added_callback(
                 self._monitor_management_server,
