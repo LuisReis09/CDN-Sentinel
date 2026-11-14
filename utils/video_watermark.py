@@ -29,7 +29,11 @@ from utils.image_watermark import (
 )
 
 
-VIDEO_STRENGTH = 24.0
+# H.264 quantization on the compact 320p simulator clips can erase the legacy
+# adaptive-spread signal at 24.  32 keeps the marker recoverable across the
+# FFmpeg builds used locally, in Docker and in CI without affecting QIM3 CDN
+# delivery, which uses its own calibrated step.
+VIDEO_STRENGTH = 32.0
 DETECTION_WIDTH = 640
 # Interactive uploads use a denser one-second evidence plan.  It makes the
 # public detector resilient to codec differences on short clips.  The CDN
