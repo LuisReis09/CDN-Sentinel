@@ -150,15 +150,21 @@ class ClientActivityService:
         # from hundreds of QIM/FFmpeg jobs. A suspected pirate whose real
         # marked media is being encoded/inspected is held until that forensic
         # pipeline resolves; suspicion alone is still not a blacklist action.
+        now = time.time()
+        active_quarantines = {
+            client_id
+            for client_id, entry in state.temporary_blacklist.items()
+            if float(entry.get("expires_at", 0)) > now
+        }
         progress_clients = [
             client for client in active_clients
             if client.client_id not in state.forensic_pending_clients
+            and client.client_id not in active_quarantines
         ]
         if not progress_clients:
             return
         batch_size = min(len(progress_clients), self.virtual_delivery_batch_size)
         start = ((tick - 1) * batch_size) % len(progress_clients)
-        now = time.time()
         pending_assignments: dict[str, int] = {}
         for offset in range(batch_size):
             client = progress_clients[(start + offset) % len(progress_clients)]

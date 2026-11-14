@@ -19,6 +19,7 @@ from repositories.in_memory import SimulationRepository
 from services.cdn_http_client import CDNHttpClient
 from services.client_activity_service import ClientActivityService
 from services.leak_service import LeakService
+from services.blacklist_service import BlacklistService
 from services.stream_service import StreamService
 from models.entities import CDNServer, Client, SimulationState
 from utils.video import generate_visual_variants, get_video_asset, list_video_examples
@@ -154,7 +155,7 @@ class SecurityAndNetworkTests(unittest.TestCase):
 
     def test_forensic_hold_stops_simulated_progress_before_real_proof_is_ready(self):
         class FakeStream:
-            def stream(self, client, state, chunk_number):
+            def stream(self, client, state, chunk_number, **_kwargs):
                 return SimpleNamespace(
                     payload=base64.b64encode(b"real-media-proof").decode(),
                     server_id="cdn-01",
@@ -184,6 +185,62 @@ class SecurityAndNetworkTests(unittest.TestCase):
             activity._advance_virtual_clients(repository.state_ref(), [malicious, regular], 1)
         self.assertEqual(malicious.videos_consumed, 0)
         self.assertEqual(regular.videos_consumed, 1)
+
+    def test_temporary_blacklist_blocks_delivery_but_allows_signed_forensic_capture(self):
+        from unittest.mock import Mock
+
+        client = Client("pirate", 0, 0, "Test", malicious=True)
+        server = CDNServer("cdn-01", "127.0.0.1", 5101, 0, 0, "Test", status="healthy")
+        state = SimulationState(
+            initialized=True,
+            lifecycle="running",
+            config={"latency_factor": 0},
+            clients={client.client_id: client},
+            servers={server.server_id: server},
+            forensic_pending_clients={client.client_id},
+            temporary_blacklist={client.client_id: {"expires_at": time.time() + 60}},
+        )
+        http = Mock()
+        with self.assertRaises(PermissionError):
+            StreamService(http).stream(client, state, 0)
+        http.stream.assert_not_called()
+        http.stream.return_value = {
+            "load": 0, "network_latency_ms": 1, "http_rtt_ms": 2,
+            "chunk_id": "forensic", "content_type": "video/mp4", "payload": "YQ==",
+            "watermark_token": "CDNWM1.x.y", "server_id": "cdn-01", "issued_at": 1,
+        }
+        result = StreamService(http).stream(client, state, 0, forensic_capture=True)
+        self.assertEqual(result.server_id, "cdn-01")
+        self.assertTrue(http.stream.call_args.kwargs["forensic_capture"])
+
+    def test_temporary_blacklist_is_distributed_reassigned_and_eventually_expires(self):
+        from unittest.mock import Mock
+
+        repository = SimulationRepository()
+        client = Client("pirate", 0, 0, "Test", malicious=True)
+        failed = CDNServer("cdn-a", "127.0.0.1", 5101, 0, 0, "A", status="offline")
+        healthy = CDNServer("cdn-b", "127.0.0.1", 5102, 1, 1, "B", status="healthy")
+        repository.replace(SimulationState(
+            initialized=True,
+            lifecycle="running",
+            config={"forensic_quarantine_seconds": 30},
+            clients={client.client_id: client},
+            servers={failed.server_id: failed, healthy.server_id: healthy},
+        ))
+        http = Mock()
+        service = BlacklistService(repository, http, WatermarkService("temporary-blacklist-test-secret"))
+        entry = service.quarantine(client.client_id)
+        self.assertEqual(entry["owner_server_id"], "cdn-b")
+        self.assertEqual(entry["propagated_to"], ["cdn-b"])
+        self.assertTrue(repository.state_ref().forensic_pending_clients)
+        entry["owner_server_id"] = "cdn-a"
+        actions = service.maintain_quarantines()
+        self.assertEqual(actions[0]["action"], "reassigned")
+        self.assertEqual(entry["owner_server_id"], "cdn-b")
+        entry["expires_at"] = time.time() - 1
+        self.assertEqual(service.maintain_quarantines()[0]["action"], "expired")
+        self.assertNotIn(client.client_id, repository.state_ref().temporary_blacklist)
+        self.assertNotIn(client.client_id, repository.state_ref().forensic_pending_clients)
 
     def test_leak_worker_captures_before_waiting_for_the_next_tick(self):
         service = LeakService(SimulationRepository(), StreamService(CDNHttpClient()))

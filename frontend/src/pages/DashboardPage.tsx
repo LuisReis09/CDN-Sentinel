@@ -52,10 +52,13 @@ export function DashboardPage({
       : status.scalability.slo_compliant
         ? "green"
         : "red";
+  const temporarilyBlocked = new Set(
+    (overview.temporary_blacklist ?? []).map((entry) => entry.client_id),
+  );
   const clients = overview.clients.map((client) =>
     overview.blacklist.some((entry) => entry.client_id === client.client_id)
       ? { ...client, active: false }
-      : client,
+      : { ...client, forensic_quarantined: temporarilyBlocked.has(client.client_id) },
   );
   const visibleServers = activeNode
     ? overview.servers.filter((server) => server.server_id === activeNode)

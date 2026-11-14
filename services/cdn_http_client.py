@@ -52,13 +52,15 @@ class CDNHttpClient:
         response.raise_for_status()
         return response.json()
 
-    def stream(self, server: CDNServer, client_id: str, chunk_number: int, distance_km: float, latency_factor: float, video_id: str | None = None, *, viewer_session_id: str | None = None) -> Dict[str, Any]:
+    def stream(self, server: CDNServer, client_id: str, chunk_number: int, distance_km: float, latency_factor: float, video_id: str | None = None, *, viewer_session_id: str | None = None, forensic_capture: bool = False) -> Dict[str, Any]:
         delay = sleep_for_distance(distance_km, latency_factor)
         url = f"{server.url}/internal/stream"
         started = time.monotonic()
         params = {"client_id": client_id, "chunk": chunk_number, "video_id": video_id or default_content_id()}
         if viewer_session_id:
             params["viewer_session_id"] = viewer_session_id
+        if forensic_capture:
+            params["forensic_capture"] = "1"
         response = requests.get(
             url,
             params=params,
@@ -92,6 +94,22 @@ class CDNHttpClient:
             headers=self._headers("POST", url, wire_payload),
             timeout=self._timeout,
         )
+        response.raise_for_status()
+        return response.json()
+
+    def submit_temporary_blacklist(self, server: CDNServer, entry: dict) -> Dict[str, Any]:
+        url = f"{server.url}/internal/quarantine"
+        payload = {"entry": entry}
+        wire_payload = self._wire_payload(url, payload)
+        response = requests.post(url, json=wire_payload, headers=self._headers("POST", url, wire_payload), timeout=self._timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def release_temporary_blacklist(self, server: CDNServer, entry: dict) -> Dict[str, Any]:
+        url = f"{server.url}/internal/quarantine/release"
+        payload = {"client_id": entry.get("client_id"), "quarantine_id": entry.get("quarantine_id")}
+        wire_payload = self._wire_payload(url, payload)
+        response = requests.post(url, json=wire_payload, headers=self._headers("POST", url, wire_payload), timeout=self._timeout)
         response.raise_for_status()
         return response.json()
 

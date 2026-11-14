@@ -27,11 +27,25 @@ class LeakService:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._on_leak = on_leak
+        self._on_quarantine: Callable[[str], object] | None = None
+        self._on_quarantine_release: Callable[[str, str], object] | None = None
         self._next_malicious_index = 0
 
     def set_on_leak(self, callback: Callable[[dict], None] | None) -> None:
         """Notify the monitor after a real, marked leak is persisted."""
         self._on_leak = callback
+
+    def set_on_quarantine(self, callback: Callable[[str], object] | None, release_callback: Callable[[str, str], object] | None = None) -> None:
+        self._on_quarantine = callback
+        self._on_quarantine_release = release_callback
+
+    def _release_quarantine(self, client_id: str, reason: str) -> None:
+        if self._on_quarantine_release:
+            self._on_quarantine_release(client_id, reason)
+        else:
+            state = self._repository.state_ref()
+            state.forensic_pending_clients.discard(client_id)
+            state.temporary_blacklist.pop(client_id, None)
 
     def start(self, tick_interval_seconds: float = 1.25) -> None:
         self.stop()
@@ -85,14 +99,18 @@ class LeakService:
             malicious.sort(key=lambda item: item.client_id)
             client = malicious[self._next_malicious_index % len(malicious)]
             self._next_malicious_index += 1
-            # This is a temporary investigative hold, not a blacklist entry.
-            state.forensic_pending_clients.add(client.client_id)
+            # Install the leased temporary blacklist before producing media.
+            # The callback distributes it to all available CDN nodes.
+            if self._on_quarantine:
+                self._on_quarantine(client.client_id)
+            else:
+                state.forensic_pending_clients.add(client.client_id)
             try:
-                chunk = self._stream_service.stream(client, state, chunk_number=1)
+                chunk = self._stream_service.stream(client, state, chunk_number=1, forensic_capture=True)
                 try:
                     media = base64.b64decode(chunk.payload, validate=True)
                 except (ValueError, TypeError):
-                    state.forensic_pending_clients.discard(client.client_id)
+                    self._release_quarantine(client.client_id, "invalid evidence payload")
                     return
                 leak_root = Path(os.getenv("CDN_LEAK_MEDIA_ROOT", "data/runtime/leaks"))
                 leak_root.mkdir(parents=True, exist_ok=True)
@@ -130,6 +148,6 @@ class LeakService:
                 if self._on_leak:
                     self._on_leak(leak)
             except (PermissionError, RuntimeError, OSError):
-                state.forensic_pending_clients.discard(client.client_id)
+                self._release_quarantine(client.client_id, "evidence capture failed")
                 return
 

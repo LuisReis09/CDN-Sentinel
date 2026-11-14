@@ -157,6 +157,9 @@ class SimulationState:
     # a real, watermarked leak for it. It is not a blacklist: it merely
     # prevents aggregate playback from racing ahead of the evidence pipeline.
     forensic_pending_clients: set[str] = field(default_factory=set)
+    # Leased, pre-verdict delivery blocks. Unlike the permanent blacklist,
+    # these entries expire or are reassigned if their investigating node dies.
+    temporary_blacklist: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     leaks: List[Dict[str, Any]] = field(default_factory=list)
     scan_history: List[Dict[str, Any]] = field(default_factory=list)
     metrics_history: List[Dict[str, Any]] = field(default_factory=list)

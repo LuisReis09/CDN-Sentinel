@@ -304,9 +304,12 @@ function ClientMarker({
   client: Client;
   onSelect: () => void;
 }) {
+  const quarantined = Boolean(client.forensic_quarantined);
   const banned = !client.active;
   const dangerous = client.malicious && !banned;
-  const state = banned
+  const state = quarantined
+    ? "quarantined"
+    : banned
     ? "banned"
     : dangerous
       ? "dangerous"
@@ -315,6 +318,7 @@ function ClientMarker({
     active: { color: "#8fc8ff", fillColor: "#1763a1" },
     dangerous: { color: "#ffd08b", fillColor: "#b5682e" },
     banned: { color: "#ff6177", fillColor: "#a52b47" },
+    quarantined: { color: "#a5afba", fillColor: "#5b6672" },
   }[state];
   return (
     <CircleMarker
@@ -328,7 +332,9 @@ function ClientMarker({
         <br />
         {client.city}
         <br />
-        {banned
+        {quarantined
+          ? "QUARENTENA FORENSE TEMPORARIA"
+          : banned
           ? "BLACKLIST"
           : dangerous
             ? "cliente perigoso"

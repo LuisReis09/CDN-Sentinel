@@ -42,6 +42,10 @@ class ApiController:
         self.hls_ab_service = hls_ab_service
         self.management_engine = management_engine
         self.leak_service.set_on_leak(self.monitor_service.notify_leak)
+        self.leak_service.set_on_quarantine(
+            self.monitor_service.quarantine_client,
+            self.monitor_service.release_quarantine,
+        )
         if self.management_engine:
             self.management_engine.set_server_added_callback(
                 self._monitor_management_server,
@@ -193,6 +197,7 @@ class ApiController:
         return self.management_engine.history()
 
     def status(self) -> dict:
+        self.monitor_service.maintain_quarantines()
         return self.simulation_controller.status()
 
     def create_client(self, payload: dict) -> dict:
@@ -222,6 +227,21 @@ class ApiController:
         if client is None:
             raise KeyError(f"Cliente {client_id} não encontrado")
         return self.stream_service.stream(client, state, chunk_number, request_id, viewer_session_id=viewer_session_id).to_dict()
+
+    def _delivery_client(self, client_id: str):
+        """Return a client only when it may receive video data."""
+        state = self.repository.state_ref()
+        client = state.clients.get(client_id)
+        if client is None:
+            raise KeyError("client not found")
+        temporary = state.temporary_blacklist.get(client_id)
+        if temporary and float(temporary.get("expires_at", 0)) > time.time():
+            raise PermissionError("client temporarily blocked during forensic analysis")
+        if client_id in state.forensic_pending_clients:
+            raise PermissionError("client temporarily blocked during forensic analysis")
+        if not client.active or client_id in state.blacklist:
+            raise PermissionError("client unavailable")
+        return client
 
     def stream_media(self, client_id: str, chunk_number: int, request_id: str | None = None, viewer_session_id: str | None = None) -> tuple[bytes, dict]:
         """Return the playable bytes while retaining the JSON route for compatibility."""
@@ -298,6 +318,7 @@ class ApiController:
             "servers": servers,
             "clients": self.clients(),
             "blacklist": blacklist,
+            "temporary_blacklist": list(state.temporary_blacklist.values()),
             "leaks": self.leak_summaries(),
             "recent_events": sorted(selected_events, key=lambda event: event.get("at", 0))[-35:],
             "recent_traffic": self.traffic()[-25:],
@@ -347,6 +368,7 @@ class ApiController:
         state = self.repository.state_ref()
         if not state.initialized or state.lifecycle == "ended":
             raise RuntimeError("simulação não inicializada")
+        self._delivery_client(client_id)
         client = state.clients.get(client_id)
         if client is None:
             raise KeyError("cliente não encontrado")
@@ -356,5 +378,13 @@ class ApiController:
         if server is None:
             raise RuntimeError("nenhum servidor disponível")
         return self.hls_ab_service.create_session(client_id, server.server_id, str(state.config.get("video_id")), viewer_session_id=viewer_session_id)
+
+    def hls_manifest(self, client_id: str, session_id: str) -> str:
+        self._delivery_client(client_id)
+        return self.hls_ab_service.manifest(session_id, client_id)
+
+    def hls_segment(self, client_id: str, session_id: str, index: int):
+        self._delivery_client(client_id)
+        return self.hls_ab_service.segment(session_id, client_id, index)
 
 

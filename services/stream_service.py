@@ -81,9 +81,14 @@ class StreamService:
             })
         return feedback
 
-    def stream(self, client: Client, state: SimulationState, chunk_number: int = 0, request_id: str | None = None, *, viewer_session_id: str | None = None) -> VideoChunk:
+    def stream(self, client: Client, state: SimulationState, chunk_number: int = 0, request_id: str | None = None, *, viewer_session_id: str | None = None, forensic_capture: bool = False) -> VideoChunk:
         if state.paused:
             raise SimulationPausedError("A simulação está pausada")
+        temporary_entry = state.temporary_blacklist.get(client.client_id)
+        if not forensic_capture and temporary_entry and float(temporary_entry.get("expires_at", 0)) > time.time():
+            raise PermissionError("cliente temporariamente bloqueado durante a analise forense")
+        if not forensic_capture and client.client_id in state.forensic_pending_clients:
+            raise PermissionError("cliente temporariamente bloqueado durante a analise forense")
         if chunk_number < 0:
             raise ValueError("chunk deve ser maior ou igual a zero")
         request_id = request_id or f"req-{uuid.uuid4().hex[:16]}"
@@ -128,7 +133,10 @@ class StreamService:
             candidate_details[index]["attempted"] = True
             try:
                 stream_args = (candidate, client.client_id, chunk_number, distance, float(state.config["latency_factor"]), str(state.config.get("video_id") or default_content_id()))
-                result = self._http_client.stream(*stream_args, viewer_session_id=viewer_session_id) if viewer_session_id else self._http_client.stream(*stream_args)
+                stream_kwargs = {"forensic_capture": True} if forensic_capture else {}
+                if viewer_session_id:
+                    stream_kwargs["viewer_session_id"] = viewer_session_id
+                result = self._http_client.stream(*stream_args, **stream_kwargs)
                 if self._watermark_service and result.get("watermark_token"):
                     self._watermark_service.register_token(str(result["watermark_token"]))
                 selected_server = candidate

@@ -421,10 +421,12 @@ def register_api_routes(api, controller: ApiController) -> None:
             try:
                 if controller.viewer_auth_required and viewer_context(client_id) != session_id:
                     raise ViewerAuthenticationError("sessão de espectador incompatível")
-                manifest = controller.hls_ab_service.manifest(session_id, client_id)
+                manifest = controller.hls_manifest(client_id, session_id)
                 return Response(manifest, mimetype="application/vnd.apple.mpegurl", headers={"Cache-Control": "private, no-store"})
             except ViewerAuthenticationError as exc:
                 return {"error": str(exc)}, 401
+            except PermissionError as exc:
+                return {"error": str(exc)}, 403
             except (KeyError, ValueError):
                 return {"error": "sessão HLS não encontrada"}, 404
 
@@ -434,10 +436,12 @@ def register_api_routes(api, controller: ApiController) -> None:
             try:
                 if controller.viewer_auth_required and viewer_context(client_id) != session_id:
                     raise ViewerAuthenticationError("sessão de espectador incompatível")
-                path = controller.hls_ab_service.segment(session_id, client_id, index)
+                path = controller.hls_segment(client_id, session_id, index)
                 return send_file(path, mimetype="video/mp2t", conditional=True, etag=True)
             except ViewerAuthenticationError as exc:
                 return {"error": str(exc)}, 401
+            except PermissionError as exc:
+                return {"error": str(exc)}, 403
             except (KeyError, ValueError, IndexError, FileNotFoundError):
                 return {"error": "segmento HLS não encontrado"}, 404
 

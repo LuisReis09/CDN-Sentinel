@@ -475,7 +475,7 @@ class SimulationController:
             "malicious_clients": client_summary["malicious"],
             "initialization": self.initialization_progress(),
             "blacklisted_total": len(state.blacklist),
-            "forensic_pending_total": len(state.forensic_pending_clients),
+            "forensic_pending_total": len(state.temporary_blacklist) or len(state.forensic_pending_clients),
             "scalability": {
                 "active_clients": active_clients,
                 "healthy_servers": healthy_servers,

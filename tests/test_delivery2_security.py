@@ -1,6 +1,7 @@
 import copy
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
@@ -84,6 +85,32 @@ class Delivery2SecurityTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["latency_factor"], 2.0)
+        node._retry_stop.set()
+
+    def test_node_enforces_and_releases_a_leased_temporary_blacklist(self):
+        node = CDNNode("cdn-test", "127.0.0.1", 59993, 0, 0, "Test", "secret", 1)
+        client = create_node_app(node).test_client()
+        entry = {
+            "client_id": "client-1",
+            "quarantine_id": "quarantine-test",
+            "expires_at": time.time() + 30,
+        }
+        payload = encrypt_payload({"entry": entry}, "secret", aad="/internal/quarantine")
+        response = client.post(
+            "/internal/quarantine",
+            json=payload,
+            headers=signed_headers("secret", "POST", "/internal/quarantine", payload),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(node.repository.is_temporarily_blacklisted("client-1"))
+        release = encrypt_payload({"client_id": "client-1", "quarantine_id": "quarantine-test"}, "secret", aad="/internal/quarantine/release")
+        response = client.post(
+            "/internal/quarantine/release",
+            json=release,
+            headers=signed_headers("secret", "POST", "/internal/quarantine/release", release),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(node.repository.is_temporarily_blacklisted("client-1"))
         node._retry_stop.set()
 
     def test_snapshot_does_not_expose_live_mutable_state(self):

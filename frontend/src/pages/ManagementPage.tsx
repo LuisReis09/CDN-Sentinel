@@ -407,7 +407,12 @@ export function ManagementPage({
             <span className="observed-badge">OBSERVADO + SIMULADO</span>
           </div>
           <MapView
-            clients={overview.clients}
+            clients={overview.clients.map((client) => ({
+              ...client,
+              forensic_quarantined: (overview.temporary_blacklist ?? []).some(
+                (entry) => entry.client_id === client.client_id,
+              ),
+            }))}
             servers={overview.servers}
             traffic={overview.recent_traffic}
             events={overview.recent_events}

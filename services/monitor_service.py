@@ -110,6 +110,33 @@ class MonitorService:
         if wake_event:
             wake_event.set()
 
+    def quarantine_client(self, client_id: str) -> dict:
+        return self._blacklist_service.quarantine(client_id)
+
+    def release_quarantine(self, client_id: str, reason: str) -> None:
+        if self._blacklist_service:
+            self._blacklist_service.release_quarantine(client_id, reason)
+
+    def maintain_quarantines(self) -> list[dict]:
+        """Transfer live investigations away from a failed analysis node."""
+        if not self._blacklist_service:
+            return []
+        actions = self._blacklist_service.maintain_quarantines()
+        if not actions:
+            return actions
+        state = self._repository.state_ref()
+        for action in actions:
+            if action.get("action") != "reassigned":
+                continue
+            client_id = action["client_id"]
+            replacement = action["server_id"]
+            for leak in state.leaks:
+                if leak.get("client_id") == client_id and not leak.get("processed"):
+                    leak["server_id"] = replacement
+                    leak["analysis_owner_server_id"] = replacement
+                    self.notify_leak(leak)
+        return actions
+
     def _run(self, server_id: str, stop_event: threading.Event, wake_event: threading.Event) -> None:
         while not stop_event.is_set():
             wake_event.wait(self._tick_interval_seconds)
@@ -210,6 +237,7 @@ class MonitorService:
                         leak["needs_reanalysis"] = True
                         leak["next_analysis_at"] = time.time() + 300.0
                         leak["detected_by_server_id"] = server_id
+                        self.release_quarantine(str(leak.get("client_id") or ""), "forensic analysis inconclusive")
                         rejected.append({
                             "leak_id": leak.get("leak_id"),
                             "monitor_server_id": server_id,
@@ -245,6 +273,7 @@ class MonitorService:
                 leak["review_status"] = "PENDING_REVIEW"
                 leak["detected_at"] = time.time()
                 leak["detected_by_server_id"] = server_id
+                self.release_quarantine(str(leak.get("client_id") or ""), "forensic analysis failed")
                 detected.append({"leak_id": leak["leak_id"], "monitor_server_id": server_id, "claim": claim, "investigation_id": investigation["investigation_id"], "decision": "PENDING_REVIEW", "blacklist": blacklist_entry.to_dict(), "forensic_source": leak["forensic_source"]})
             except (ValueError, KeyError, TypeError, OSError, RuntimeError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
                 leak["processed"] = False

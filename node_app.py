@@ -120,6 +120,7 @@ class CDNNode:
             "capacity": capacity,
             "load": self.repository.load(),
             "blacklist_size": len(self.repository.blacklist()),
+            "temporary_blacklist_size": self.repository.temporary_blacklist_size(),
             "messages_received": self.repository.message_count(),
             "peers": [peer["server_id"] for peer in self.peers],
             "uptime_seconds": round(time.time() - self.started_at, 3),
@@ -184,7 +185,7 @@ class CDNNode:
             # is intentionally retained as a bounded runtime cache.
             del temporary_source
 
-    def stream(self, client_id: str, chunk_number: int, video_id: str | None = None, viewer_session_id: str | None = None) -> dict:
+    def stream(self, client_id: str, chunk_number: int, video_id: str | None = None, viewer_session_id: str | None = None, forensic_capture: bool = False) -> dict:
         video_id = video_id or default_content_id()
         reservation = None
         failed = False
@@ -195,6 +196,8 @@ class CDNNode:
                 raise RuntimeError(f"mensagem perdida no nó {self.server_id}")
             if self.repository.is_blacklisted(client_id):
                 raise PermissionError(f"Cliente {client_id} bloqueado no nó {self.server_id}")
+            if not forensic_capture and self.repository.is_temporarily_blacklisted(client_id):
+                raise PermissionError(f"Cliente {client_id} in forensic quarantine on node {self.server_id}")
             reservation = self.repository.begin_request(
                 self.capacity_profile.max_concurrent_requests,
                 self.capacity_profile.max_queue_depth,
@@ -399,6 +402,8 @@ def create_node_app(node: CDNNode) -> Flask:
             auth_payload = {"client_id": client_id, "chunk": int(request.args.get("chunk", "0")), "video_id": request.args.get("video_id") or default_content_id()}
             if request.args.get("viewer_session_id"):
                 auth_payload["viewer_session_id"] = request.args["viewer_session_id"]
+            if request.args.get("forensic_capture") == "1":
+                auth_payload["forensic_capture"] = "1"
         except ValueError:
             return jsonify({"error": "chunk deve ser inteiro"}), 400
         denied = authenticate(auth_payload)
@@ -410,7 +415,7 @@ def create_node_app(node: CDNNode) -> Flask:
         if not client_id:
             return jsonify({"error": "client_id é obrigatório"}), 400
         try:
-            return jsonify(node.stream(client_id, chunk_number, auth_payload["video_id"], auth_payload.get("viewer_session_id")))
+            return jsonify(node.stream(client_id, chunk_number, auth_payload["video_id"], auth_payload.get("viewer_session_id"), auth_payload.get("forensic_capture") == "1"))
         except PermissionError as exc:
             return jsonify({"error": str(exc)}), 403
         except CapacityRejected as exc:
@@ -474,6 +479,34 @@ def create_node_app(node: CDNNode) -> Flask:
         if not isinstance(entries, list):
             return jsonify({"error": "entries deve ser uma lista"}), 400
         return jsonify(node.reconcile_blacklist(entries))
+
+    @app.post("/internal/quarantine")
+    def internal_quarantine() -> Any:
+        """Install a leased forensic-delivery block from the controller."""
+        body, denied = encrypted_body()
+        if denied:
+            return denied
+        entry = body.get("entry", body)
+        try:
+            client_id = str(entry["client_id"])
+            if not entry.get("quarantine_id") or float(entry.get("expires_at", 0)) <= time.time():
+                raise ValueError("invalid temporary blacklist lease")
+            was_new = node.repository.add_temporary_blacklist(entry)
+            node.repository.record_message({"received_at": time.time(), "message_type": "TEMPORARY_BLACKLIST", "client_id": client_id})
+            return jsonify({"accepted": True, "already_present": not was_new, "server_id": node.server_id})
+        except (KeyError, TypeError, ValueError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/internal/quarantine/release")
+    def internal_quarantine_release() -> Any:
+        body, denied = encrypted_body()
+        if denied:
+            return denied
+        client_id = str(body.get("client_id") or "")
+        if not client_id:
+            return jsonify({"error": "client_id is required"}), 400
+        removed = node.repository.remove_temporary_blacklist(client_id, body.get("quarantine_id"))
+        return jsonify({"released": removed, "server_id": node.server_id})
 
     @app.post("/internal/content-telemetry")
     def internal_content_telemetry() -> Any:

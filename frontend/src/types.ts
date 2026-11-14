@@ -85,6 +85,7 @@ export interface Client {
   dislikes?: number;
   feedback_score?: number;
   feedback_latency_avg_ms?: number;
+  forensic_quarantined?: boolean;
 }
 
 export interface Traffic {
@@ -277,6 +278,7 @@ export interface Overview {
   servers: ServerNode[];
   clients: Client[];
   blacklist: BlacklistEntry[];
+  temporary_blacklist?: Array<{ client_id: string; expires_at: number; owner_server_id?: string | null }>;
   leaks: LeakRecord[];
   recent_events: SimulationEvent[];
   recent_traffic: Traffic[];

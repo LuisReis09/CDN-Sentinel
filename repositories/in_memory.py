@@ -70,6 +70,7 @@ class SimulationRepository:
             snapshot.servers = copy.deepcopy(self._state.servers)
             snapshot.blacklist = copy.deepcopy(self._state.blacklist)
             snapshot.forensic_pending_clients = copy.deepcopy(self._state.forensic_pending_clients)
+            snapshot.temporary_blacklist = copy.deepcopy(self._state.temporary_blacklist)
             snapshot.leaks = copy.deepcopy(self._state.leaks)
             snapshot.scan_history = copy.deepcopy(self._state.scan_history)
             snapshot.metrics_history = copy.deepcopy(self._state.metrics_history)
@@ -208,6 +209,7 @@ class NodeRepository:
 
     def __init__(self) -> None:
         self._blacklist: Dict[str, dict] = {}
+        self._temporary_blacklist: Dict[str, dict] = {}
         self._load = 0
         self._messages: List[dict] = []
         self._seen_messages: Dict[str, float] = {}
@@ -237,6 +239,40 @@ class NodeRepository:
     def blacklist(self) -> List[dict]:
         with self._lock:
             return copy.deepcopy(list(self._blacklist.values()))
+
+    def add_temporary_blacklist(self, entry: dict) -> bool:
+        with self._lock:
+            self._purge_temporary_locked()
+            client_id = str(entry["client_id"])
+            was_new = client_id not in self._temporary_blacklist
+            self._temporary_blacklist[client_id] = copy.deepcopy(entry)
+            return was_new
+
+    def remove_temporary_blacklist(self, client_id: str, quarantine_id: str | None = None) -> bool:
+        with self._lock:
+            entry = self._temporary_blacklist.get(client_id)
+            if not entry or (quarantine_id and entry.get("quarantine_id") != quarantine_id):
+                return False
+            self._temporary_blacklist.pop(client_id, None)
+            return True
+
+    def is_temporarily_blacklisted(self, client_id: str) -> bool:
+        with self._lock:
+            self._purge_temporary_locked()
+            return client_id in self._temporary_blacklist
+
+    def temporary_blacklist_size(self) -> int:
+        with self._lock:
+            self._purge_temporary_locked()
+            return len(self._temporary_blacklist)
+
+    def _purge_temporary_locked(self) -> None:
+        now = time.time()
+        self._temporary_blacklist = {
+            client_id: entry
+            for client_id, entry in self._temporary_blacklist.items()
+            if float(entry.get("expires_at", 0)) > now
+        }
 
     def mark_message_seen(self, message_id: str, ttl_seconds: float = 300.0) -> bool:
         now = time.time()
