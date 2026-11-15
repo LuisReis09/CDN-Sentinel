@@ -92,6 +92,15 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
         <span>
           saúde: <b>{scale.health_score_pct === undefined ? "sem dados" : `${Math.round(scale.health_score_pct)}%`}</b>
         </span>
+        <span>
+          política: <b>{scale.routing_policy ?? "híbrida"}</b>
+        </span>
+        {scale.forensic_funnel && (
+          <span>
+            forense: <b>{scale.forensic_funnel.confirmed}/{scale.forensic_funnel.captured}</b>
+            {scale.forensic_funnel.awaiting_capture > 0 && <small> · {scale.forensic_funnel.awaiting_capture} aguardando captura</small>}
+          </span>
+        )}
       </div>
       <div className="economics-grid">
         <div>
@@ -108,7 +117,7 @@ export function ScalabilityPanel({ status }: { status: SimulationStatus }) {
           <strong>
             {formatUsd(economics.break_even_price_per_client_usd)}/cliente
           </strong>
-          <small>sem margem, diluído em {status.clients_total} clientes</small>
+          <small>sem margem, diluído em {status.paying_clients ?? status.clients_total} pagantes</small>
         </div>
         <div>
           <span>Preço recomendado</span>

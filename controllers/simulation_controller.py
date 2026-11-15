@@ -23,6 +23,7 @@ from services.city_lookup_service import CityLookupService
 from services.capacity_service import capacity_limits, profile_for_tier, service_metrics
 from services.content_provider import default_content_id
 from utils.geo import city_with_jitter, haversine_km, load_global_cities
+from utils.node_identity import generate_node_identity
 
 
 def effective_server_health(server: CDNServer, *, latency_p95_ms: float, slo_p95_ms: float) -> str:
@@ -64,6 +65,7 @@ class SimulationController:
         self._processes: Dict[str, subprocess.Popen] = {}
         self._client_processes: Dict[str, subprocess.Popen] = {}
         self._secret_key = "local-development-secret"
+        self._node_private_keys: Dict[str, str] = {}
         self._city_lookup = CityLookupService()
         self._initialization_lock = threading.RLock()
         self._initialization = {
@@ -92,6 +94,12 @@ class SimulationController:
         self.shutdown_nodes()
         self._set_initialization_progress(True, 16, "topology", f"Gerando {config.num_servers} servidores e {config.num_clients} clientes")
         servers, clients = self._topology.build(config)
+        self._node_private_keys = {}
+        for server in servers.values():
+            private_key, public_key = generate_node_identity()
+            self._node_private_keys[server.server_id] = private_key
+            server.public_key = public_key
+        self._http_client.configure_node_identities(self._node_private_keys)
         for index, server in enumerate(servers.values()):
             if index >= self._real_node_process_limit:
                 server.process_mode = "virtual"
@@ -104,7 +112,7 @@ class SimulationController:
             "node_protocol": "HTTP/1.1",
             "routing_algorithm": "Haversine / nearest healthy CDN",
             "gossip_protocol": "hierarchical origin-regional-edge gossip",
-            "internal_encryption": "AES-256-GCM envelope + HMAC-SHA256 signature",
+            "internal_encryption": "AES-256-GCM envelope + HMAC-SHA256 control MAC + Ed25519 peer signature",
             "watermark_algorithm": "AES-256-GCM + HMAC-SHA256",
         })
 
@@ -179,9 +187,10 @@ class SimulationController:
         if config.num_clients != len(state.clients):
             self._resize_clients(config.num_clients, config)
         state.config.update(config.to_dict())
-        for client in state.clients.values():
-            digest = hashlib.sha256(f"{client.client_id}:{config.malicious_probability}".encode()).digest()
-            client.malicious = int.from_bytes(digest[:8], "big") / 2**64 < config.malicious_probability
+        # Existing client intent is part of the experiment seed. Updating
+        # demand, price, latency or even the configured probability must not
+        # silently reshuffle already observed pirates. The probability only
+        # applies to clients created after this update.
         for server in state.servers.values():
             if server.status == "healthy" and server.process_mode == "http":
                 try:
@@ -206,12 +215,23 @@ class SimulationController:
                 client_id = f"client-{sequence:04d}"
             city = cities[(sequence + len(state.servers) + config.seed) % len(cities)]
             latitude, longitude = city_with_jitter(rng, city)
+            malicious = rng.random() < config.malicious_probability
             client = Client(
                 client_id=client_id,
                 latitude=latitude,
                 longitude=longitude,
                 city=city.name,
-                malicious=rng.random() < config.malicious_probability,
+                malicious=malicious,
+                activity_rate_rps=round(max(0.03, config.demand_rps_per_client * rng.uniform(0.35, 1.8)), 4),
+                session_probability=round(rng.uniform(0.55, 0.98), 3),
+                watch_interval_ticks=round(rng.uniform(0.5, 3.5), 2),
+                next_activity_tick=rng.randint(0, 2),
+                timezone_offset_hours=int(round(city.longitude / 15.0)),
+                content_affinity=round(rng.uniform(0.7, 1.35), 3),
+                piracy_intent_probability=round(rng.uniform(0.35, 0.95), 3) if malicious else 0.0,
+                piracy_attempt_probability=round(rng.uniform(0.25, 0.8), 3) if malicious else 0.0,
+                piracy_publish_probability=round(rng.uniform(0.3, 0.9), 3) if malicious else 0.0,
+                piracy_detection_probability=round(rng.uniform(0.8, 1.0), 3) if malicious else 0.0,
             )
             self._repository.add_client(client)
             self._start_client(client, len(state.clients) - 1)
@@ -303,7 +323,13 @@ class SimulationController:
         client_summary = self._repository.client_summary()
         now = time.time()
         active_clients = client_summary["active"]
-        demand_rps = active_clients * float(state.config.get("demand_rps_per_client", 0.25))
+        configured_demand_rps = float(state.config.get("demand_rps_per_client", 0.25))
+        demand_rps = float(client_summary.get("demand_rps", 0.0) or 0.0)
+        if active_clients:
+            # Seeded clients can be quieter or busier, but the configured
+            # baseline remains the lower bound for capacity planning and for
+            # legacy/manual clients that do not carry a profile.
+            demand_rps = max(demand_rps, active_clients * configured_demand_rps)
         available_servers = sum(1 for server in state.servers.values() if server.status in {"healthy", "degraded", "overloaded"})
         capacity_values = [float(server.capacity_rps) for server in state.servers.values() if server.server_id and server.status in {"healthy", "degraded", "overloaded"} and server.capacity_rps > 0]
         if not capacity_values and available_servers:
@@ -343,9 +369,9 @@ class SimulationController:
         error_count = sum(int(server.errors_total) for server in state.servers.values())
         monthly_server_cost = sum(float(profile_for_tier(server.capacity_tier).cost_monthly_usd) for server in state.servers.values() if server.status != "stopped") or available_servers * float(state.config.get("monthly_server_cost_usd", 100.0))
         monthly_fixed_cost = float(state.config.get("monthly_fixed_cost_usd", 150.0))
-        monthly_variable_cost = active_clients * 2.0
+        paying_clients = int(client_summary.get("paying_active", 0) or 0)
+        monthly_variable_cost = paying_clients * 2.0
         monthly_cost = monthly_server_cost + monthly_fixed_cost + monthly_variable_cost
-        paying_clients = max(1, client_summary["total"]) if client_summary["total"] else 0
         configured_price = float(state.config.get("monthly_client_price_usd", 25.0))
         break_even_price = monthly_cost / paying_clients if paying_clients else 0
         minimum_price = break_even_price * 1.2 if paying_clients else 0
@@ -365,25 +391,37 @@ class SimulationController:
                 server_latencies[server_id].append(
                     float(item.get("end_to_end_ms", item.get("http_rtt_ms", 0.0)))
                 )
-        # The aggregate demand model is the source of pressure for the
-        # orchestration view.  Reflect it on every participating node even
-        # before an optional local HTTP request reaches that node.
-        modeled_pressure = demand_rps / max(capacity, 1.0)
+        server_requests_window: dict[str, int] = {server_id: 0 for server_id in state.servers}
+        server_rejected_window: dict[str, int] = {server_id: 0 for server_id in state.servers}
+        for item in customer_traffic:
+            server_id = str(item.get("server_id") or "")
+            if server_id in server_requests_window:
+                server_requests_window[server_id] += int(item.get("request_count", 1) or 0)
+                server_rejected_window[server_id] += int(item.get("rejected_count", 0) or 0)
+        # Each node gets pressure from the traffic actually routed to it. A
+        # global demand ratio is useful for the economics card, but copying it
+        # to every node hid hot spots and made routing actions unobservable.
+        traffic_observed = bool(customer_traffic)
         for server in state.servers.values():
             if server.status not in {"healthy", "degraded", "overloaded"}:
                 continue
-            modeled_queue_depth = max(0, round((modeled_pressure - 0.90) * 20))
-            modeled_queue_wait_ms = round(max(0.0, modeled_pressure - 0.75) * 120, 3)
-            # The orchestration screen uses a common aggregate-demand model
-            # for virtual and local HTTP nodes.  Assigning (rather than
-            # accumulating) these derived fields lets a recovered node turn
-            # green immediately after a capacity action; measured request
-            # latency and error counters remain separate evidence below.
-            server.utilization = round(modeled_pressure, 3)
-            server.capacity_pressure = round(modeled_pressure, 3)
-            server.load = min(16, round(modeled_pressure * 16))
-            server.queue_depth = modeled_queue_depth
-            server.queue_wait_ms = modeled_queue_wait_ms
+            recent_count = server_requests_window.get(server.server_id, 0)
+            if recent_count or server.process_mode == "virtual" or not traffic_observed:
+                server_capacity = max(1.0, float(server.capacity_rps or 1.0))
+                if recent_count:
+                    local_rps = recent_count / max(window_seconds, 0.5)
+                elif not traffic_observed:
+                    # Before the first event tick, expose the configured
+                    # demand as a capacity forecast so overload is visible.
+                    local_rps = demand_rps * (server_capacity / max(capacity, 1.0))
+                else:
+                    local_rps = 0.0
+                local_pressure = local_rps / server_capacity
+                server.utilization = round(local_pressure, 4)
+                server.capacity_pressure = round(local_pressure, 4)
+                server.load = min(16, round(local_pressure * 16))
+                server.queue_depth = max(0, round(max(0.0, local_pressure - 0.85) * 20))
+                server.queue_wait_ms = round(max(0.0, local_pressure - 0.65) * 180.0, 3)
         health_by_server: dict[str, str] = {}
         live_servers = self._repository.state_ref().servers
         for server_id, server in state.servers.items():
@@ -443,12 +481,43 @@ class SimulationController:
             max(0.05, min(1.0, success_rate_pct / max(1.0, slo_success_rate_pct)))
             if success_rate_pct is not None else 1.0
         )
-        health_score_pct = round(100 * min(node_health, capacity_health, latency_health, success_health), 1)
+        # Weighted health avoids a single stale sample collapsing the score to
+        # 5% while still making a real SLO breach visible in the alert text.
+        health_score_pct = round(100 * (
+            node_health * 0.35
+            + capacity_health * 0.30
+            + latency_health * 0.25
+            + success_health * 0.10
+        ), 1)
+        forensic_funnel = {
+            "captured": len(state.leaks),
+            "awaiting_capture": len(state.forensic_capture_pending_clients),
+            "awaiting_analysis": sum(1 for leak in state.leaks if leak.get("forensic_state") in {"awaiting_analysis", "processing"} or (not leak.get("processed") and not leak.get("needs_reanalysis"))),
+            "retry_pending": sum(1 for leak in state.leaks if leak.get("needs_reanalysis") and not leak.get("processed")),
+            "confirmed": sum(1 for leak in state.leaks if leak.get("forensic_state") == "confirmed" or leak.get("attributed")),
+            "inconclusive": sum(1 for leak in state.leaks if leak.get("forensic_state") in {"inconclusive", "error"} and leak.get("processed")),
+        }
+        server_observed = {
+            server.server_id: {
+                "requests_window": server_requests_window.get(server.server_id, 0),
+                "rps_window": round(server_requests_window.get(server.server_id, 0) / max(window_seconds, 0.5), 3),
+                "rejected_window": server_rejected_window.get(server.server_id, 0),
+                "utilization": round(float(server.utilization or 0.0), 4),
+                "queue_depth": int(server.queue_depth or 0),
+                "latency_p95_ms": round(float(server.latency_p95_ms or 0.0), 1),
+            }
+            for server in state.servers.values()
+        }
         self._record_metric(
             state,
             now,
             {
                 "blacklist_total": len(state.blacklist),
+                "clients_total": client_summary["total"],
+                "active_clients": client_summary["active"],
+                "online_clients": client_summary["online"],
+                "malicious_clients": client_summary["malicious"],
+                "temporary_blacklist_total": len(state.temporary_blacklist),
                 "total_requests": total_requests,
                 "total_errors": error_count,
                 "average_latency_ms": average_latency,
@@ -457,6 +526,9 @@ class SimulationController:
                 "available_servers": available_servers,
                 "servers_total": len(state.servers),
                 "health_score_pct": health_score_pct,
+                "routing_policy": str(state.config.get("load_balancing_policy", "hybrid-latency-capacity")),
+                "server_observed": server_observed,
+                "forensic_funnel": forensic_funnel,
                 "server_requests": {
                     server.server_id: int(server.requests_total)
                     for server in state.servers.values()
@@ -476,10 +548,11 @@ class SimulationController:
             "tick_interval_seconds": round(float(state.config.get("tick_interval_seconds", 1.25)), 2),
             "servers_total": len(state.servers),
             "clients_total": client_summary["total"],
+            "paying_clients": paying_clients,
             "malicious_clients": client_summary["malicious"],
             "initialization": self.initialization_progress(),
             "blacklisted_total": len(state.blacklist),
-            "forensic_pending_total": len(state.temporary_blacklist) or len(state.forensic_pending_clients),
+            "forensic_pending_total": len(set(state.temporary_blacklist) | set(state.forensic_pending_clients)),
             "scalability": {
                 "active_clients": active_clients,
                 "healthy_servers": healthy_servers,
@@ -510,6 +583,9 @@ class SimulationController:
                 "slo_success_rate_pct": slo_success_rate_pct,
                 "slo_compliant": slo_compliant,
                 "health_score_pct": health_score_pct,
+                "routing_policy": str(state.config.get("load_balancing_policy", "hybrid-latency-capacity")),
+                "server_observed": server_observed,
+                "forensic_funnel": forensic_funnel,
                 "metrics_provenance": "demanda/capacidade são modelo virtual; filas, erros, RTT e E2E vêm das entregas HTTP ao cliente",
                 "latency_semantics": "end_to_end_ms das entregas concluídas ao cliente na janela; capturas forenses internas são excluídas do SLO",
                 "cost_model": {
@@ -545,6 +621,52 @@ class SimulationController:
         self._repository.append_event({"type": "metrics_reset", "at": time.time()})
         return self.status()
 
+    def reset_experiment_state(self) -> dict:
+        """Clear run-scoped evidence/counters before a new scenario seed."""
+        state = self._repository.state_ref()
+        state.blacklist.clear()
+        state.temporary_blacklist.clear()
+        state.forensic_pending_clients.clear()
+        state.forensic_capture_pending_clients.clear()
+        state.leaks.clear()
+        state.scan_history.clear()
+        state.traffic.clear()
+        state.metrics_history.clear()
+        for client in state.clients.values():
+            client.videos_consumed = 0
+            client.last_activity_at = None
+            client.watch_history.clear()
+            client.feedback_history.clear()
+            client.likes = 0
+            client.dislikes = 0
+            client.feedback_score = 0.0
+            client.feedback_latency_avg_ms = 0.0
+            client.requests_generated = 0
+            client.online = client.active
+        for server in state.servers.values():
+            server.requests_total = 0
+            server.simulated_requests_total = 0
+            server.http_requests_total = 0
+            server.errors_total = 0
+            server.simulated_errors_total = 0
+            server.http_errors_total = 0
+            server.queue_rejected = 0
+            server.queue_depth = 0
+            server.queue_wait_ms = 0.0
+            server.utilization = 0.0
+            server.capacity_pressure = 0.0
+            server.latency_p95_ms = 0.0
+        # Scenario transitions keep healthy HTTP processes alive.  Reconcile
+        # their local state even when the new run has an empty blacklist, so
+        # evidence from the previous experiment cannot leak into this one.
+        self._reconcile_blacklist(state)
+        self._repository.append_event({
+            "type": "experiment_state_reset",
+            "at": time.time(),
+            "reason": "management scenario isolation",
+        })
+        return self.status()
+
     def end(self, reason: str = "operator") -> dict:
         state = self._repository.state_ref()
         if not state.initialized:
@@ -552,6 +674,18 @@ class SimulationController:
         if state.lifecycle == "ended":
             history = self._repository.history(state.simulation_id)
             return {"simulation_id": state.simulation_id, "lifecycle": "ended", "history": history[-1] if history else None}
+        # Archive a final operational observation before stopping processes.
+        # Without this call a short run could contain only the initialization
+        # sample (or no sample after a metrics reset), making the archived
+        # telemetry appear empty or disconnected from the final client state.
+        if state.lifecycle in {"starting", "running", "paused", "stopping"}:
+            try:
+                self.status()
+            except (RuntimeError, OSError):
+                # Shutdown must remain best-effort even if a real node has
+                # already disappeared; the archive still contains clients and
+                # the last successfully recorded metric.
+                pass
         state.lifecycle = "stopping"
         state.updated_at = time.time()
         self._repository.append_event({"type": "simulation_stopping", "at": time.time(), "reason": reason})
@@ -608,6 +742,41 @@ class SimulationController:
         self._repository.update_config({"num_clients": len(state.clients)})
         self._repository.append_event({"type": "client_added", "at": time.time(), "client_id": client_id, "latitude": latitude, "longitude": longitude})
         return client.to_dict()
+
+    def add_campaign_clients(self, count: int) -> dict:
+        """Materialize advertising demand in the shared CDN population."""
+        state = self._repository.state_ref()
+        if not state.initialized or state.lifecycle == "ended":
+            raise RuntimeError("A simulação ainda não foi inicializada")
+        if state.config.get("simulation_mode", "orchestration") != "gamification":
+            raise RuntimeError("campanhas só podem alterar a população no modo gamificação")
+        requested = max(0, int(count))
+        before = set(state.clients)
+        target = min(MAX_CLIENTS, len(state.clients) + requested)
+        if target == len(state.clients):
+            return {"added": 0, "client_ids": [], "clients_total": len(state.clients)}
+        config = SimulationConfig.from_payload({**state.config, "num_clients": target, "secret_key": self._secret_key})
+        self._resize_clients(target, config)
+        added_ids = sorted(set(state.clients) - before)
+        for client_id in added_ids:
+            client = state.clients.get(client_id)
+            if client:
+                # Advertising creates paying viewers; a later organic profile
+                # or explicit operator action may still mark a client rogue.
+                client.malicious = False
+                client.piracy_intent_probability = 0.0
+                client.piracy_attempt_probability = 0.0
+                client.piracy_publish_probability = 0.0
+                client.piracy_detection_probability = 0.0
+        state.config.update(config.to_dict())
+        self._repository.update_config({"num_clients": len(state.clients)})
+        self._repository.append_event({
+            "type": "advertising_clients_added",
+            "at": time.time(),
+            "count": len(added_ids),
+            "client_ids_sample": added_ids[:20],
+        })
+        return {"added": len(added_ids), "client_ids": added_ids[:100], "clients_total": len(state.clients)}
 
     def record_client_feedback(self, client_id: str, payload: dict) -> dict:
         state = self._repository.state_ref()
@@ -696,6 +865,10 @@ class SimulationController:
         if len(state.servers) >= self._real_node_process_limit:
             server.process_mode = "virtual"
         self._repository.add_server(server)
+        private_key, public_key = generate_node_identity()
+        self._node_private_keys[server.server_id] = private_key
+        self._http_client.configure_node_identities(self._node_private_keys)
+        server.public_key = public_key
         config = SimulationConfig.from_payload({**state.config, "secret_key": self._secret_key})
         self._start_node(server, config)
         self._configure_peers(state)
@@ -720,6 +893,37 @@ class SimulationController:
         self._configure_peers(state)
         self._repository.append_event({"type": "server_capacity_updated", "at": time.time(), "server_id": server_id, "tier": tier, "reason": "ação de gestão com manutenção didática"})
         return {"server": server.to_dict(), "node": result}
+
+    def update_server_cache(self, server_id: str, level: int) -> dict:
+        state = self._repository.state_ref()
+        server = state.servers.get(server_id)
+        if server is None:
+            raise KeyError(f"Servidor {server_id} não encontrado")
+        level = int(level)
+        if not 0 <= level <= 3:
+            raise ValueError("level de cache deve estar entre 0 e 3")
+        server.cache_level = level
+        server.cache_hit_rate = round(min(0.85, level * 0.22), 3)
+        server.prefetch_requests += max(0, level * 10)
+        node_result = None
+        if server.process_mode == "http" and server.process_id is not None and server.status != "offline":
+            try:
+                node_result = self._http_client.configure(server, {"cache_level": level})
+            except Exception as exc:
+                server.last_error = str(exc)
+        self._repository.append_event({
+            "type": "server_cache_updated",
+            "at": time.time(),
+            "server_id": server_id,
+            "cache_level": level,
+            "cache_hit_rate": server.cache_hit_rate,
+        })
+        return {
+            "server": server.to_dict(),
+            "cache_level": level,
+            "cache_hit_rate": server.cache_hit_rate,
+            "node": node_result,
+        }
 
     def retire_server(self, server_id: str) -> dict:
         state = self._repository.state_ref()
@@ -779,6 +983,19 @@ class SimulationController:
         ]
         environment = os.environ.copy()
         environment["CDN_NODE_SECRET"] = config.secret_key
+        private_key = self._node_private_keys.get(server.server_id)
+        if private_key:
+            environment["CDN_NODE_PRIVATE_KEY"] = private_key
+        # The orchestration simulator only needs a short playable sample to
+        # prove watermarking; keeping the clip bounded avoids re-encoding an
+        # entire dataset video for every forensic capture.
+        # CDN orchestration is a bounded demonstration of the forensic
+        # pipeline, not a Studio-quality full-video examination. Every node
+        # therefore emits the same two-second evidence sample in both
+        # profiles, keeping permanent attribution within the simulation's
+        # real-time budget.
+        environment["CDN_SIMULATION_CLIP_SECONDS"] = "2"
+        environment["CDN_SIMULATION_PROFILE"] = config.simulation_profile
         process = subprocess.Popen(
             command,
             cwd=str(root),
@@ -863,6 +1080,7 @@ class SimulationController:
                 "longitude": server.longitude,
                 "role": server.role,
                 "region": server.region,
+                "public_key": server.public_key,
             }
             for server in state.servers.values()
             if server.process_mode == "http"
@@ -941,7 +1159,7 @@ class SimulationController:
         for server in state.servers.values():
             if server.process_mode == "virtual":
                 profile = profile_for_tier(server.capacity_tier or str(state.config.get("node_tier", "basic")))
-                limits = capacity_limits(profile)
+                limits = capacity_limits(profile, server.cache_hit_rate)
                 server.status = "offline" if server.fault.get("offline") else ("degraded" if server.fault.get("extra_latency_ms") or server.fault.get("drop_rate") else "healthy")
                 server.lifecycle_status = "virtual"
                 server.health_status = server.status
@@ -997,6 +1215,11 @@ class SimulationController:
                 capacity = status.get("capacity", {})
                 server.capacity_rps = float(capacity.get("capacity_rps", server.capacity_rps))
                 server.utilization = float(capacity.get("utilization", server.utilization))
+                server.cache_level = int(status.get("cache_level", server.cache_level))
+                server.cache_hit_rate = float(capacity.get("cache_hit_rate", status.get("cache_hit_rate", server.cache_hit_rate)))
+                server.cache_hits = int(status.get("cache_hits", server.cache_hits))
+                server.cache_misses = int(status.get("cache_misses", server.cache_misses))
+                server.prefetch_requests = int(status.get("prefetch_requests", server.prefetch_requests))
                 server.queue_depth = int(capacity.get("queue_depth", status.get("queue_depth", server.queue_depth)))
                 server.queue_rejected = int(capacity.get("queue_rejected", status.get("queue_rejected", server.queue_rejected)))
                 server.queue_wait_ms = float(status.get("queue_wait_ms", server.queue_wait_ms))
@@ -1011,13 +1234,13 @@ class SimulationController:
 
     def _reconcile_blacklist(self, state: SimulationState) -> None:
         entries = [entry.to_internal_dict() for entry in state.blacklist.values()]
-        if not entries:
-            return
+        temporary_entries = list(state.temporary_blacklist.values())
         for server in state.servers.values():
-            if server.status != "healthy" or server.process_mode != "http":
+            if server.status not in {"healthy", "degraded", "overloaded"} or server.process_mode != "http":
                 continue
             try:
                 self._http_client.reconcile_blacklist(server, entries)
+                self._http_client.reconcile_temporary_blacklist(server, temporary_entries)
             except Exception as exc:
                 server.last_error = str(exc)
 

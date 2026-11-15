@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import time
 import uuid
+import base64
+import hashlib
+import os
+import subprocess
+from pathlib import Path
 import requests
 
 from models.entities import Client, SimulationState, VideoChunk
 from services.cdn_http_client import CDNHttpClient
 from services.content_provider import default_content_id
+from services.content_provider import HybridContentProvider
+from utils.qim_watermark import QIM3_STEP
+from utils.video_watermark import embed_video
 from utils.geo import haversine_km, rank_delivery_servers
-from utils.latency import sleep_for_distance
+from utils.latency import sleep_for_distance, propagation_delay_seconds
 
 
 class SimulationPausedError(RuntimeError):
@@ -20,8 +28,74 @@ class StreamService:
         self._http_client = http_client
         self._repository = repository
         self._watermark_service = watermark_service
+        self._virtual_content_provider = HybridContentProvider()
 
-    def record_delivery_feedback(self, client: Client, watch_record: dict, source: str = "client_process") -> dict:
+    def _virtual_stream(self, client: Client, server, state: SimulationState, chunk_number: int) -> dict:
+        """Produce a short, genuinely marked clip for a virtual CDN node."""
+        if self._watermark_service is None:
+            raise RuntimeError("watermark service required for virtual forensic capture")
+        content_id = str(state.config.get("video_id") or default_content_id())
+        source, content_type = self._virtual_content_provider.resolve_asset(content_id, chunk_number)
+        runtime_root = Path(os.getenv("CDN_WATERMARK_CACHE_ROOT", "data/runtime/watermarked"))
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        source_key = hashlib.sha256(f"{source.resolve()}:{source.stat().st_mtime_ns}:{source.stat().st_size}".encode()).hexdigest()[:24]
+        evidence_fps = 12
+        short_source = runtime_root / f"virtual-source-{source_key}-2s-{evidence_fps}fps.mp4"
+        if not short_source.exists():
+            subprocess.run(
+                ["ffmpeg", "-y", "-v", "error", "-i", str(source), "-t", "2", "-vf", f"fps={evidence_fps}", "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p", str(short_source)],
+                check=True,
+                capture_output=True,
+                timeout=60,
+            )
+        token, claim = self._watermark_service.issue_forensic_claim(
+            client_id=client.client_id,
+            server_id=server.server_id,
+            content_id=content_id,
+            session_id=f"sim-{client.client_id}-{uuid.uuid4().hex[:8]}",
+            segment_range=f"{chunk_number}-{chunk_number}",
+            algorithm_id="dct-qim-v3",
+        )
+        cache_key = hashlib.sha256(f"{short_source.resolve()}:{short_source.stat().st_mtime_ns}:{token}".encode()).hexdigest()[:32]
+        destination = runtime_root / f"virtual-{cache_key}.mp4"
+        if not destination.exists():
+            partial = destination.with_suffix(".part.mp4")
+            embed_video(
+                short_source,
+                partial,
+                token,
+                self._watermark_service.visual_secret_for_token(token),
+                strength=QIM3_STEP,
+                adaptive=True,
+                algorithm="qim3",
+            )
+            partial.replace(destination)
+        payload = base64.b64encode(destination.read_bytes()).decode("ascii")
+        return {
+            "chunk_id": claim.segment_range,
+            "content_type": content_type or "video/mp4",
+            "payload": payload,
+            "watermark_token": token,
+            "watermark_version": "CDNWM4",
+            "watermark_algorithm": "dct-qim-v3",
+            "watermark_id": claim.watermark_id,
+            "content_id": claim.content_id,
+            "server_id": server.server_id,
+            "issued_at": claim.issued_at,
+            "load": server.load,
+            "network_latency_ms": round(propagation_delay_seconds(haversine_km(client.latitude, client.longitude, server.latitude, server.longitude), float(state.config.get("latency_factor", 1.0))) * 1000, 3),
+            "http_rtt_ms": 0.0,
+            "queue_wait_ms": float(server.queue_wait_ms or 0.0),
+        }
+
+    def record_delivery_feedback(
+        self,
+        client: Client,
+        watch_record: dict,
+        source: str = "client_process",
+        *,
+        emit_event: bool = True,
+    ) -> dict:
         """Let the simulated client rate a delivered service automatically.
 
         Feedback is derived from the observed end-to-end delivery time. The
@@ -67,7 +141,7 @@ class StreamService:
             3,
         )
         watch_record["liked"] = liked
-        if self._repository:
+        if self._repository and emit_event:
             self._repository.append_event({
                 "type": "client_feedback_generated",
                 "at": feedback["at"],
@@ -93,9 +167,24 @@ class StreamService:
             raise ValueError("chunk deve ser maior ou igual a zero")
         request_id = request_id or f"req-{uuid.uuid4().hex[:16]}"
         trace_id = f"trace-{uuid.uuid4().hex[:16]}"
+        routing_policy = str(state.config.get("load_balancing_policy", "hybrid-latency-capacity"))
         candidates = rank_delivery_servers(
-            client.latitude, client.longitude, state.servers.values()
+            client.latitude,
+            client.longitude,
+            state.servers.values(),
+            require_http=not forensic_capture,
+            policy=routing_policy,
         )
+        if not candidates:
+            # Fully virtual simulations still need an authentic marked clip
+            # for the forensic path (and for local demo playback).
+            candidates = rank_delivery_servers(
+                client.latitude,
+                client.longitude,
+                state.servers.values(),
+                require_http=False,
+                policy=routing_policy,
+            )
         if not candidates:
             raise RuntimeError("Nenhum servidor CDN saudável está disponível")
         candidate_details = [
@@ -111,7 +200,7 @@ class StreamService:
                 "status": server.status,
                 "selected": False,
                 "attempted": False,
-                "reason": "eligible by distance and load",
+                "reason": f"eligible by {routing_policy}",
             }
             for score, server in candidates
         ]
@@ -132,11 +221,14 @@ class StreamService:
             candidate_details[index]["selected"] = True
             candidate_details[index]["attempted"] = True
             try:
-                stream_args = (candidate, client.client_id, chunk_number, distance, float(state.config["latency_factor"]), str(state.config.get("video_id") or default_content_id()))
-                stream_kwargs = {"forensic_capture": True} if forensic_capture else {}
-                if viewer_session_id:
-                    stream_kwargs["viewer_session_id"] = viewer_session_id
-                result = self._http_client.stream(*stream_args, **stream_kwargs)
+                if candidate.process_mode == "virtual":
+                    result = self._virtual_stream(client, candidate, state, chunk_number)
+                else:
+                    stream_args = (candidate, client.client_id, chunk_number, distance, float(state.config["latency_factor"]), str(state.config.get("video_id") or default_content_id()))
+                    stream_kwargs = {"forensic_capture": True} if forensic_capture else {}
+                    if viewer_session_id:
+                        stream_kwargs["viewer_session_id"] = viewer_session_id
+                    result = self._http_client.stream(*stream_args, **stream_kwargs)
                 if self._watermark_service and result.get("watermark_token"):
                     self._watermark_service.register_token(str(result["watermark_token"]))
                 selected_server = candidate
@@ -173,7 +265,7 @@ class StreamService:
             raise RuntimeError("Todos os nós candidatos falharam: " + "; ".join(failures))
         server = selected_server
         distance = selected_distance
-        routing_reason = "primeiro nó falhou; failover determinístico" if failures else ("nó não saudável excluído; menor custo de distância e carga" if len(candidate_details) > len(candidates) else "menor custo de distância e carga entre nós saudáveis")
+        routing_reason = "primeiro nó falhou; failover determinístico" if failures else ("nó não saudável excluído; menor custo de distância e carga" if len(candidate_details) > len(candidates) else f"política {routing_policy} entre nós saudáveis")
         server.load = int(result.get("load", server.load))
         if not forensic_capture:
             client.videos_consumed += 1
@@ -305,6 +397,9 @@ class StreamService:
             end_to_end_ms=round(end_to_end_ms, 3),
             routing_candidates=candidate_details,
             routing_reason=routing_reason,
+            watermark_id=result.get("watermark_id"),
+            watermark_algorithm=result.get("watermark_algorithm"),
+            content_id=result.get("content_id"),
         )
 
     def publish_server_message(self, source_server, target_server, message: dict, latency_factor: float) -> dict:

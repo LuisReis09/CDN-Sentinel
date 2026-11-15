@@ -120,6 +120,11 @@ class ApiController:
         return result
 
     def pause(self) -> dict:
+        # Stop producers before flipping the shared state so no new virtual
+        # request or forensic capture can race the pause boundary.
+        self.leak_service.stop()
+        self.client_activity_service.stop()
+        self.monitor_service.stop()
         result = self.simulation_controller.pause()
         if self.management_engine:
             self.management_engine.pause(True)
@@ -129,6 +134,11 @@ class ApiController:
         result = self.simulation_controller.resume()
         if self.management_engine:
             self.management_engine.pause(False)
+        tick_interval = result.get("configuration", {}).get("tick_interval_seconds", 1.25)
+        snapshot = self.repository.snapshot_without_clients()
+        self.monitor_service.start([server.to_dict() for server in snapshot.servers.values()], tick_interval)
+        self.leak_service.start(tick_interval)
+        self.client_activity_service.start(tick_interval)
         return result
 
     def end(self) -> dict:
@@ -166,10 +176,19 @@ class ApiController:
                 "num_servers": 3,
                 "num_clients": initial_clients,
                 "demand_rps_per_client": 1.0,
+                "simulation_mode": "gamification",
                 "seed": int(payload.get("seed", 2026)),
                 "tick_interval_seconds": 1.25,
             })
         else:
+            # Scenario transitions are isolated experiments: freeze producers,
+            # clear run-scoped evidence/counters, then resize the same healthy
+            # topology and start fresh workers with the selected seed.
+            self.leak_service.stop()
+            self.client_activity_service.stop()
+            self.monitor_service.stop()
+            self.simulation_controller.reset_experiment_state()
+            current = self.repository.snapshot_without_clients()
             # Starting a management scenario must also make the observed
             # topology match its advertised conditions.  Do this as a live
             # resize so switching modes does not needlessly restart healthy
@@ -177,6 +196,7 @@ class ApiController:
             desired = {
                 "num_clients": initial_clients,
                 "demand_rps_per_client": 1.0,
+                "simulation_mode": "gamification",
                 "tick_interval_seconds": 1.25,
             }
             if int(current.config.get("num_servers", len(current.servers))) < 3:
@@ -188,6 +208,11 @@ class ApiController:
             }
             if changes:
                 self.update_simulation(changes)
+            refreshed = self.repository.snapshot_without_clients()
+            tick_interval = refreshed.config.get("tick_interval_seconds", 1.25)
+            self.monitor_service.start([server.to_dict() for server in refreshed.servers.values()], tick_interval)
+            self.leak_service.start(tick_interval)
+            self.client_activity_service.start(tick_interval)
         return self.management_engine.reset(scenario_id, payload.get("seed"))
 
     def management_reset(self) -> dict:
@@ -225,7 +250,7 @@ class ApiController:
         state = self.repository.state_ref()
         if not state.initialized or state.lifecycle == "ended":
             raise RuntimeError("A simulação ainda não foi inicializada")
-        client = state.clients.get(client_id)
+        client = self._delivery_client(client_id)
         if client is None:
             raise KeyError(f"Cliente {client_id} não encontrado")
         return self.stream_service.stream(client, state, chunk_number, request_id, viewer_session_id=viewer_session_id).to_dict()
@@ -287,16 +312,23 @@ class ApiController:
         # covers the small interval before the distributed lease is persisted
         # and keeps the UI truthful if a legacy state is restored.
         delivery_blocked = quarantined | set(state.forensic_pending_clients)
+        permanent_blacklist = set(state.blacklist)
         return [
-            client.to_dict() | {"forensic_quarantined": client.client_id in delivery_blocked}
-            for client in self.repository.client_sample(2_000, priority_ids=delivery_blocked)
+            client.to_dict() | {
+                "forensic_quarantined": client.client_id in delivery_blocked,
+                "blacklist_permanent": client.client_id in permanent_blacklist,
+            }
+            for client in self.repository.client_sample(
+                2_000,
+                priority_ids=delivery_blocked | permanent_blacklist,
+            )
         ]
 
     def leaks(self) -> list[dict]:
         return self.leak_summaries()
 
     def leak_summaries(self) -> list[dict]:
-        fields = ("leak_id", "server_id", "origin_server_id", "platform", "platform_id", "platform_kind", "external_url", "created_at", "processed", "analyzed", "attributed", "needs_reanalysis", "analysis_count", "last_analyzed_at", "next_analysis_at", "review_status", "detected_at", "detected_by_server_id", "trace_id", "request_id", "error", "forensic_status", "forensic_source", "media_sha256", "investigated_media_sha256")
+        fields = ("leak_id", "server_id", "origin_server_id", "platform", "platform_id", "platform_kind", "external_url", "created_at", "capture_started_at", "capture_completed_at", "capture_duration_ms", "processed", "analyzed", "attributed", "needs_reanalysis", "analysis_count", "analysis_max_attempts", "analysis_exhausted", "analysis_last_reason", "analysis_duration_ms", "last_analyzed_at", "next_analysis_at", "review_status", "forensic_state", "detected_at", "detected_by_server_id", "trace_id", "request_id", "error", "forensic_status", "forensic_source", "media_sha256", "investigated_media_sha256")
         summaries = []
         for leak in self.repository.snapshot().leaks:
             summary = {key: leak.get(key) for key in fields if key in leak}

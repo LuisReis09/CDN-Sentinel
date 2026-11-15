@@ -74,7 +74,7 @@ export function HistoryPage() {
             <HistoryCard icon={<Server size={15} />} label="Nós / clientes" value={`${history.servers.length} / ${history.clients_total ?? history.clients.length}`} />
             <HistoryCard icon={<Activity size={15} />} label="P95 e2e" value={`${Number(p95).toFixed(1)} ms`} />
           </section>
-          <TelemetryCharts samples={history.metrics_history ?? []} />
+          <TelemetryCharts samples={history.metrics_history ?? []} fallbackClientCount={history.clients_total ?? history.clients.length} />
           <section className="panel history-final-topology">
             <div className="panel-heading">
               <div><p className="eyebrow">FINAL TOPOLOGY</p><h2>Estado final dos processos</h2></div>

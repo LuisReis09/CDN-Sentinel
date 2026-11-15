@@ -37,6 +37,7 @@ export function ControlPanel({
     monthly_server_cost_usd: config.monthly_server_cost_usd ?? 100,
     monthly_fixed_cost_usd: config.monthly_fixed_cost_usd ?? 150,
   });
+  const [formSimulationId, setFormSimulationId] = useState(status.simulation_id);
   const [busy, setBusy] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [initProgress, setInitProgress] = useState({
@@ -56,7 +57,10 @@ export function ControlPanel({
   );
 
   useEffect(() => {
-    if (!status.initialized || busy || hasDraftChanges) return;
+    // The first realtime snapshot arrives after the component mounted with
+    // its demo defaults.  Synchronize exactly when a new simulation starts,
+    // but never overwrite edits the operator is making to the current run.
+    if (!status.initialized || !status.simulation_id || status.simulation_id === formSimulationId) return;
     setForm((current) => ({
       ...current,
       num_servers: config.num_servers > 0 ? config.num_servers : 4,
@@ -67,7 +71,9 @@ export function ControlPanel({
       monthly_server_cost_usd: config.monthly_server_cost_usd ?? 100,
       monthly_fixed_cost_usd: config.monthly_fixed_cost_usd ?? 150,
     }));
+    setFormSimulationId(status.simulation_id);
   }, [
+    status.simulation_id,
     config.num_servers,
     config.num_clients,
     config.malicious_probability,
@@ -75,9 +81,8 @@ export function ControlPanel({
     config.monthly_client_price_usd,
     config.monthly_server_cost_usd,
     config.monthly_fixed_cost_usd,
-    hasDraftChanges,
-    busy,
     status.initialized,
+    formSimulationId,
   ]);
 
   useEffect(() => {

@@ -99,6 +99,7 @@ class SimulationRepository:
             snapshot.blacklist = copy.deepcopy(self._state.blacklist)
             snapshot.forensic_pending_clients = copy.deepcopy(self._state.forensic_pending_clients)
             snapshot.temporary_blacklist = copy.deepcopy(self._state.temporary_blacklist)
+            snapshot.forensic_capture_pending_clients = copy.deepcopy(self._state.forensic_capture_pending_clients)
             snapshot.leaks = copy.deepcopy(self._state.leaks)
             snapshot.scan_history = copy.deepcopy(self._state.scan_history)
             snapshot.metrics_history = copy.deepcopy(self._state.metrics_history)
@@ -113,18 +114,36 @@ class SimulationRepository:
             active = 0
             malicious = 0
             paying = 0
+            online = 0
+            demand_rps = 0.0
+            demand_available_rps = 0.0
+            requests_generated = 0
+            blocked = 0
             for client in clients:
                 if client.active:
                     active += 1
+                    if client.online:
+                        online += 1
+                    demand_rps += float(getattr(client, "activity_rate_rps", 0.0) or 0.0)
+                    if client.client_id not in self._state.forensic_pending_clients and client.client_id not in self._state.temporary_blacklist:
+                        demand_available_rps += float(getattr(client, "activity_rate_rps", 0.0) or 0.0)
                     if not client.malicious:
                         paying += 1
                 if client.malicious:
                     malicious += 1
+                requests_generated += int(getattr(client, "requests_generated", 0) or 0)
+                if client.client_id in self._state.forensic_pending_clients or client.client_id in self._state.temporary_blacklist:
+                    blocked += 1
             return {
                 "total": len(self._state.clients),
                 "active": active,
+                "online": online,
                 "malicious": malicious,
                 "paying_active": paying,
+                "demand_rps": round(demand_rps, 4),
+                "demand_available_rps": round(demand_available_rps, 4),
+                "requests_generated": requests_generated,
+                "blocked": blocked,
             }
 
     def client_sample(self, limit: int = 2_000, priority_ids: Iterable[str] | None = None) -> list[Client]:
@@ -305,6 +324,21 @@ class NodeRepository:
         with self._lock:
             return copy.deepcopy(list(self._blacklist.values()))
 
+    def replace_blacklist(self, entries: List[dict]) -> None:
+        """Replace the node-local permanent blacklist during reconciliation.
+
+        A scenario reset is a new experiment, not a continuation of the
+        previous run.  Keeping entries that only existed in a stopped run
+        would make the node reject otherwise valid clients even though the
+        controller state had already been cleared.
+        """
+        with self._lock:
+            self._blacklist = {
+                str(entry["client_id"]): copy.deepcopy(entry)
+                for entry in entries
+                if isinstance(entry, dict) and entry.get("client_id")
+            }
+
     def add_temporary_blacklist(self, entry: dict) -> bool:
         with self._lock:
             self._purge_temporary_locked()
@@ -338,6 +372,18 @@ class NodeRepository:
             for client_id, entry in self._temporary_blacklist.items()
             if float(entry.get("expires_at", 0)) > now
         }
+
+    def replace_temporary_blacklist(self, entries: List[dict]) -> None:
+        """Authoritatively synchronize leased quarantine state on a node."""
+        now = time.time()
+        with self._lock:
+            self._temporary_blacklist = {
+                str(entry["client_id"]): copy.deepcopy(entry)
+                for entry in entries
+                if isinstance(entry, dict)
+                and entry.get("client_id")
+                and float(entry.get("expires_at", 0)) > now
+            }
 
     def mark_message_seen(self, message_id: str, ttl_seconds: float = 300.0) -> bool:
         now = time.time()

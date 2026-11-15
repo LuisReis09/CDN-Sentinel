@@ -45,6 +45,11 @@ export interface ServerNode {
   capacity_pressure?: number;
   latency_p95_ms?: number;
   slo_breached?: boolean;
+  cache_level?: number;
+  cache_hit_rate?: number;
+  cache_hits?: number;
+  cache_misses?: number;
+  prefetch_requests?: number;
   fault?: { offline?: boolean; extra_latency_ms?: number; drop_rate?: number };
 }
 
@@ -86,6 +91,7 @@ export interface Client {
   feedback_score?: number;
   feedback_latency_avg_ms?: number;
   forensic_quarantined?: boolean;
+  blacklist_permanent?: boolean;
 }
 
 export interface Traffic {
@@ -104,6 +110,9 @@ export interface Traffic {
   routing_reason?: string;
   route_kind?: "delivery" | "failover" | string;
   request_count?: number;
+  client_count?: number;
+  /** Representative viewers for an aggregate virtual delivery batch. */
+  client_ids_sample?: string[];
   virtual?: boolean;
 }
 
@@ -192,9 +201,11 @@ export interface SimulationStatus {
     demand_rps_per_client?: number;
     slo_p95_ms?: number;
     slo_success_rate_pct?: number;
+    simulation_mode?: "orchestration" | "gamification";
   };
   servers_total: number;
   clients_total: number;
+  paying_clients?: number;
   malicious_clients: number;
   blacklisted_total: number;
   forensic_pending_total?: number;
@@ -235,6 +246,23 @@ export interface SimulationStatus {
     slo_success_rate_pct?: number;
     slo_compliant?: boolean;
     health_score_pct?: number;
+    routing_policy?: string;
+    server_observed?: Record<string, {
+      requests_window: number;
+      rps_window: number;
+      rejected_window: number;
+      utilization: number;
+      queue_depth: number;
+      latency_p95_ms: number;
+    }>;
+    forensic_funnel?: {
+      captured: number;
+      awaiting_capture: number;
+      awaiting_analysis: number;
+      retry_pending: number;
+      confirmed: number;
+      inconclusive: number;
+    };
     metrics_provenance?: string;
     latency_semantics?: string;
     cost_model: {
@@ -292,6 +320,11 @@ export interface TelemetrySample {
   at: number;
   elapsed_seconds: number;
   blacklist_total: number;
+  clients_total?: number;
+  active_clients?: number;
+  online_clients?: number;
+  malicious_clients?: number;
+  temporary_blacklist_total?: number;
   total_requests: number;
   total_errors: number;
   average_latency_ms: number;
@@ -332,13 +365,21 @@ export interface LeakRecord {
   platform_kind?: string;
   external_url?: string;
   created_at: number;
+  capture_started_at?: number;
+  capture_completed_at?: number;
+  capture_duration_ms?: number;
   processed: boolean;
   analyzed?: boolean;
   attributed?: boolean;
   needs_reanalysis?: boolean;
   analysis_count?: number;
+  analysis_max_attempts?: number;
+  analysis_exhausted?: boolean;
+  analysis_last_reason?: string;
+  analysis_duration_ms?: number;
   next_analysis_at?: number;
   review_status?: string;
+  forensic_state?: "awaiting_analysis" | "processing" | "retry_pending" | "inconclusive" | "error" | "confirmed" | string;
   detected_at?: number;
   detected_by_server_id?: string;
   error?: string;
@@ -363,6 +404,7 @@ export interface VideoChunk {
   end_to_end_ms?: number;
   routing_candidates?: Array<Record<string, unknown>>;
   routing_reason?: string;
+  content_id?: string;
 }
 
 export interface ForensicInvestigation {

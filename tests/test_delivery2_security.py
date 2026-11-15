@@ -15,6 +15,7 @@ from services.stream_service import StreamService
 from utils.protocol import signed_headers, verify_headers
 from utils.crypto import encrypt_payload
 from utils.security import create_watermark_token
+from utils.node_identity import sign_peer_envelope
 
 
 class Delivery2SecurityTests(unittest.TestCase):
@@ -37,6 +38,7 @@ class Delivery2SecurityTests(unittest.TestCase):
                 self.assertEqual(result["watermark_version"], "CDNWM4")
                 self.assertEqual(result["watermark_algorithm"], "dct-qim-v3")
                 self.assertTrue(result["watermark_id"])
+                self.assertEqual(result["content_id"], "youtube_clipped_videos/videos/clip.mp4")
                 node._watermarked_media.assert_called_once()
                 self.assertEqual(node._watermarked_media.call_args.args[-1], "qim3")
             finally:
@@ -112,6 +114,70 @@ class Delivery2SecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(node.repository.is_temporarily_blacklisted("client-1"))
         node._retry_stop.set()
+
+    def test_peer_gossip_requires_a_valid_ed25519_signature(self):
+        sender = CDNNode("cdn-sender", "127.0.0.1", 59994, 0, 0, "Sender", "secret", 1)
+        receiver = CDNNode("cdn-receiver", "127.0.0.1", 59995, 1, 1, "Receiver", "secret", 1)
+        receiver.configure_peers([{
+            "server_id": sender.server_id,
+            "url": sender.host,
+            "latitude": sender.latitude,
+            "longitude": sender.longitude,
+            "public_key": sender.public_key,
+        }])
+        try:
+            token = create_watermark_token("client-1", sender.server_id, 1.0, "chunk-1", "secret")
+            entry = {
+                "client_id": "client-1",
+                "watermark_server_id": sender.server_id,
+                "proof_signature": token.rsplit(".", 1)[-1],
+                "proof_token": token,
+                "server_id": sender.server_id,
+            }
+            body = {"entry": entry, "visited": [], "message": {"message_id": "peer-proof", "message_type": "BLACKLIST_ALERT", "from_server": sender.server_id, "hops": 0}}
+            payload = encrypt_payload(body, "secret", aad="/internal/blacklist")
+            headers = signed_headers("secret", "POST", "/internal/blacklist", payload)
+            headers["X-CDN-Peer-Id"] = sender.server_id
+            headers["X-CDN-Peer-Signature"] = sign_peer_envelope(sender.private_key, sender.server_id, "/internal/blacklist", payload)
+            response = create_node_app(receiver).test_client().post("/internal/blacklist", json=payload, headers=headers)
+            self.assertEqual(response.status_code, 200, response.get_json())
+
+            forged = encrypt_payload(body, "secret", aad="/internal/blacklist")
+            forged_headers = signed_headers("secret", "POST", "/internal/blacklist", forged)
+            forged_headers["X-CDN-Peer-Id"] = sender.server_id
+            forged_headers["X-CDN-Peer-Signature"] = "forged"
+            response = create_node_app(receiver).test_client().post("/internal/blacklist", json=forged, headers=forged_headers)
+            self.assertEqual(response.status_code, 403)
+        finally:
+            sender._retry_stop.set()
+            receiver._retry_stop.set()
+
+    def test_peer_content_telemetry_requires_a_valid_ed25519_signature(self):
+        sender = CDNNode("cdn-source", "127.0.0.1", 59996, 0, 0, "Source", "secret", 1)
+        receiver = CDNNode("cdn-target", "127.0.0.1", 59997, 1, 1, "Target", "secret", 1)
+        receiver.configure_peers([{
+            "server_id": sender.server_id,
+            "url": sender.host,
+            "latitude": sender.latitude,
+            "longitude": sender.longitude,
+            "public_key": sender.public_key,
+        }])
+        try:
+            body = {
+                "message_id": "telemetry-proof",
+                "content_id": "movie-a",
+                "from_server": sender.server_id,
+                "to_server": receiver.server_id,
+            }
+            payload = encrypt_payload(body, "secret", aad="/internal/content-telemetry")
+            headers = signed_headers("secret", "POST", "/internal/content-telemetry", payload)
+            headers["X-CDN-Peer-Id"] = sender.server_id
+            headers["X-CDN-Peer-Signature"] = sign_peer_envelope(sender.private_key, sender.server_id, "/internal/content-telemetry", payload)
+            response = create_node_app(receiver).test_client().post("/internal/content-telemetry", json=payload, headers=headers)
+            self.assertEqual(response.status_code, 200, response.get_json())
+        finally:
+            sender._retry_stop.set()
+            receiver._retry_stop.set()
 
     def test_snapshot_does_not_expose_live_mutable_state(self):
         repository = SimulationRepository()

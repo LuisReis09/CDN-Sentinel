@@ -24,7 +24,7 @@ from services.leak_service import LeakService
 from services.blacklist_service import BlacklistService
 from services.supabase_store import SupabaseSimulationPersistence
 from services.stream_service import StreamService
-from models.entities import CDNServer, Client, SimulationState
+from models.entities import BlacklistEntry, CDNServer, Client, SimulationState
 from utils.video import generate_visual_variants, get_video_asset, list_video_examples
 from utils.security import watermark_encryption_metadata
 
@@ -197,6 +197,22 @@ class SecurityAndNetworkTests(unittest.TestCase):
         quarantined = {client["client_id"]: client["forensic_quarantined"] for client in controller.clients()}
         self.assertEqual(quarantined, {"held": True, "released": False})
 
+    def test_controller_stream_enforces_permanent_blacklist_before_routing(self):
+        repository = SimulationRepository()
+        blocked = Client("blocked", 0, 0, "Test", active=False)
+        entry = BlacklistEntry("blocked", "authenticated leak", time.time(), time.time(), "cdn-a", "proof")
+        repository.replace(SimulationState(
+            initialized=True,
+            lifecycle="running",
+            clients={blocked.client_id: blocked},
+            blacklist={blocked.client_id: entry},
+        ))
+        stream_service = Mock()
+        controller = ApiController(repository, Mock(), stream_service, Mock(), Mock(), Mock(), Mock(), Mock())
+        with self.assertRaises(PermissionError):
+            controller.stream(blocked.client_id, 0)
+        stream_service.stream.assert_not_called()
+
     def test_clients_api_prioritizes_delivery_blocked_clients_in_bounded_map_sample(self):
         repository = SimulationRepository()
         now = time.time()
@@ -294,6 +310,7 @@ class SecurityAndNetworkTests(unittest.TestCase):
                     request_id="request-1",
                     trace_id="trace-1",
                     content_type="video/mp4",
+                    content_id="movie-a/specific.mp4",
                 )
 
         repository = SimulationRepository()
@@ -313,6 +330,7 @@ class SecurityAndNetworkTests(unittest.TestCase):
             leak_service._capture_one_leak()
             self.assertEqual(repository.state_ref().forensic_pending_clients, {"pirate"})
             self.assertEqual(len(leaks), 1)
+            self.assertEqual(leaks[0]["content_id"], "movie-a/specific.mp4")
             activity = ClientActivityService(repository, StreamService(CDNHttpClient()))
             activity._advance_virtual_clients(repository.state_ref(), [malicious, regular], 1)
         self.assertEqual(malicious.videos_consumed, 0)

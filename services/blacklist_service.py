@@ -78,6 +78,32 @@ class BlacklistService:
             "trace_id": f"trace-{entry.get('quarantine_id', client_id)}",
         })
 
+    def renew_quarantine(self, client_id: str, reason: str = "forensic retry in progress") -> dict | None:
+        """Extend an active forensic lease while an analysis retry is running."""
+        state = self._repository.state_ref()
+        entry = state.temporary_blacklist.get(client_id)
+        if not entry:
+            return None
+        now = time.time()
+        lease_seconds = max(30.0, float(entry.get("lease_seconds") or state.config.get("forensic_quarantine_seconds", 120.0)))
+        entry["issued_at"] = now
+        entry["expires_at"] = now + lease_seconds
+        entry["state"] = "ANALYZING"
+        entry["last_renewed_at"] = now
+        entry["renewal_reason"] = reason
+        self._publish_temporary(entry)
+        self._repository.append_event({
+            "type": "temporary_blacklist_renewed",
+            "at": now,
+            "client_id": client_id,
+            "server_id": entry.get("owner_server_id"),
+            "expires_at": entry["expires_at"],
+            "reason": reason,
+            "communication_kind": "blacklist",
+            "trace_id": f"trace-{entry.get('quarantine_id', client_id)}",
+        })
+        return entry
+
     def maintain_quarantines(self) -> list[dict]:
         """Expire failed leases or transfer their investigation to a live node."""
         state = self._repository.state_ref()

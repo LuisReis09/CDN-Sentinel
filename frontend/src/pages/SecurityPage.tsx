@@ -334,11 +334,24 @@ function ExternalLeakPanel({
                   {leak.origin_server_id ?? leak.server_id} · monitor{" "}
                   {leak.detected_by_server_id ?? "aguardando"}
                 </small>
+                <small>
+                  captura {formatMilliseconds(leak.capture_duration_ms)} · análise {formatMilliseconds(leak.analysis_duration_ms)}
+                </small>
               </div>
               <span
                 className={`leak-state ${leak.attributed ? "leak-state-processed" : ""}`}
               >
-                {leak.attributed ? "associação em revisão" : leak.needs_reanalysis ? "reanálise pendente" : leak.analyzed ? "analisado" : "pendente"}
+                {leak.attributed
+                  ? "associação em revisão"
+                  : leak.forensic_state === "processing"
+                    ? "processando prova"
+                    : leak.needs_reanalysis
+                      ? "reanálise pendente"
+                      : leak.forensic_state === "inconclusive" || leak.forensic_state === "error"
+                        ? "inconclusivo"
+                        : leak.analyzed
+                          ? "analisado"
+                          : "pendente"}
               </span>
             </div>
           ))}
@@ -353,4 +366,8 @@ function ExternalLeakPanel({
       </div>
     </section>
   );
+}
+
+function formatMilliseconds(value?: number) {
+  return typeof value === "number" ? `${Math.round(value)} ms` : "aguardando";
 }

@@ -37,7 +37,7 @@ function labelFor(event: SimulationEvent) {
   if (event.type === "server_message")
     return `${event.message_type ?? "Mensagem"}: ${event.from_server ?? "origem"} → ${event.to_server ?? "destino"} (${event.status ?? "observada"})`;
   if (event.type === "simulation_tick")
-    return `Tick ${event.tick ?? "?"}: intervalo ${event.tick_interval_seconds ?? "—"}s · demanda agregada`;
+    return `Tick ${event.tick ?? "?"}: intervalo ${event.tick_interval_seconds ?? "—"}s · eventos por cliente`;
   if (event.type === "watermark_verified")
     return `${event.client_id} validado com AES-GCM + HMAC-SHA256`;
   if (event.type === "server_added")

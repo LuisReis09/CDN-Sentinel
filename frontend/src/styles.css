@@ -1175,10 +1175,6 @@ code {
 .map-traffic-path {
   animation: map-flow var(--simulation-speed, 1.2s) linear infinite;
 }
-.map-selected-route {
-  filter: drop-shadow(0 0 5px rgba(255, 224, 107, 0.9));
-  animation: map-flow 0.65s linear infinite;
-}
 .map-gossip-path {
   animation: map-gossip calc(var(--simulation-speed, 1.8s) * 1.4) linear
     infinite;

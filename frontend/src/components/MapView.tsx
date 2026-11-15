@@ -31,8 +31,6 @@ interface MapViewProps {
   onMapPick: (latitude: number, longitude: number) => void;
   tickIntervalSeconds: number;
   onNodeSelect: (kind: "server" | "client", id: string) => void;
-  highlightedClientId?: string | null;
-  highlightedServerId?: string | null;
 }
 
 export function MapView({
@@ -44,17 +42,18 @@ export function MapView({
   onMapPick,
   tickIntervalSeconds,
   onNodeSelect,
-  highlightedClientId = null,
-  highlightedServerId = null,
 }: MapViewProps) {
   // The control plane sends a bounded client sample.  Keep forensic holds at
   // the front of the final rendering window too, so a temporary block is
   // never silently omitted on a large topology.
   const visibleClients = [...clients]
     .sort(
-      (left, right) =>
-        Number(Boolean(right.forensic_quarantined)) -
-        Number(Boolean(left.forensic_quarantined)),
+      (left, right) => {
+        const permanent = Number(Boolean(right.blacklist_permanent || !right.active)) -
+          Number(Boolean(left.blacklist_permanent || !left.active));
+        return permanent ||
+          Number(Boolean(right.forensic_quarantined)) - Number(Boolean(left.forensic_quarantined));
+      },
     )
     .slice(0, 1_200);
   const clientsById = new Map(
@@ -65,10 +64,14 @@ export function MapView({
   );
   const trafficLinesSeen = new Set<string>();
   const trafficLines = traffic.slice(-48).reverse().flatMap((entry) => {
-    const routeKey = `${entry.client_id}:${entry.server_id}`;
+    // Virtual activity batches preserve representative client ids. Rendering
+    // one makes aggregate backend telemetry visible without drawing a route
+    // just because a user selected that client.
+    const clientId = displayClientId(entry);
+    const routeKey = `${clientId}:${entry.server_id}`;
     if (trafficLinesSeen.has(routeKey) || trafficLinesSeen.size >= 18) return [];
     trafficLinesSeen.add(routeKey);
-    const client = clientsById.get(entry.client_id);
+    const client = clientsById.get(clientId);
     const server = serversById.get(entry.server_id);
     return client && server
       ? [
@@ -82,15 +85,6 @@ export function MapView({
         ]
       : [];
   });
-  const highlightedClient = highlightedClientId
-    ? clientsById.get(highlightedClientId)
-    : undefined;
-  const highlightedServer = highlightedServerId
-    ? serversById.get(highlightedServerId)
-    : undefined;
-  const highlightedRoute = highlightedClient && highlightedServer
-    ? [[highlightedClient.latitude, highlightedClient.longitude], [highlightedServer.latitude, highlightedServer.longitude]] as [[number, number], [number, number]]
-    : null;
   const messageEvents = events.filter(
     (event) =>
       event.type === "server_message" && event.from_server && event.to_server,
@@ -172,22 +166,6 @@ export function MapView({
             }}
           />
         ))}
-        {highlightedRoute && (
-          <Polyline
-            positions={highlightedRoute}
-            pathOptions={{
-              className: "map-selected-route",
-              color: "#ffe06b",
-              weight: 5,
-              opacity: 0.95,
-              dashArray: "10 7",
-            }}
-          >
-            <Tooltip sticky>
-              Entrega selecionada · {highlightedClientId} → {highlightedServerId}
-            </Tooltip>
-          </Polyline>
-        )}
         {servers.map((server) => (
           <ServerMarker
             key={server.server_id}
@@ -313,13 +291,13 @@ function ClientMarker({
   client: Client;
   onSelect: () => void;
 }) {
-  const quarantined = Boolean(client.forensic_quarantined);
-  const banned = !client.active;
+  const banned = Boolean(client.blacklist_permanent) || !client.active;
+  const quarantined = !banned && Boolean(client.forensic_quarantined);
   const dangerous = client.malicious && !banned;
-  const state = quarantined
-    ? "quarantined"
-    : banned
+  const state = banned
     ? "banned"
+    : quarantined
+    ? "quarantined"
     : dangerous
       ? "dangerous"
       : "active";
@@ -341,10 +319,10 @@ function ClientMarker({
         <br />
         {client.city}
         <br />
-        {quarantined
-          ? "QUARENTENA FORENSE TEMPORARIA"
-          : banned
+        {banned
           ? "BLACKLIST"
+          : quarantined
+          ? "QUARENTENA FORENSE TEMPORARIA"
           : dangerous
             ? "cliente perigoso"
             : "cliente ativo"}
@@ -401,7 +379,8 @@ function CommunicationOverlay({
     ];
   });
   const clientPackets = traffic.slice(-10).flatMap((entry) => {
-    const client = clientsById.get(entry.client_id);
+    const clientId = displayClientId(entry);
+    const client = clientsById.get(clientId);
     const server = serversById.get(entry.server_id);
     if (!client || !server) return [];
     const elapsed = clock - entry.at;
@@ -410,6 +389,7 @@ function CommunicationOverlay({
     return [
       {
         entry,
+        clientId,
         position: [
           server.latitude + (client.latitude - server.latitude) * progress,
           server.longitude + (client.longitude - server.longitude) * progress,
@@ -431,9 +411,9 @@ function CommunicationOverlay({
           </Marker>
         );
       })}
-      {clientPackets.map(({ entry, position }, index) => (
+      {clientPackets.map(({ entry, clientId, position }, index) => (
         <Marker
-          key={`client-content-${entry.at}-${entry.client_id}-${index}`}
+          key={`client-content-${entry.at}-${clientId}-${index}`}
           position={position}
           icon={communicationIcon("client_content", true)}
         >
@@ -444,6 +424,11 @@ function CommunicationOverlay({
       ))}
     </>
   );
+}
+
+function displayClientId(entry: Traffic): string {
+  if (entry.client_id !== "aggregate") return entry.client_id;
+  return entry.client_ids_sample?.[0] ?? "aggregate";
 }
 
 function communicationKind(

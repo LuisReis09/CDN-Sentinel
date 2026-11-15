@@ -60,15 +60,25 @@ def rank_delivery_servers(
     *,
     require_http: bool = True,
     pending_assignments: dict[str, int] | None = None,
+    policy: str = "hybrid-latency-capacity",
 ) -> list[tuple[float, object]]:
-    """Rank eligible nodes by both geographic distance and pressure.
+    """Rank eligible nodes according to the configured routing policy.
 
-    Distance remains dominant; a bounded pressure penalty shares traffic among
-    similarly located nodes without sending ordinary traffic to a distant idle
-    node. ``pending_assignments`` also balances a virtual burst before the
-    next status refresh.
+    ``pending_assignments`` balances a virtual burst before the next status
+    refresh, while the policy chooses nearest, least-utilized, or a bounded
+    latency/capacity hybrid score.
     """
     pending_assignments = pending_assignments or {}
+    normalized_policy = str(policy or "hybrid-latency-capacity").strip().lower().replace("_", "-")
+    aliases = {
+        "nearest": "nearest-healthy",
+        "nearest-healthy": "nearest-healthy",
+        "least-utilized": "least-utilized",
+        "least-loaded": "least-utilized",
+        "hybrid": "hybrid-latency-capacity",
+        "hybrid-latency-capacity": "hybrid-latency-capacity",
+    }
+    normalized_policy = aliases.get(normalized_policy, "hybrid-latency-capacity")
     candidates: list[tuple[float, object]] = []
     for server in servers:
         if require_http and getattr(server, "process_mode", "http") != "http":
@@ -84,7 +94,13 @@ def rank_delivery_servers(
         )
         pressure += max(0.0, float(getattr(server, "queue_depth", 0) or 0) / capacity)
         pressure += pending_assignments.get(str(getattr(server, "server_id", "")), 0) / capacity
-        candidates.append((distance + min(2_000.0, pressure * 300.0), server))
+        if normalized_policy == "nearest-healthy":
+            score = distance
+        elif normalized_policy == "least-utilized":
+            score = pressure * 100_000.0 + distance
+        else:
+            score = distance + min(2_000.0, pressure * 300.0)
+        candidates.append((score, server))
     return sorted(candidates, key=lambda item: (item[0], getattr(item[1], "server_id", "")))
 
 

@@ -23,6 +23,20 @@ class Client:
     dislikes: int = 0
     feedback_score: float = 0.0
     feedback_latency_avg_ms: float = 0.0
+    # Heterogeneous event-driven behavior shared by orchestration and
+    # gamification. These values are seeded once and remain stable across
+    # unrelated configuration edits.
+    activity_rate_rps: float = 0.25
+    session_probability: float = 0.85
+    watch_interval_ticks: float = 1.0
+    next_activity_tick: int = 0
+    timezone_offset_hours: int = 0
+    content_affinity: float = 1.0
+    piracy_intent_probability: float = 1.0
+    piracy_attempt_probability: float = 1.0
+    piracy_publish_probability: float = 1.0
+    piracy_detection_probability: float = 1.0
+    requests_generated: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -67,6 +81,14 @@ class CDNServer:
     role: str = "edge"
     region: str = ""
     peer_ids: List[str] = field(default_factory=list)
+    # Public part of the per-node Ed25519 identity. Private material is kept
+    # only in the controller process/environment of its owning node.
+    public_key: str | None = None
+    cache_level: int = 0
+    cache_hit_rate: float = 0.0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    prefetch_requests: int = 0
 
     @property
     def url(self) -> str:
@@ -138,6 +160,11 @@ class VideoChunk:
     end_to_end_ms: float = 0.0
     routing_candidates: List[Dict[str, Any]] = field(default_factory=list)
     routing_reason: str = ""
+    watermark_id: str | None = None
+    watermark_algorithm: str | None = None
+    # Immutable content identity carried by the signed CDNWM4 claim. This can
+    # be more specific than the catalogue selector requested by a client.
+    content_id: str | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -160,6 +187,9 @@ class SimulationState:
     # Leased, pre-verdict delivery blocks. Unlike the permanent blacklist,
     # these entries expire or are reassigned if their investigating node dies.
     temporary_blacklist: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Clients whose authentic media capture has been scheduled but whose
+    # watermark evidence has not yet been persisted as a leak record.
+    forensic_capture_pending_clients: set[str] = field(default_factory=set)
     leaks: List[Dict[str, Any]] = field(default_factory=list)
     scan_history: List[Dict[str, Any]] = field(default_factory=list)
     metrics_history: List[Dict[str, Any]] = field(default_factory=list)

@@ -1,14 +1,18 @@
 import tempfile
 import unittest
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
-from models.entities import CDNServer, SimulationState
+from models.entities import CDNServer, Client, SimulationState
 from repositories.in_memory import SimulationRepository
 from services.forensic_investigation_service import ForensicInvestigationService
+from services.blacklist_service import BlacklistService
+from services.cdn_http_client import CDNHttpClient
 from services.monitor_service import MonitorService
 from services.watermark_service import WatermarkService
 from services.watermark_registry import WatermarkRegistry
+from utils.image_watermark import visual_marker
 
 
 class FakeRegistry:
@@ -33,14 +37,67 @@ class FakeWatermarkService:
     def __init__(self, result):
         self.result = result
         self._registry_store = FakeRegistry()
+        self.calls = []
 
-    def detect_forensic_video(self, path, *, algorithm):
+    def detect_forensic_video(self, path, *, algorithm, **kwargs):
+        self.calls.append({"path": path, "algorithm": algorithm, **kwargs})
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
 
 
 class ForensicStatesTests(unittest.TestCase):
+    def test_simulated_capture_for_regular_client_is_rejected_without_blacklist(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            media = Path(temporary) / "capture.mp4"
+            media.write_bytes(b"capture")
+            client = Client("regular", 0, 0, "Test", malicious=False)
+            server = CDNServer("edge-a", "127.0.0.1", 5101, 0, 0, "A", status="healthy", process_mode="virtual")
+            repository = SimulationRepository()
+            repository.replace(SimulationState(
+                initialized=True,
+                lifecycle="running",
+                config={"seed": 7},
+                clients={client.client_id: client},
+                servers={server.server_id: server},
+                leaks=[{
+                    "leak_id": "capture-regular",
+                    "server_id": server.server_id,
+                    "origin_server_id": server.server_id,
+                    "client_id": client.client_id,
+                    "content_id": "movie-a",
+                    "media_path": str(media),
+                    "media_sha256": hashlib.sha256(media.read_bytes()).hexdigest(),
+                    "watermark_id": "wm-regular",
+                    "processed": False,
+                }],
+            ))
+            watermark = FakeWatermarkService({})
+            blacklist = BlacklistService(repository, CDNHttpClient(), watermark)
+            monitor = MonitorService(repository, watermark, blacklist)
+            claim = {
+                "client_id": client.client_id,
+                "server_id": server.server_id,
+                "content_id": "movie-a",
+                "watermark_id": "wm-regular",
+            }
+            with patch.object(monitor._investigations, "investigate_simulated_cdn_leak", return_value={
+                "forensic_status": "VALID",
+                "decision": "PENDING_REVIEW",
+                "claim": claim,
+                "evidence": {"marker": "registered-marker"},
+                "investigation_id": "inv-regular",
+                "media_sha256": hashlib.sha256(media.read_bytes()).hexdigest(),
+            }):
+                result = monitor.scan(server.server_id)
+
+            self.assertEqual(result["detected"], [])
+            self.assertEqual(len(repository.blacklist_values()), 0)
+            stored = repository.state_ref().leaks[0]
+            self.assertTrue(stored["processed"])
+            self.assertEqual(stored["review_status"], "REJECTED_BINDING")
+            self.assertFalse(stored["attributed"])
+
     def test_monitor_requests_only_the_current_qim3_detector(self):
         with tempfile.TemporaryDirectory() as temporary:
             media = Path(temporary) / "leak.mp4"
@@ -91,6 +148,66 @@ class ForensicStatesTests(unittest.TestCase):
             )
         self.assertEqual(mismatch["decision"], "INCONCLUSIVE")
         self.assertFalse(mismatch["content_match"]["bindings"]["digest"])
+        self.assertTrue(all(call["max_frames"] == 6 for call in service.calls))
+        self.assertTrue(all(call["sample_interval_seconds"] == 0.5 for call in service.calls))
+        self.assertTrue(all(call["qim3_soft_decode"] for call in service.calls))
+
+    def test_simulated_forensic_plan_requires_exact_registered_marker_after_soft_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            service = WatermarkService(
+                "simulated-evidence-plan-secret-2026",
+                WatermarkRegistry(Path(temporary) / "ledger.sqlite3"),
+            )
+            token, _claim = service.issue_forensic_claim(
+                client_id="client-a",
+                server_id="edge-a",
+                content_id="movie-a",
+                algorithm_id="dct-qim-v3",
+            )
+            marker = visual_marker(token)
+            with patch("services.watermark_service.detect_video", return_value={
+                "status": "CANDIDATE", "marker": marker, "frame_support": 0.8,
+            }) as detector:
+                result = service.detect_forensic_video(
+                    "captured.mp4",
+                    algorithm="qim3",
+                    max_frames=6,
+                    sample_interval_seconds=0.5,
+                    qim3_soft_decode=True,
+                )
+            self.assertEqual(result["forensic_status"], "VALID")
+            self.assertEqual(detector.call_args.kwargs["sample_interval_seconds"], 0.5)
+            self.assertTrue(detector.call_args.kwargs["qim3_soft_decode"])
+
+            # A soft-decoded marker with no exact ledger entry remains
+            # non-attributable; the recovery setting cannot create a ban.
+            with patch("services.watermark_service.detect_video", return_value={
+                "status": "CANDIDATE", "marker": "000000000000", "frame_support": 1.0,
+            }):
+                unknown = service.detect_forensic_video(
+                    "captured.mp4",
+                    algorithm="qim3",
+                    max_frames=6,
+                    sample_interval_seconds=0.5,
+                    qim3_soft_decode=True,
+                )
+            self.assertEqual(unknown["forensic_status"], "CANDIDATE")
+
+    def test_virtual_server_gets_continuous_monitor_loop(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = SimulationRepository()
+            server = CDNServer("virtual-a", "127.0.0.1", 5101, 0, 0, "A", status="healthy", process_mode="virtual")
+            repository.replace(SimulationState(initialized=True, lifecycle="running", servers={server.server_id: server}))
+            watermark = WatermarkService(
+                "virtual-monitor-secret-2026",
+                WatermarkRegistry(Path(temporary) / "ledger.sqlite3"),
+            )
+            monitor = MonitorService(repository, watermark, BlacklistService(repository, CDNHttpClient(), watermark))
+            try:
+                monitor.start([server.to_dict()], tick_interval_seconds=1.0)
+                self.assertTrue(monitor.status()["per_server"][server.server_id]["automatic"])
+            finally:
+                monitor.stop()
 
     def test_detector_prefers_inconclusive_to_not_found_and_never_maps_unknown_to_absence(self):
         with tempfile.TemporaryDirectory() as temporary:

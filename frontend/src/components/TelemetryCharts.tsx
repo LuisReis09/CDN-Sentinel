@@ -1,4 +1,4 @@
-import { Activity, Ban, HeartPulse, Server } from "lucide-react";
+import { Activity, Ban, HeartPulse, Server, Users } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -15,13 +15,16 @@ import type { TelemetrySample } from "../types";
 
 const colors = ["#45d9ff", "#9eff6c", "#ffb86b", "#ff6177", "#b99cff"];
 
-export function TelemetryCharts({ samples }: { samples: TelemetrySample[] }) {
+export function TelemetryCharts({ samples, fallbackClientCount }: { samples: TelemetrySample[]; fallbackClientCount?: number }) {
   const serverIds = Array.from(
     new Set(samples.flatMap((sample) => Object.keys(sample.server_requests ?? {}))),
   );
   const data = samples.map((sample) => ({
     ...sample,
     time: `${Math.round(sample.elapsed_seconds)}s`,
+    // Older archives do not carry the client dimensions. New samples do;
+    // retain a zero fallback so the history view remains backward-compatible.
+    active_clients: sample.active_clients ?? sample.clients_total ?? fallbackClientCount ?? 0,
     ...sample.server_requests,
   }));
 
@@ -89,6 +92,18 @@ export function TelemetryCharts({ samples }: { samples: TelemetrySample[] }) {
                 <YAxis domain={[0, 100]} unit="%" />
                 <ChartTip />
                 <Area type="monotone" dataKey="health_score_pct" name="saúde" stroke="#9eff6c" fill="#9eff6c" fillOpacity={0.14} strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </ChartPanel>
+
+          <ChartPanel icon={<Users size={15} />} title="Clientes ativos" tone="cyan">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={data}>
+                <ChartGrid />
+                <ChartAxis />
+                <YAxis allowDecimals={false} />
+                <ChartTip />
+                <Area type="monotone" dataKey="active_clients" name="clientes" stroke="#45d9ff" fill="#45d9ff" fillOpacity={0.14} strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
           </ChartPanel>

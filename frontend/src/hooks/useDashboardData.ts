@@ -30,6 +30,7 @@ const demoOverview: Overview = {
       monthly_client_price_usd: 25,
       monthly_server_cost_usd: 100,
       monthly_fixed_cost_usd: 150,
+      simulation_mode: "orchestration",
     },
     servers_total: 0,
     clients_total: 0,
@@ -98,6 +99,7 @@ function normalizeOverview(raw: Partial<Overview>): Overview {
     monthly_server_cost_usd:
       status.configuration?.monthly_server_cost_usd ?? 100,
     monthly_fixed_cost_usd: status.configuration?.monthly_fixed_cost_usd ?? 150,
+    simulation_mode: status.configuration?.simulation_mode ?? "orchestration",
   };
   const scalability = status.scalability ?? demoOverview.status.scalability;
   const costModel = {

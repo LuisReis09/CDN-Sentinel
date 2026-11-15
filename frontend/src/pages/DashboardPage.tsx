@@ -56,8 +56,9 @@ export function DashboardPage({
     (overview.temporary_blacklist ?? []).map((entry) => entry.client_id),
   );
   const clients = overview.clients.map((client) =>
+    client.blacklist_permanent ||
     overview.blacklist.some((entry) => entry.client_id === client.client_id)
-      ? { ...client, active: false }
+      ? { ...client, active: false, blacklist_permanent: true, forensic_quarantined: false }
       : {
           ...client,
           forensic_quarantined:
@@ -144,7 +145,7 @@ export function DashboardPage({
         <MetricCard
           label="CLIENTES"
           value={status.clients_total}
-          caption={`${status.malicious_clients} em risco`}
+          caption={`${status.malicious_clients} em risco · ${status.configuration.simulation_mode === "gamification" ? "população dinâmica" : "população fixa"}`}
           icon={Users}
           tone="cyan"
         />
@@ -176,13 +177,6 @@ export function DashboardPage({
           }
           icon={Ban}
           tone="red"
-        />
-        <MetricCard
-          label="QUARENTENA"
-          value={status.forensic_pending_total ?? temporarilyBlocked.size}
-          caption="bloqueios temporÃ¡rios em anÃ¡lise"
-          icon={Ban}
-          tone="warning"
         />
       </section>
       <section className="topology-layout">
@@ -224,8 +218,6 @@ export function DashboardPage({
                 setActiveNode(null);
               }
             }}
-            highlightedClientId={activeClient}
-            highlightedServerId={selectedClientServerId}
           />
           {selectedClient && (
             <div className="selected-client-route">
@@ -235,7 +227,7 @@ export function DashboardPage({
               </div>
               <span>servido por</span>
               <b>{selectedClientServerId ?? "sem entrega recente"}</b>
-              {selectedClientServer && <small>{selectedClientServer.city} · linha destacada no mapa</small>}
+              {selectedClientServer && <small>{selectedClientServer.city} · destino da entrega mais recente</small>}
             </div>
           )}
           <p className="map-performance-note">
@@ -313,7 +305,7 @@ function NodeHealthPanel({
               </strong>
               <small>
                 {server.role ?? "edge"} · {server.process_mode ?? "http"} · PID {server.process_id ?? "—"} · porta {server.port} · uptime{" "}
-                {Math.round(server.uptime_seconds ?? 0)}s · {server.health_status ?? server.status} · {server.peer_ids?.length ?? 0} peers
+                {Math.round(server.uptime_seconds ?? 0)}s · {server.health_status ?? server.status} · {server.peer_ids?.length ?? 0} peers · cache {Math.round((server.cache_hit_rate ?? 0) * 100)}%
               </small>
             </span>
             <span className="node-health-stat">
@@ -336,6 +328,7 @@ function NodeHealthPanel({
             <span className="node-health-stat">
               <b>{server.blacklist_size}</b>
               <small>blacklist local</small>
+              <small>{server.cache_hits ?? 0} hits · {server.cache_misses ?? 0} misses</small>
             </span>
           </button>
         ))}

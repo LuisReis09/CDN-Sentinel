@@ -24,6 +24,7 @@ from utils.latency import sleep_for_distance
 from utils.crypto import decrypt_payload, encrypt_payload, is_encrypted_payload
 from utils.video import encode_payload
 from utils.protocol import signed_headers, verify_headers
+from utils.node_identity import generate_node_identity, public_key_from_private, sign_peer_envelope, verify_peer_envelope
 from utils.video_watermark import embed_video, probe_video_limits
 from utils.qim_watermark import QIM3_STEP
 
@@ -35,7 +36,7 @@ class CapacityRejected(RuntimeError):
 class CDNNode:
     """State and HTTP handlers for one independent CDN process."""
 
-    def __init__(self, server_id: str, host: str, port: int, latitude: float, longitude: float, city: str, secret_key: str, latency_factor: float, capacity_tier: str = "basic", content_provider: ContentProvider | None = None) -> None:
+    def __init__(self, server_id: str, host: str, port: int, latitude: float, longitude: float, city: str, secret_key: str, latency_factor: float, capacity_tier: str = "basic", content_provider: ContentProvider | None = None, private_key: str | None = None) -> None:
         self.server_id = server_id
         self.host = host
         self.port = port
@@ -49,10 +50,17 @@ class CDNNode:
         self.watermark_service = WatermarkService(secret_key)
         self.content_provider = content_provider or HybridContentProvider()
         self.secret_key = secret_key
+        self.private_key, self.public_key = (private_key, public_key_from_private(private_key)) if private_key else generate_node_identity()
         self.peers: list[dict] = []
         self._lock = threading.RLock()
         self.started_at = time.time()
         self.fault = {"offline": False, "extra_latency_ms": 0.0, "drop_rate": 0.0}
+        self.cache_level = 0
+        self.cache_hit_rate = 0.0
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.prefetch_requests = 0
+        self._content_cache: dict[str, tuple[bytes, str]] = {}
         self._retry_stop = threading.Event()
         self._retry_thread = threading.Thread(target=self._retry_pending, name=f"gossip-retry-{server_id}", daemon=True)
         self._retry_thread.start()
@@ -68,6 +76,13 @@ class CDNNode:
             if "capacity_tier" in values:
                 self.capacity_tier = str(values["capacity_tier"])
                 self.capacity_profile = profile_for_tier(self.capacity_tier)
+            if "cache_level" in values:
+                self.cache_level = max(0, min(3, int(values["cache_level"])))
+                self.cache_hit_rate = round(min(0.85, self.cache_level * 0.22), 3)
+                self.prefetch_requests += self.cache_level * 10
+                max_entries = max(1, self.cache_level * 16)
+                while len(self._content_cache) > max_entries:
+                    self._content_cache.pop(next(iter(self._content_cache)))
             if "fault" in values:
                 fault = values["fault"] or {}
                 if not isinstance(fault, dict):
@@ -77,21 +92,46 @@ class CDNNode:
                 self.fault["drop_rate"] = max(0.0, min(1.0, float(fault.get("drop_rate", self.fault["drop_rate"]))))
                 if not self.fault["offline"] and not self.fault["extra_latency_ms"] and not self.fault["drop_rate"]:
                     self.repository.clear_consecutive_errors()
-        return {"server_id": self.server_id, "latency_factor": self.latency_factor, "capacity_tier": self.capacity_tier, "capacity_profile": self.capacity_profile.to_dict(), "fault": dict(self.fault)}
+        return {
+            "server_id": self.server_id,
+            "latency_factor": self.latency_factor,
+            "capacity_tier": self.capacity_tier,
+            "capacity_profile": self.capacity_profile.to_dict(),
+            "cache_level": self.cache_level,
+            "cache_hit_rate": self.cache_hit_rate,
+            "fault": dict(self.fault),
+        }
 
     def _post_peer(self, peer: dict, path: str, payload: dict) -> dict:
         """Send an authenticated, encrypted hop to a neighbouring CDN node."""
 
         url = f"{peer['url']}{path}"
         wire_payload = encrypt_payload(payload, self.secret_key, aad=path)
+        headers = signed_headers(self.secret_key, "POST", path, wire_payload)
+        headers["X-CDN-Peer-Id"] = self.server_id
+        headers["X-CDN-Peer-Signature"] = sign_peer_envelope(
+            self.private_key, self.server_id, path, wire_payload,
+        )
         response = requests.post(
             url,
             json=wire_payload,
-            headers=signed_headers(self.secret_key, "POST", path, wire_payload),
+            headers=headers,
             timeout=2.0,
         )
         response.raise_for_status()
         return response.json()
+
+    def verify_peer_signature(self, path: str, encrypted_payload: object, headers) -> bool:
+        sender_id = str(headers.get("X-CDN-Peer-Id") or "")
+        signature = str(headers.get("X-CDN-Peer-Signature") or "")
+        peer = next((item for item in self.peers if item.get("server_id") == sender_id), None)
+        return bool(
+            sender_id
+            and signature
+            and peer
+            and peer.get("public_key")
+            and verify_peer_envelope(str(peer["public_key"]), sender_id, path, encrypted_payload, signature)
+        )
 
     def status(self) -> dict:
         metrics = self.repository.request_metrics()
@@ -100,6 +140,7 @@ class CDNNode:
             metrics.get("observed_rps", 0.0),
             metrics.get("queue_depth", 0),
             metrics.get("queue_rejected", 0),
+            cache_hit_rate=self.cache_hit_rate,
         )
         pressure = capacity["pressure"]
         is_overloaded = pressure >= 0.9
@@ -121,6 +162,11 @@ class CDNNode:
             "load": self.repository.load(),
             "blacklist_size": len(self.repository.blacklist()),
             "temporary_blacklist_size": self.repository.temporary_blacklist_size(),
+            "cache_level": self.cache_level,
+            "cache_hit_rate": self.cache_hit_rate,
+            "cache_hits": self.cache_hits,
+            "cache_misses": self.cache_misses,
+            "prefetch_requests": self.prefetch_requests,
             "messages_received": self.repository.message_count(),
             "peers": [peer["server_id"] for peer in self.peers],
             "uptime_seconds": round(time.time() - self.started_at, 3),
@@ -138,6 +184,8 @@ class CDNNode:
         """
         if not content_type.startswith("video/"):
             return content
+        runtime_root = Path(os.getenv("CDN_WATERMARK_CACHE_ROOT", "data/runtime/watermarked"))
+        runtime_root.mkdir(parents=True, exist_ok=True)
         resolver = getattr(self.content_provider, "resolve_asset", None)
         source_path: Path | None = None
         if resolver is not None:
@@ -148,12 +196,34 @@ class CDNNode:
         temporary_source: Path | None = None
         try:
             if source_path is None or not source_path.is_file():
-                runtime_root = Path(os.getenv("CDN_WATERMARK_CACHE_ROOT", "data/runtime/watermarked"))
-                runtime_root.mkdir(parents=True, exist_ok=True)
                 temporary_source = runtime_root / f"source-{hashlib.sha256(content).hexdigest()[:24]}.mp4"
                 if not temporary_source.exists():
                     temporary_source.write_bytes(content)
                 source_path = temporary_source
+            # Simulation nodes use a bounded playable sample.  The original
+            # dataset asset remains untouched and is only read once to build
+            # the local two-second source cache.
+            try:
+                clip_seconds = float(os.getenv("CDN_SIMULATION_CLIP_SECONDS", "0"))
+            except ValueError:
+                clip_seconds = 0.0
+            if clip_seconds > 0 and source_path is not None and source_path.is_file():
+                evidence_fps = 12
+                clip_key = hashlib.sha256(
+                    f"{source_path.resolve()}:{source_path.stat().st_mtime_ns}:{source_path.stat().st_size}:{clip_seconds:g}:{evidence_fps}fps".encode("utf-8")
+                ).hexdigest()[:24]
+                bounded_source = runtime_root / f"simulation-source-{clip_key}-{clip_seconds:g}s-{evidence_fps}fps.mp4"
+                if not bounded_source.exists():
+                    try:
+                        subprocess.run(
+                            ["ffmpeg", "-y", "-v", "error", "-i", str(source_path), "-t", str(clip_seconds), "-vf", f"fps={evidence_fps}", "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "30", "-pix_fmt", "yuv420p", str(bounded_source)],
+                            check=True,
+                            capture_output=True,
+                            timeout=60,
+                        )
+                    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                        bounded_source = source_path
+                source_path = bounded_source
             source_stat = source_path.stat()
             cache_root = Path(os.getenv("CDN_WATERMARK_CACHE_ROOT", "data/runtime/watermarked"))
             cache_root.mkdir(parents=True, exist_ok=True)
@@ -209,7 +279,37 @@ class CDNNode:
                 time.sleep(reservation["queue_wait_ms"] / 1000.0)
             if self.fault["extra_latency_ms"]:
                 time.sleep(self.fault["extra_latency_ms"] / 1000.0)
-            content, content_type = self.content_provider.get_chunk(video_id, chunk_number)
+            cache_key = f"{video_id}:{chunk_number}"
+            with self._lock:
+                cached = self._content_cache.get(cache_key) if self.cache_level > 0 else None
+            if cached is not None:
+                content, content_type = cached
+                self.cache_hits += 1
+                cache_hit = True
+            else:
+                # The watermark encoder below can read a provider-owned media
+                # path directly. Avoid materializing an entire dataset video
+                # in memory merely to create the simulation's two-second
+                # sample; on a cold node that otherwise delays evidence long
+                # enough for a quarantine lease to look stalled in the UI.
+                resolver = getattr(self.content_provider, "resolve_asset", None)
+                try:
+                    _source_path, content_type = resolver(video_id, chunk_number) if resolver is not None else (None, None)
+                except (FileNotFoundError, KeyError, OSError, ValueError):
+                    _source_path, content_type = None, None
+                if _source_path is not None and _source_path.is_file():
+                    content = b""
+                    content_type = content_type or "video/mp4"
+                else:
+                    content, content_type = self.content_provider.get_chunk(video_id, chunk_number)
+                self.cache_misses += 1
+                cache_hit = False
+                if self.cache_level > 0:
+                    with self._lock:
+                        self._content_cache[cache_key] = (content, content_type)
+                        max_entries = max(1, self.cache_level * 16)
+                        while len(self._content_cache) > max_entries:
+                            self._content_cache.pop(next(iter(self._content_cache)))
             claim_content_id = video_id
             # CDNWM4/QIM3 is the only delivery watermark for new media.  The
             # legacy adaptive spread path remains readable by old evidence
@@ -243,8 +343,11 @@ class CDNNode:
                 "watermark_version": "CDNWM4",
                 "watermark_algorithm": "dct-qim-v3",
                 "watermark_id": claim.watermark_id,
+                "content_id": claim.content_id,
                 "server_id": self.server_id,
                 "issued_at": claim.issued_at,
+                "cache_hit": cache_hit,
+                "cache_hit_rate": self.cache_hit_rate,
             }
         except Exception:
             failed = True
@@ -302,6 +405,11 @@ class CDNNode:
         return {"accepted": True, "already_present": False, "propagated_to": list(dict.fromkeys(propagated_to)), "message_trace": message_trace}
 
     def reconcile_blacklist(self, entries: list[dict]) -> dict:
+        # Reconciliation is authoritative for the current simulation.  It
+        # therefore also removes stale entries left by a previous scenario;
+        # accepting-only would leave local nodes permanently blocking clients
+        # that the controller no longer considers banned.
+        self.repository.replace_blacklist([])
         accepted = []
         rejected = []
         for entry in entries[:500]:
@@ -312,6 +420,14 @@ class CDNNode:
             except (ValueError, KeyError, TypeError) as exc:
                 rejected.append({"client_id": entry.get("client_id"), "error": str(exc)})
         return {"accepted": accepted, "rejected": rejected, "server_id": self.server_id}
+
+    def reconcile_quarantine(self, entries: list[dict]) -> dict:
+        """Replace temporary delivery holds after a controller reset."""
+        self.repository.replace_temporary_blacklist(entries[:500])
+        return {
+            "accepted": [entry.get("client_id") for entry in entries[:500] if entry.get("client_id")],
+            "server_id": self.server_id,
+        }
 
     def _retry_pending(self) -> None:
         while not self._retry_stop.wait(1.0):
@@ -340,11 +456,13 @@ def create_node_app(node: CDNNode) -> Flask:
             return jsonify({"error": "mensagem interna sem envelope AES-256-GCM"}), 403
         return None
 
-    def encrypted_body():
+    def encrypted_body(*, require_peer_signature: bool = False):
         wire_payload = request.get_json(silent=True) or {}
         denied = authenticate(wire_payload, encrypted_required=True)
         if denied:
             return None, denied
+        if require_peer_signature and not node.verify_peer_signature(request.path, wire_payload, request.headers):
+            return None, (jsonify({"error": "assinatura Ed25519 do nó emissor ausente ou inválida"}), 403)
         try:
             return decrypt_payload(wire_payload, node.secret_key, aad=request.path), None
         except ValueError as exc:
@@ -375,7 +493,7 @@ def create_node_app(node: CDNNode) -> Flask:
         peers = body.get("peers", [])
         if not isinstance(peers, list) or len(peers) > 500:
             return jsonify({"error": "peers deve ser uma lista"}), 400
-        if any(not isinstance(peer, dict) or not peer.get("server_id") or not peer.get("url") or not isinstance(peer.get("latitude"), (int, float)) or not isinstance(peer.get("longitude"), (int, float)) for peer in peers):
+        if any(not isinstance(peer, dict) or not peer.get("server_id") or not peer.get("url") or not peer.get("public_key") or not isinstance(peer.get("latitude"), (int, float)) or not isinstance(peer.get("longitude"), (int, float)) for peer in peers):
             return jsonify({"error": "peer inválido"}), 400
         try:
             node.configure_peers(peers)
@@ -462,6 +580,13 @@ def create_node_app(node: CDNNode) -> Flask:
         body, denied = encrypted_body()
         if denied:
             return denied
+        message = body.get("message", {})
+        sender_id = str(message.get("from_server") or "") if isinstance(message, dict) else ""
+        # Monitor-to-first-node submissions originate in the control plane;
+        # every subsequent CDN hop names a CDN node and must carry that
+        # node's Ed25519 signature over the encrypted envelope.
+        if sender_id and sender_id != "monitor" and not node.verify_peer_signature(request.path, request.get_json(silent=True) or {}, request.headers):
+            return jsonify({"error": "assinatura Ed25519 do nó emissor ausente ou inválida"}), 403
         entry = body.get("entry", body)
         if not isinstance(entry, dict) or not entry.get("client_id"):
             return jsonify({"error": "entry de blacklist inválida"}), 400
@@ -497,6 +622,16 @@ def create_node_app(node: CDNNode) -> Flask:
         except (KeyError, TypeError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
 
+    @app.post("/internal/quarantine/reconcile")
+    def internal_quarantine_reconcile() -> Any:
+        body, denied = encrypted_body()
+        if denied:
+            return denied
+        entries = body.get("entries", [])
+        if not isinstance(entries, list):
+            return jsonify({"error": "entries deve ser uma lista"}), 400
+        return jsonify(node.reconcile_quarantine(entries))
+
     @app.post("/internal/quarantine/release")
     def internal_quarantine_release() -> Any:
         body, denied = encrypted_body()
@@ -514,6 +649,9 @@ def create_node_app(node: CDNNode) -> Flask:
         body, denied = encrypted_body()
         if denied:
             return denied
+        sender_id = str(body.get("from_server") or "")
+        if sender_id and not node.verify_peer_signature(request.path, request.get_json(silent=True) or {}, request.headers):
+            return jsonify({"error": "assinatura Ed25519 do nó emissor ausente ou inválida"}), 403
         if not body.get("message_id") or not body.get("content_id"):
             return jsonify({"error": "telemetria de conteúdo inválida"}), 400
         return jsonify(node.accept_content_telemetry(body))
@@ -548,6 +686,7 @@ def main() -> None:
         secret_key=secret_key,
         latency_factor=args.latency_factor,
         capacity_tier=args.capacity_tier,
+        private_key=os.getenv("CDN_NODE_PRIVATE_KEY") or None,
     )
     create_node_app(node).run(host=args.host, port=args.port, threaded=True, use_reloader=False)
 

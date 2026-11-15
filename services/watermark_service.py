@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import math
 
 from utils.video_watermark import (
     FORENSIC_SAMPLE_INTERVAL_SECONDS,
@@ -195,11 +196,30 @@ class WatermarkService:
             version=payload.get("version", "CDNWM2"),
         )
 
-    def detect_forensic_video(self, path, *, algorithm: str = "auto", max_frames: int = 24) -> dict:
-        """Detect a marker and resolve it only against the durable ledger."""
+    def detect_forensic_video(
+        self,
+        path,
+        *,
+        algorithm: str = "auto",
+        max_frames: int = 24,
+        sample_interval_seconds: float | None = None,
+        qim3_soft_decode: bool = False,
+    ) -> dict:
+        """Detect a marker and resolve it only against the durable ledger.
+
+        ``sample_interval_seconds`` and ``qim3_soft_decode`` are deliberately
+        opt-in.  The Studio forensic endpoint therefore retains its standard
+        evidence plan, while the simulator can use its short, internally
+        captured clips more reliably without weakening marker/claim matching.
+        """
         algorithms = ("qim3", "qim2", "adaptive-spread") if algorithm == "auto" else (algorithm,)
         if any(item not in {"qim3", "qim2", "adaptive-spread", "dct"} for item in algorithms):
             raise ValueError("algoritmo visual desconhecido")
+        if max_frames < 1:
+            raise ValueError("max_frames deve ser positivo")
+        interval = FORENSIC_SAMPLE_INTERVAL_SECONDS if sample_interval_seconds is None else float(sample_interval_seconds)
+        if not math.isfinite(interval) or interval <= 0:
+            raise ValueError("sample_interval_seconds deve ser positivo")
         strongest: dict | None = None
         priority = {"NOT_FOUND": 0, "INCONCLUSIVE": 1, "ERROR": 2, "CANDIDATE": 3}
         for algorithm_name in algorithms:
@@ -210,7 +230,8 @@ class WatermarkService:
                         secret,
                         algorithm=algorithm_name,
                         max_frames=max_frames,
-                        sample_interval_seconds=FORENSIC_SAMPLE_INTERVAL_SECONDS,
+                        sample_interval_seconds=interval,
+                        qim3_soft_decode=qim3_soft_decode if algorithm_name == "qim3" else False,
                     )
                 except (OSError, RuntimeError, ValueError) as exc:
                     evidence = {"status": "ERROR", "reason": "detector_failed", "error_type": type(exc).__name__}

@@ -16,6 +16,7 @@ from typing import Any
 
 from services.watermark_service import WatermarkService
 from services.content_provider import HybridContentProvider
+from utils.video_watermark import INTERACTIVE_RECOVERY_SAMPLE_INTERVAL_SECONDS
 from watermark.content_match import match_claimed_content
 
 
@@ -136,7 +137,20 @@ class ForensicInvestigationService:
         expected_digest = str(expected_media_sha256 or "").lower()
         digest_matches = bool(expected_digest) and hmac.compare_digest(digest, expected_digest)
         try:
-            evidence = self._watermark_service.detect_forensic_video(media_path, algorithm=algorithm)
+            # The simulator owns this exact two-second capture and needs a
+            # bounded, resilient sample plan. Five temporally separated QIM3
+            # frames plus SECDED soft recovery are still independently
+            # extracted visual evidence; they merely avoid treating a short
+            # H.264 clip as if it had the temporal depth of a Studio upload.
+            # The result is not actionable unless the recovered marker maps
+            # exactly to a durable, cryptographically valid claim below.
+            evidence = self._watermark_service.detect_forensic_video(
+                media_path,
+                algorithm=algorithm,
+                max_frames=6,
+                sample_interval_seconds=INTERACTIVE_RECOVERY_SAMPLE_INTERVAL_SECONDS,
+                qim3_soft_decode=True,
+            )
         except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as exc:
             evidence = {"status": "ERROR", "reason": "detector_failed", "error_type": type(exc).__name__}
         if not isinstance(evidence, dict):

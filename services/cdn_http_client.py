@@ -10,6 +10,7 @@ from models.entities import CDNServer
 from utils.crypto import encrypt_payload
 from utils.latency import sleep_for_distance
 from utils.protocol import path_from_url, signed_headers
+from utils.node_identity import sign_peer_envelope
 from services.content_provider import default_content_id
 
 
@@ -19,9 +20,15 @@ class CDNHttpClient:
     def __init__(self, timeout: float = 2.0, secret_key: str | None = None) -> None:
         self._timeout = timeout
         self._secret_key = secret_key or os.getenv("CDN_SECRET_KEY", "local-development-secret")
+        self._node_private_keys: dict[str, str] = {}
 
     def configure_secret(self, secret_key: str) -> None:
         self._secret_key = secret_key
+
+    def configure_node_identities(self, private_keys: dict[str, str]) -> None:
+        """Install the local node signing keys for simulated server messages."""
+
+        self._node_private_keys = dict(private_keys)
 
     def _headers(self, method: str, url: str, payload: object | None = None) -> dict[str, str]:
         return signed_headers(self._secret_key, method, path_from_url(url), payload)
@@ -113,10 +120,27 @@ class CDNHttpClient:
         response.raise_for_status()
         return response.json()
 
+    def reconcile_temporary_blacklist(self, server: CDNServer, entries: list[dict]) -> Dict[str, Any]:
+        url = f"{server.url}/internal/quarantine/reconcile"
+        payload = {"entries": entries}
+        wire_payload = self._wire_payload(url, payload)
+        response = requests.post(url, json=wire_payload, headers=self._headers("POST", url, wire_payload), timeout=self._timeout)
+        response.raise_for_status()
+        return response.json()
+
     def publish_content_telemetry(self, server: CDNServer, message: dict) -> Dict[str, Any]:
         url = f"{server.url}/internal/content-telemetry"
         wire_payload = self._wire_payload(url, message)
-        response = requests.post(url, json=wire_payload, headers=self._headers("POST", url, wire_payload), timeout=min(self._timeout, 4.0))
+        headers = self._headers("POST", url, wire_payload)
+        sender_id = str(message.get("from_server") or "")
+        private_key = self._node_private_keys.get(sender_id)
+        if sender_id and private_key:
+            path = path_from_url(url)
+            headers["X-CDN-Peer-Id"] = sender_id
+            headers["X-CDN-Peer-Signature"] = sign_peer_envelope(
+                private_key, sender_id, path, wire_payload,
+            )
+        response = requests.post(url, json=wire_payload, headers=headers, timeout=min(self._timeout, 4.0))
         response.raise_for_status()
         return response.json()
 

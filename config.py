@@ -29,6 +29,14 @@ class SimulationConfig:
     demand_rps_per_client: float = 0.25
     slo_p95_ms: float = 250.0
     slo_success_rate_pct: float = 99.0
+    simulation_profile: str = "realistic"
+    forensic_capture_workers: int = 2
+    forensic_max_attempts: int = 4
+    forensic_retry_base_seconds: float = 1.5
+    economic_day_seconds: float = 2.5
+    # The two experiences share the same event fabric, but only management
+    # scenarios are allowed to evolve the commercial population.
+    simulation_mode: str = "orchestration"
     seed: int = 2026
 
     @classmethod
@@ -48,6 +56,12 @@ class SimulationConfig:
             demand_rps_per_client = float(payload.get("demand_rps_per_client", 0.25))
             slo_p95_ms = float(payload.get("slo_p95_ms", 250.0))
             slo_success_rate_pct = float(payload.get("slo_success_rate_pct", 99.0))
+            simulation_profile = str(payload.get("simulation_profile", "realistic"))
+            forensic_capture_workers = int(payload.get("forensic_capture_workers", 2))
+            forensic_max_attempts = int(payload.get("forensic_max_attempts", 4))
+            forensic_retry_base_seconds = float(payload.get("forensic_retry_base_seconds", 1.5))
+            economic_day_seconds = float(payload.get("economic_day_seconds", 2.5))
+            simulation_mode = str(payload.get("simulation_mode", "orchestration")).strip().lower()
             seed = int(payload.get("seed", 2026))
         except (TypeError, ValueError) as exc:
             raise ValueError("Parâmetros numéricos inválidos") from exc
@@ -70,7 +84,7 @@ class SimulationConfig:
         # Clientes acima do limite de processos locais são virtuais e não
         # consomem uma porta dedicada. A porta base continua sendo validada
         # para preservar compatibilidade com execuções pequenas.
-        if not all(math.isfinite(value) for value in (malicious_probability, latency_factor, tick_interval_seconds, monthly_client_price_usd, monthly_server_cost_usd, monthly_fixed_cost_usd, demand_rps_per_client, slo_p95_ms, slo_success_rate_pct)):
+        if not all(math.isfinite(value) for value in (malicious_probability, latency_factor, tick_interval_seconds, monthly_client_price_usd, monthly_server_cost_usd, monthly_fixed_cost_usd, demand_rps_per_client, slo_p95_ms, slo_success_rate_pct, forensic_retry_base_seconds, economic_day_seconds)):
             raise ValueError("parâmetros numéricos devem ser finitos")
         if monthly_client_price_usd < 0 or monthly_server_cost_usd < 0 or monthly_fixed_cost_usd < 0:
             raise ValueError("custos e preço mensal em USD não podem ser negativos")
@@ -80,6 +94,18 @@ class SimulationConfig:
             raise ValueError("demand_rps_per_client deve estar entre 0 e 100")
         if not 1 <= slo_p95_ms <= 60_000 or not 0 <= slo_success_rate_pct <= 100:
             raise ValueError("limiares de SLO inválidos")
+        if simulation_profile not in {"fast", "realistic"}:
+            raise ValueError("simulation_profile deve ser fast ou realistic")
+        if not 1 <= forensic_capture_workers <= 8:
+            raise ValueError("forensic_capture_workers deve estar entre 1 e 8")
+        if not 1 <= forensic_max_attempts <= 12:
+            raise ValueError("forensic_max_attempts deve estar entre 1 e 12")
+        if not 0.25 <= forensic_retry_base_seconds <= 30:
+            raise ValueError("forensic_retry_base_seconds deve estar entre 0.25 e 30 segundos")
+        if not 2.0 <= economic_day_seconds <= 60.0:
+            raise ValueError("economic_day_seconds deve estar entre 2 e 60 segundos")
+        if simulation_mode not in {"orchestration", "gamification"}:
+            raise ValueError("simulation_mode deve ser orchestration ou gamification")
         if not -(2**31) <= seed <= 2**31 - 1:
             raise ValueError("seed deve estar entre -2147483648 e 2147483647")
         return cls(
@@ -99,6 +125,12 @@ class SimulationConfig:
             demand_rps_per_client=demand_rps_per_client,
             slo_p95_ms=slo_p95_ms,
             slo_success_rate_pct=slo_success_rate_pct,
+            simulation_profile=simulation_profile,
+            forensic_capture_workers=forensic_capture_workers,
+            forensic_max_attempts=forensic_max_attempts,
+            forensic_retry_base_seconds=forensic_retry_base_seconds,
+            economic_day_seconds=economic_day_seconds,
+            simulation_mode=simulation_mode,
             seed=seed,
         )
 
@@ -119,6 +151,12 @@ class SimulationConfig:
             "demand_rps_per_client": self.demand_rps_per_client,
             "slo_p95_ms": self.slo_p95_ms,
             "slo_success_rate_pct": self.slo_success_rate_pct,
+            "simulation_profile": self.simulation_profile,
+            "forensic_capture_workers": self.forensic_capture_workers,
+            "forensic_max_attempts": self.forensic_max_attempts,
+            "forensic_retry_base_seconds": self.forensic_retry_base_seconds,
+            "economic_day_seconds": self.economic_day_seconds,
+            "simulation_mode": self.simulation_mode,
             "seed": self.seed,
         }
 

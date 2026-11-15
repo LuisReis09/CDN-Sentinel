@@ -332,7 +332,7 @@ export function ManagementPage({
           <InitialValue label="Moeda" value="USD" />
         </div>
         <p className="management-inline-note">
-          A população do jogo evolui por satisfação, reputação, preço, capacidade e cenário; ela é separada dos clientes físicos observados pela orquestração.
+          A população do jogo é a mesma população de clientes da orquestração; satisfação, reputação, preço, capacidade e cenário alteram demanda, receita e tráfego observável.
         </p>
       </section>}
 
@@ -409,11 +409,19 @@ export function ManagementPage({
           <MapView
             clients={overview.clients.map((client) => ({
               ...client,
+              active: client.blacklist_permanent || overview.blacklist.some(
+                (entry) => entry.client_id === client.client_id,
+              ) ? false : client.active,
+              blacklist_permanent: client.blacklist_permanent || overview.blacklist.some(
+                (entry) => entry.client_id === client.client_id,
+              ),
               forensic_quarantined:
-                Boolean(client.forensic_quarantined) ||
+                !(client.blacklist_permanent || overview.blacklist.some(
+                  (entry) => entry.client_id === client.client_id,
+                )) && (Boolean(client.forensic_quarantined) ||
                 (overview.temporary_blacklist ?? []).some(
                   (entry) => entry.client_id === client.client_id,
-                ),
+                )),
             }))}
             servers={overview.servers}
             traffic={overview.recent_traffic}
@@ -437,8 +445,6 @@ export function ManagementPage({
             onNodeSelect={(kind, id) => {
               setSelectedEntity({ kind, id });
             }}
-            highlightedClientId={selectedClientData?.client_id ?? null}
-            highlightedServerId={selectedClientServerId}
           />
           {selectedNodeData && (
             <div className="node-inspector node-inspector--expanded">

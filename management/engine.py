@@ -26,6 +26,9 @@ class ManagementEngine:
         self._state = ManagementState()
         self._lock = RLock()
         self._on_server_added = None
+        self._operational_elapsed_seconds = 0.0
+        self._outage_applied = False
+        self._outage_recovered = False
 
     @property
     def registry(self) -> ActionRegistry:
@@ -63,6 +66,7 @@ class ManagementEngine:
                 customer_satisfaction=initial_satisfaction,
                 active_clients=sum(1 for client in world.clients.values() if client.active),
                 objective=copy.deepcopy(scenario["objective"]),
+                load_balancing_policy=str(config.get("load_balancing_policy", "hybrid-latency-capacity")),
                 nodes={
                     server.server_id: ManagementNode(
                         server_id=server.server_id,
@@ -74,6 +78,10 @@ class ManagementEngine:
                     for server in world.servers.values()
                 },
             )
+            self._operational_elapsed_seconds = 0.0
+            self._outage_applied = False
+            self._outage_recovered = False
+            self._repository.update_config({"load_balancing_policy": self._state.load_balancing_policy})
             self._append_event("management_reset", {"scenario_id": scenario_id, "seed": self._state.seed})
             self._compute_metrics()
             return self.snapshot()
@@ -125,13 +133,29 @@ class ManagementEngine:
             self._append_event("management_action_submitted", {"action_id": action.action_id, "action_type": action_type, "apply_day": action.apply_day, "investment_usd": investment})
             return {"action": action.to_dict(), "state": self.snapshot()}
 
-    def tick(self) -> dict:
+    def tick(self, interval_seconds: float | None = None) -> dict:
         with self._lock:
             if not self._state.simulation_id or self._state.paused:
                 return self.snapshot()
-            self._state.day += 1
-            self._apply_pending_actions()
-            self._compute_metrics()
+            # Client-activity ticks are shared with orchestration.  They must
+            # never become an implicit commercial simulation: the configured
+            # client population is fixed outside gamification.
+            mode = self._repository.state_ref().config.get("simulation_mode", "gamification")
+            if mode != "gamification":
+                return self.snapshot()
+            if interval_seconds is not None:
+                self._operational_elapsed_seconds += max(0.0, float(interval_seconds))
+                period = max(2.0, float(self._repository.state_ref().config.get("economic_day_seconds", 2.5)))
+                if self._operational_elapsed_seconds < period:
+                    return self.snapshot()
+                elapsed_days = int(self._operational_elapsed_seconds // period)
+                self._operational_elapsed_seconds -= elapsed_days * period
+            else:
+                elapsed_days = 1
+            for _ in range(max(1, elapsed_days)):
+                self._state.day += 1
+                self._apply_pending_actions()
+                self._compute_metrics()
             return self.snapshot()
 
     def pause(self, paused: bool) -> dict:
@@ -232,6 +256,10 @@ class ManagementEngine:
                     node.lifecycle_status = "running"
                 elif action.action_type == "price_adjustment":
                     self._state.monthly_price_per_client_usd = float(action.parameters["monthly_price_usd"])
+                    if hasattr(self._simulation_controller, "update"):
+                        self._simulation_controller.update({
+                            "monthly_client_price_usd": self._state.monthly_price_per_client_usd,
+                        })
                     action.result = {"monthly_price_usd": self._state.monthly_price_per_client_usd}
                 elif action.action_type == "advertising_campaign":
                     status = self._simulation_controller.status().get("scalability", {})
@@ -240,9 +268,14 @@ class ManagementEngine:
                     # Small networks gain more proportionally; health gates
                     # conversion and a cap prevents an invalid population jump.
                     acquired = round(min(
+                        max(2.0, current * math.log1p(current) * (0.25 + 0.75 * health) * 0.08),
                         current * 1.5,
-                        max(2.0, math.sqrt(current) * math.log1p(current) * (0.5 + health) * 1.4),
                     ))
+                    if hasattr(self._simulation_controller, "add_campaign_clients"):
+                        materialized = self._simulation_controller.add_campaign_clients(acquired)
+                    else:
+                        materialized = {"added": acquired, "client_ids": [], "clients_total": acquired}
+                    acquired = int(materialized.get("added", acquired))
                     self._state.base_paying_clients += acquired
                     self._state.paying_clients += acquired
                     self._state.arrivals_today += acquired
@@ -250,13 +283,17 @@ class ManagementEngine:
                     action.result = {
                         "new_clients": acquired,
                         "health_factor_pct": round(health * 100, 1),
-                        "formula": "min(1.5N, sqrt(N) * ln(1+N) * (0.5+health) * 1.4)",
+                        "formula": "min(1.5N, N * ln(1+N) * (0.25 + 0.75*saude) * 0.08)",
+                        "materialized_clients": materialized,
                     }
                 elif action.action_type == "cache_upgrade":
                     node = self._state.nodes[str(action.parameters["server_id"])]
                     node.cache_level = int(action.parameters["level"])
                     node.cache_hit_rate = min(0.8, 0.2 * node.cache_level)
-                    action.result = {"server_id": node.server_id, "cache_hit_rate": node.cache_hit_rate}
+                    if hasattr(self._simulation_controller, "update_server_cache"):
+                        action.result = self._simulation_controller.update_server_cache(node.server_id, node.cache_level)
+                    else:
+                        action.result = {"server_id": node.server_id, "cache_hit_rate": node.cache_hit_rate}
                 elif action.action_type == "load_balancing":
                     self._state.load_balancing_policy = str(action.parameters["policy"])
                     self._repository.update_config({"load_balancing_policy": self._state.load_balancing_policy})
@@ -282,11 +319,31 @@ class ManagementEngine:
 
     def _compute_metrics(self) -> None:
         world = self._repository.snapshot()
+        scenario = SCENARIOS[self._state.scenario_id]
+        outage_day = int(scenario.get("outage_day", 0) or 0)
+        if outage_day and self._state.day >= outage_day and not self._outage_applied:
+            target = next((server for server in world.servers.values() if server.status in {"healthy", "degraded"}), None)
+            if target:
+                try:
+                    self._simulation_controller.inject_fault(target.server_id, {"offline": True})
+                    self._outage_applied = True
+                    self._append_event("scenario_node_outage", {"server_id": target.server_id, "day": self._state.day})
+                except Exception as exc:
+                    self._append_event("scenario_node_outage_failed", {"server_id": target.server_id, "error": str(exc), "day": self._state.day})
+        elif self._outage_applied and not self._outage_recovered and self._state.day >= outage_day + 2:
+            target = next((server for server in world.servers.values() if server.fault.get("offline")), None)
+            if target:
+                try:
+                    self._simulation_controller.inject_fault(target.server_id, {"offline": False})
+                    self._outage_recovered = True
+                    self._append_event("scenario_node_recovered", {"server_id": target.server_id, "day": self._state.day})
+                except Exception as exc:
+                    self._append_event("scenario_node_recovery_failed", {"server_id": target.server_id, "error": str(exc), "day": self._state.day})
         sim_status = self._simulation_controller.status()
         scale = sim_status.get("scalability", {})
-        scenario = SCENARIOS[self._state.scenario_id]
         growth = float(scenario.get("growth_per_day", 0.0))
-        price_ratio = self._state.monthly_price_per_client_usd / max(1.0, float(world.config.get("monthly_client_price_usd", 25.0)))
+        reference_price = float(scenario.get("initial", {}).get("monthly_price_usd", world.config.get("monthly_client_price_usd", 25.0)))
+        price_ratio = self._state.monthly_price_per_client_usd / max(1.0, reference_price)
         base_population = max(0, self._state.base_paying_clients)
         feedbacks = [
             feedback
@@ -313,7 +370,7 @@ class ManagementEngine:
         latency_hint = float(scale.get("p95_latency_ms", 0.0))
         latency_effect = max(0.35, min(1.1, 1.05 - max(0.0, latency_hint - 120.0) / 700.0))
         network_effect = max(0.3, min(1.15, capacity_effect * latency_effect))
-        if scenario.get("outage_day") and self._state.day >= int(scenario["outage_day"]):
+        if outage_day and self._state.day >= outage_day and not self._outage_recovered:
             network_effect *= 0.65
         natural_growth = 1.0 + 0.025 * self._state.day
         target = base_population * natural_growth * (1.0 + growth * self._state.day)
@@ -328,6 +385,8 @@ class ManagementEngine:
         response_rate = max(0.3, min(0.98, float(scenario.get("population_response", 0.72)) * 1.15))
         next_paying_clients = max(0, round(previous_paying_clients + (target - previous_paying_clients) * response_rate))
         self._state.paying_clients = next_paying_clients
+        if self._state.day > 0:
+            self._sync_population(next_paying_clients)
         self._state.arrivals_today = max(0, next_paying_clients - previous_paying_clients)
         self._state.departures_today = max(0, previous_paying_clients - next_paying_clients)
         self._state.arrivals_total += self._state.arrivals_today
@@ -336,11 +395,12 @@ class ManagementEngine:
             self._append_event("clients_arrived", {"count": self._state.arrivals_today, "population": next_paying_clients, "reason": "rede_saudavel_preco_satisfacao_reputacao_cenario"})
         if self._state.departures_today:
             self._append_event("clients_departed", {"count": self._state.departures_today, "population": next_paying_clients, "reason": "churn_por_latencia_preco_qualidade_ou_capacidade"})
+        world = self._repository.snapshot()
         self._state.active_clients = sum(1 for client in world.clients.values() if client.active and not client.malicious)
         self._state.churned_clients = self._state.departures_total
         self._state.demand_rps = round(max(0.0, self._state.paying_clients * float(world.config.get("demand_rps_per_client", 0.25)) * (1.0 + growth * self._state.day)), 3)
         cache_bonus = 1.0 + (sum(node.cache_hit_rate for node in self._state.nodes.values()) / max(1, len(self._state.nodes))) * 0.15
-        outage_factor = 0.65 if scenario.get("outage_day") and self._state.day >= int(scenario["outage_day"]) else 1.0
+        outage_factor = 0.65 if outage_day and self._state.day >= outage_day and not self._outage_recovered else 1.0
         self._state.capacity_rps = round(float(scale.get("capacity_rps", scale.get("total_capacity", 0.0))) * cache_bonus * outage_factor, 3)
         self._state.utilization = round(self._state.demand_rps / max(self._state.capacity_rps, 0.001), 3)
         self._state.served_rps = round(min(self._state.demand_rps, self._state.capacity_rps), 3)
@@ -421,6 +481,38 @@ class ManagementEngine:
         if outage_factor < 1:
             self._state.alerts.append({"severity": "critical", "message": "Evento de cenário: queda de nó reduziu a capacidade agregada; verifique failover no Network Lab."})
         self._state.updated_at = time.time() if hasattr(self._state, "updated_at") else None
+
+    def _sync_population(self, target_paying_clients: int) -> None:
+        """Keep gamification's paying population backed by real client entities."""
+        if self._repository.state_ref().config.get("simulation_mode", "gamification") != "gamification":
+            return
+        if not hasattr(self._simulation_controller, "add_campaign_clients"):
+            return
+        state = self._repository.state_ref()
+        current_ids = [client_id for client_id, client in state.clients.items() if client.active and not client.malicious]
+        delta = int(target_paying_clients) - len(current_ids)
+        if delta > 0:
+            self._simulation_controller.add_campaign_clients(delta)
+            return
+        if delta >= 0:
+            return
+        remove_count = min(-delta, len(current_ids))
+        for client_id in sorted(current_ids, reverse=True)[:remove_count]:
+            client = state.clients.get(client_id)
+            if not client:
+                continue
+            client.active = False
+            client.online = False
+            client.process_status = "stopped"
+            stop_process = getattr(self._simulation_controller, "_stop_client_process", None)
+            if stop_process:
+                stop_process(client_id)
+            self._repository.append_event({
+                "type": "client_churned",
+                "at": time.time(),
+                "client_id": client_id,
+                "reason": "management_population_target",
+            })
 
     def _append_event(self, event_type: str, payload: dict[str, Any]) -> None:
         self._state.events.append({"event_id": f"mgt-evt-{uuid.uuid4().hex[:10]}", "type": event_type, "at": time.time(), "day": self._state.day, **payload})

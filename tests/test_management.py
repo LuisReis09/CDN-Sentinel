@@ -58,6 +58,13 @@ class ManagementSimulationTests(unittest.TestCase):
         vertical = next(item for item in self.engine.action_definitions() if item["action_type"] == "vertical_scale")
         self.assertEqual(vertical["investment_by_tier"], {"standard": 280.0, "pro": 560.0, "enterprise": 1120.0})
 
+    def test_orchestration_clock_does_not_evolve_the_commercial_population(self):
+        self.repository.state_ref().config["simulation_mode"] = "orchestration"
+        before = self.engine.snapshot()
+        after = self.engine.tick(interval_seconds=60)
+        self.assertEqual(after["day"], before["day"])
+        self.assertEqual(after["paying_clients"], before["paying_clients"])
+
     def test_campaign_increases_clients_but_is_bounded_by_cdn_health(self):
         before = self.engine.snapshot()
         submitted = self.engine.apply_action({"action_type": "advertising_campaign", "parameters": {}, "expected_version": before["version"]})
